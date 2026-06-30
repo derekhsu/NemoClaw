@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import path from "node:path";
+
+import { dockerBuild as adapterDockerBuild, dockerImageInspectFormat } from "../adapters/docker";
 import { resolveSandboxBaseImage, OPENCLAW_SANDBOX_BASE_IMAGE } from "../sandbox-base-image";
 import { resolveSourceCommit, stageImageBuildContext, type StageImageBuildContextResult } from "./stage";
 
@@ -36,6 +39,7 @@ export type ImageBuildDeps = {
   stageImageBuildContext?: typeof stageImageBuildContext;
   resolveBaseImage?: (input: ResolveBaseImageInput) => Promise<string | null>;
   dockerBuild?: (input: DockerBuildInput) => Promise<DockerBuildResult>;
+  dockerPush?: (tag: string) => Promise<string | null>;
 };
 
 export type ImageBuildResult = {
@@ -73,13 +77,7 @@ export async function runImageBuild(
     });
   }
 
-  const dockerBuild =
-    deps.dockerBuild ??
-    (async () => ({
-      imageRef: String(flags.tag),
-      digest: null,
-    }));
-
+  const dockerBuild = deps.dockerBuild ?? defaultDockerBuild;
   const built = await dockerBuild({
     agent,
     tag: flags.tag,
@@ -88,11 +86,20 @@ export async function runImageBuild(
     contextPath: staged.contextPath,
   });
 
+  // When --push is set, push the built image to its registry and prefer the
+  // registry-returned digest over the local build digest.
+  let digest = built.digest;
+  if (flags.push) {
+    const dockerPush = deps.dockerPush ?? defaultDockerPush;
+    const pushedDigest = await dockerPush(flags.tag);
+    if (pushedDigest) digest = pushedDigest;
+  }
+
   return {
     agent: staged.agent,
     tag: flags.tag,
     imageRef: built.imageRef,
-    digest: built.digest,
+    digest,
     sourceCommit: staged.sourceCommit,
     stagedContextHash: staged.contentHash,
     baseImage,
@@ -107,4 +114,42 @@ async function defaultResolveBaseImage(input: ResolveBaseImageInput): Promise<st
     localTag: `${imageName}:local`,
   });
   return resolution?.ref ?? null;
+}
+
+async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildResult> {
+  const dockerfilePath = path.join(input.contextPath, "Dockerfile");
+  const buildArgs: string[] = [];
+  if (input.baseImage) {
+    buildArgs.push("--build-arg", `BASE_IMAGE=${input.baseImage}`);
+  }
+  const result = adapterDockerBuild(dockerfilePath, input.tag, input.contextPath, {
+    quiet: false,
+  });
+  if (result.status !== 0) {
+    throw new Error(`docker build failed for ${input.tag} (exit ${result.status})`);
+  }
+  const digest = inspectImageDigest(input.tag);
+  return { imageRef: input.tag, digest };
+}
+
+async function defaultDockerPush(tag: string): Promise<string | null> {
+  // dockerPush is a thin wrapper around `docker push`. We reuse the docker
+  // adapter's run helper via inspect after push to capture the registry digest.
+  const { dockerRun } = await import("../adapters/docker/run");
+  const result = dockerRun(["push", tag], { stdio: "inherit" });
+  if (result.status !== 0) {
+    throw new Error(`docker push failed for ${tag} (exit ${result.status})`);
+  }
+  return inspectImageDigest(tag);
+}
+
+function inspectImageDigest(tag: string): string | null {
+  const digest = dockerImageInspectFormat("{{index .RepoDigests 0}}", tag, {
+    ignoreError: true,
+  });
+  const trimmed = digest.trim();
+  if (!trimmed) return null;
+  // RepoDigests look like "repo@sha256:..."; extract the sha256:... part.
+  const atIdx = trimmed.lastIndexOf("@");
+  return atIdx >= 0 ? trimmed.slice(atIdx + 1) : trimmed;
 }

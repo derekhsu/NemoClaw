@@ -91,6 +91,7 @@ describe("runImageBuild", () => {
           contentHash: "sha256:stage",
         }),
         dockerBuild,
+        dockerPush: vi.fn().mockResolvedValue("sha256:pushed"),
       },
     );
 
@@ -156,5 +157,51 @@ describe("runImageBuild", () => {
       },
     );
     expect(resolveBaseImage).not.toHaveBeenCalled();
+  });
+
+  it("spawns docker push when --push is set and returns the pushed digest", async () => {
+    const dockerPush = vi.fn().mockResolvedValue("sha256:pushed");
+    const result = await runImageBuild(
+      { agent: "openclaw", tag: "ghcr.io/org/openclaw:test", push: true },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage: vi.fn().mockResolvedValue(null),
+        dockerBuild: vi.fn().mockResolvedValue({
+          imageRef: "ghcr.io/org/openclaw:test",
+          digest: "sha256:built",
+        }),
+        dockerPush,
+      },
+    );
+    expect(dockerPush).toHaveBeenCalledWith("ghcr.io/org/openclaw:test");
+    expect(result.digest).toBe("sha256:pushed");
+  });
+
+  it("does not spawn docker push when --push is not set", async () => {
+    const dockerPush = vi.fn();
+    await runImageBuild(
+      { agent: "openclaw", tag: "local/openclaw:test", push: false },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage: vi.fn().mockResolvedValue(null),
+        dockerBuild: vi.fn().mockResolvedValue({ imageRef: "local/openclaw:test", digest: null }),
+        dockerPush,
+      },
+    );
+    expect(dockerPush).not.toHaveBeenCalled();
   });
 });

@@ -7,18 +7,17 @@
 
 ## Implementation Status
 
-This plan is split into two tiers.
+This plan is split into two tiers. Both tiers are complete on
+`feat/image-only-cli`.
 
 - **Tier 1 (Tasks 1-7): Contract scaffold.** DONE. Implements the CLI command
   surface, JSON metadata contract, service layer boundaries, minimal patcher,
-  and GitHub Actions entrypoint. The stage service creates an empty context
-  directory and the build service uses a stub `dockerBuild` hook. This tier
-  does not produce a real container image.
-- **Tier 2 (Tasks 8-12): Real Docker integration.** NOT STARTED. Wires the
-  stage service to copy real build context, the build service to spawn
+  and GitHub Actions entrypoint.
+- **Tier 2 (Tasks 8-12): Real Docker integration.** DONE. Wires the stage
+  service to copy real build context, the build service to spawn
   `docker build` / `docker push`, base image resolution to reuse
   `src/lib/sandbox-base-image.ts`, and `contentHash` to hash actual file
-  contents. This tier is required before the CLI can produce a real image.
+  contents.
 
 See `docs/superpowers/specs/2026-06-29-image-only-cli-design.md` Implementation
 Status section for the full tier boundary.

@@ -9,9 +9,8 @@ Owner: derekhsu/NemoClaw fork
 
 ## Implementation Status
 
-This spec is implemented in two tiers. The current state of `feat/image-only-cli`
-is Tier 1 (contract scaffold). Tier 2 (real Docker integration) is not yet
-implemented.
+This spec is implemented in two tiers. Both tiers are complete on
+`feat/image-only-cli`.
 
 ### Tier 1: Contract Scaffold (implemented)
 
@@ -20,46 +19,34 @@ implemented.
 - Agent image definition resolution (openclaw, hermes, missing-source errors)
 - JSON metadata contract fields and shape
 - Minimal image-only Dockerfile patcher (base image + build id pinning only)
-- Build service with injectable Docker hooks (stub default)
+- Build service with injectable Docker hooks
 - GitHub Actions workflow entrypoint (`workflow_dispatch`)
 - Test coverage for command parsing, agent resolution, patcher guarantees, and
   JSON contract shape
 
-### Tier 2: Real Docker Integration (not yet implemented)
+### Tier 2: Real Docker Integration (implemented)
 
-The Tier 1 scaffold intentionally leaves the following as stubs or empty
-implementations. They must be completed before the CLI can produce a real
-container image:
+- Stage service copies real build context files (Dockerfile, Dockerfile.base,
+  `nemoclaw-blueprint/`, agent sources) into `contextPath` using
+  `copyBuildContextDir` with symlink and exclusion handling
+- Stage service writes `metadata.json` into `contextPath` so the staged
+  directory is self-describing for downstream consumers
+- `contentHash` is computed over the actual staged file contents, not over
+  path strings, making it a meaningful cache key
+- Build service `dockerBuild` hook spawns `docker build` via the shared adapter
+  and parses the image digest from `dockerImageInspectFormat`
+- Build service `dockerPush` hook spawns `docker push` when `--push` is set and
+  prefers the registry-returned digest over the local build digest
+- Base image resolution reuses `src/lib/sandbox-base-image.ts` when
+  `--base-image` is not supplied
+- `copyBuildContextDir` skips symlinks and uses `dereference: false` to avoid
+  self-copy errors on repo-local symlinks (e.g. `.claude/skills`)
 
-- Stage service must copy the agent's build context files (Dockerfile,
-  Dockerfile.base, agent sources) into `contextPath` using the existing
-  `copyBuildContextDir` / `shouldIncludeBuildContextPath` helpers from
-  `src/lib/build-context.ts`. The current implementation only creates an empty
-  `contextPath` directory.
-- `contentHash` must be computed over the actual staged file contents, not over
-  path strings. The current implementation hashes `agent + dockerfilePath +
-  baseDockerfilePath + sourceCommit`, which is stable across Dockerfile content
-  changes and therefore unsuitable as a cache key.
-- Build service `dockerBuild` hook must spawn `docker build -t <tag>
-  <contextPath>` and parse the resulting image ref and digest. The current
-  default returns `imageRef = tag` and `digest = null` without invoking Docker.
-- Build service `dockerPush` hook must spawn `docker push <tag>` when `--push`
-  is set and return the registry digest. The current implementation ignores
-  `--push`.
-- Base image resolution must reuse `src/lib/sandbox-base-image.ts` when
-  `--base-image` is not supplied. The current implementation does not resolve a
-  default base image.
-- Stage service must write `metadata.json` into `contextPath` so the staged
-  directory is self-describing for downstream consumers.
-- Tests must cover staged context content (file presence, exclusion rules) and
-  real Docker build output parsing, not just metadata field shape.
+### Remaining work
 
-### Tier 1 to Tier 2 transition
-
-Tier 1 exists so the CLI shape, JSON contract, and service boundaries can be
-reviewed and locked before the Docker integration work begins. Downstream
-consumers (GitHub Actions, fork-local shell wrappers) can code against the JSON
-contract now, even though the CLI does not yet produce a real image.
+- End-to-end smoke test with a real Docker daemon (requires Docker running
+  locally; not covered by unit tests)
+- GitHub Actions workflow has not been run against a real registry
 
 
 
@@ -548,10 +535,7 @@ above.
 - add test coverage for command parsing, agent resolution, patcher guarantees,
   and JSON contract shape
 
-This tier does not produce a real container image. It exists to lock the CLI
-shape and JSON contract before Docker integration work begins.
-
-### Tier 2: Real Docker Integration (not started)
+### Tier 2: Real Docker Integration (done)
 
 - stage service copies real build context files into `contextPath`
 - `contentHash` is computed over staged file contents

@@ -34,12 +34,22 @@ export function shouldIncludeBuildContextPath(sourceRoot: string, candidatePath:
     return false;
   }
 
+  // Skip symlinks: repo-local symlinks (e.g. .claude/skills -> .agents/skills)
+  // cause fs.cpSync to self-copy when dereferenced, and Docker build contexts
+  // should not carry host-local symlink topology.
+  try {
+    if (fs.lstatSync(candidatePath).isSymbolicLink()) return false;
+  } catch {
+    // If lstat fails, let cpSync handle it.
+  }
+
   return !segments.some((segment) => EXCLUDED_SEGMENTS.has(segment));
 }
 
 export function copyBuildContextDir(sourceDir: string, destinationDir: string): void {
   fs.cpSync(sourceDir, destinationDir, {
     recursive: true,
+    dereference: false,
     filter: (candidatePath) => shouldIncludeBuildContextPath(sourceDir, candidatePath),
   });
 }

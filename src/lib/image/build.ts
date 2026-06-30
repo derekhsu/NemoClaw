@@ -12,6 +12,7 @@ export type ImageBuildFlags = {
   tag: string;
   push?: boolean;
   "base-image"?: string;
+  "build-arg"?: string[];
   json?: boolean;
   quiet?: boolean;
 };
@@ -21,6 +22,7 @@ export type DockerBuildInput = {
   tag: string;
   push?: boolean;
   baseImage: string | null;
+  buildArgs: string[];
   contextPath: string;
 };
 
@@ -83,6 +85,7 @@ export async function runImageBuild(
     tag: flags.tag,
     push: flags.push,
     baseImage,
+    buildArgs: flags["build-arg"] ?? [],
     contextPath: staged.contextPath,
   });
 
@@ -121,6 +124,9 @@ async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildR
   const buildArgs: string[] = [];
   if (input.baseImage) {
     buildArgs.push("--build-arg", `BASE_IMAGE=${input.baseImage}`);
+  }
+  for (const arg of input.buildArgs) {
+    buildArgs.push("--build-arg", arg);
   }
   const result = adapterDockerBuild(dockerfilePath, input.tag, input.contextPath, {
     quiet: false,

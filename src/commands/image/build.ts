@@ -16,7 +16,7 @@ export default class ImageBuildCommand extends NemoClawCommand {
   static description =
     "Stage an agent's runtime image build context, apply minimal image-only Dockerfile patching, run a local docker build, optionally push the resulting image, and emit stable JSON metadata for downstream consumers.";
   static usage = [
-    "image build --tag <ref> [--agent <openclaw|hermes>] [--push] [--base-image <ref>] [--json]",
+    "image build --tag <ref> [--agent <openclaw|hermes>] [--push] [--base-image <ref>] [--build-arg KEY=VALUE] [--json]",
   ];
   static examples = imageBuildExamples;
   static flags = buildImageBuildFlags();
@@ -28,6 +28,7 @@ export default class ImageBuildCommand extends NemoClawCommand {
       tag: flags.tag as ImageBuildFlags["tag"],
       push: flags.push as ImageBuildFlags["push"],
       "base-image": flags["base-image"] as ImageBuildFlags["base-image"],
+      "build-arg": flags["build-arg"] as ImageBuildFlags["build-arg"],
       json: flags.json as ImageBuildFlags["json"],
       quiet: flags.quiet as ImageBuildFlags["quiet"],
     } satisfies ImageBuildFlags);

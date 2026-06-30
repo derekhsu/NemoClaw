@@ -204,4 +204,58 @@ describe("runImageBuild", () => {
     );
     expect(dockerPush).not.toHaveBeenCalled();
   });
+
+  it("forwards --build-arg entries to the docker build hook", async () => {
+    const dockerBuild = vi.fn().mockResolvedValue({
+      imageRef: "local/openclaw:test",
+      digest: "sha256:built",
+    });
+    await runImageBuild(
+      {
+        agent: "openclaw",
+        tag: "local/openclaw:test",
+        push: false,
+        "build-arg": ["OPENCLAW_VERSION=2026.5.27", "NEMOCLAW_BUILD_ID=abc123"],
+      },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage: vi.fn().mockResolvedValue(null),
+        dockerBuild,
+      },
+    );
+    expect(dockerBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buildArgs: ["OPENCLAW_VERSION=2026.5.27", "NEMOCLAW_BUILD_ID=abc123"],
+      }),
+    );
+  });
+
+  it("defaults buildArgs to an empty array when --build-arg is not supplied", async () => {
+    const dockerBuild = vi.fn().mockResolvedValue({ imageRef: "local/openclaw:test", digest: null });
+    await runImageBuild(
+      { agent: "openclaw", tag: "local/openclaw:test", push: false },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage: vi.fn().mockResolvedValue(null),
+        dockerBuild,
+      },
+    );
+    expect(dockerBuild).toHaveBeenCalledWith(
+      expect.objectContaining({ buildArgs: [] }),
+    );
+  });
 });

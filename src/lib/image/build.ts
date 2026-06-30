@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { resolveSandboxBaseImage, OPENCLAW_SANDBOX_BASE_IMAGE } from "../sandbox-base-image";
 import { resolveSourceCommit, stageImageBuildContext, type StageImageBuildContextResult } from "./stage";
 
 export type ImageBuildFlags = {
@@ -25,8 +26,15 @@ export type DockerBuildResult = {
   digest: string | null;
 };
 
+export type ResolveBaseImageInput = {
+  agent: string;
+  dockerfilePath: string;
+  repoRoot: string;
+};
+
 export type ImageBuildDeps = {
   stageImageBuildContext?: typeof stageImageBuildContext;
+  resolveBaseImage?: (input: ResolveBaseImageInput) => Promise<string | null>;
   dockerBuild?: (input: DockerBuildInput) => Promise<DockerBuildResult>;
 };
 
@@ -37,6 +45,7 @@ export type ImageBuildResult = {
   digest: string | null;
   sourceCommit: string;
   stagedContextHash: string;
+  baseImage: string | null;
 };
 
 export async function runImageBuild(
@@ -52,6 +61,18 @@ export async function runImageBuild(
     sourceCommit: resolveSourceCommit(process.cwd()),
   });
 
+  // Use explicit --base-image override when supplied; otherwise resolve a
+  // default base image via the shared sandbox-base-image policy.
+  let baseImage: string | null = flags["base-image"] ?? null;
+  if (!baseImage) {
+    const resolve = deps.resolveBaseImage ?? defaultResolveBaseImage;
+    baseImage = await resolve({
+      agent,
+      dockerfilePath: staged.dockerfile,
+      repoRoot: process.cwd(),
+    });
+  }
+
   const dockerBuild =
     deps.dockerBuild ??
     (async () => ({
@@ -63,7 +84,7 @@ export async function runImageBuild(
     agent,
     tag: flags.tag,
     push: flags.push,
-    baseImage: flags["base-image"] ?? null,
+    baseImage,
     contextPath: staged.contextPath,
   });
 
@@ -74,5 +95,16 @@ export async function runImageBuild(
     digest: built.digest,
     sourceCommit: staged.sourceCommit,
     stagedContextHash: staged.contentHash,
+    baseImage,
   };
+}
+
+async function defaultResolveBaseImage(input: ResolveBaseImageInput): Promise<string | null> {
+  const imageName = OPENCLAW_SANDBOX_BASE_IMAGE;
+  const resolution = resolveSandboxBaseImage({
+    imageName,
+    dockerfilePath: input.dockerfilePath,
+    localTag: `${imageName}:local`,
+  });
+  return resolution?.ref ?? null;
 }

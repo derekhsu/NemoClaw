@@ -102,4 +102,59 @@ describe("runImageBuild", () => {
       }),
     );
   });
+
+  it("resolves a default base image when --base-image is not supplied", async () => {
+    const resolveBaseImage = vi.fn().mockResolvedValue("ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc");
+    const dockerBuild = vi.fn().mockResolvedValue({
+      imageRef: "local/openclaw:test",
+      digest: "sha256:built",
+    });
+    const result = await runImageBuild(
+      { agent: "openclaw", tag: "local/openclaw:test", push: false },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage,
+        dockerBuild,
+      },
+    );
+    expect(resolveBaseImage).toHaveBeenCalled();
+    expect(dockerBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseImage: "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc",
+      }),
+    );
+    expect(result.baseImage).toBe("ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc");
+  });
+
+  it("skips base image resolution when --base-image override is supplied", async () => {
+    const resolveBaseImage = vi.fn();
+    await runImageBuild(
+      {
+        agent: "openclaw",
+        tag: "local/openclaw:test",
+        push: false,
+        "base-image": "ghcr.io/custom/base:latest",
+      },
+      {
+        stageImageBuildContext: vi.fn().mockResolvedValue({
+          agent: "openclaw",
+          dockerfile: "/repo/Dockerfile",
+          baseDockerfile: "/repo/Dockerfile.base",
+          contextPath: "/tmp/openclaw/context",
+          sourceCommit: "94dc7e6",
+          contentHash: "sha256:stage",
+        }),
+        resolveBaseImage,
+        dockerBuild: vi.fn().mockResolvedValue({ imageRef: "local/openclaw:test", digest: null }),
+      },
+    );
+    expect(resolveBaseImage).not.toHaveBeenCalled();
+  });
 });

@@ -596,6 +596,11 @@ import {
 } from "./onboard/policy-selection";
 import { createPolicySelectionPromptHelpers } from "./onboard/policy-selection-prompts";
 import {
+  printLowMemoryWarning,
+  printMessagingProviderMissing,
+  printSwapCreationFailed,
+} from "./onboard/preflight-messages";
+import {
   backupSandboxBeforeRecreate,
   shouldSkipPreRecreateBackup,
 } from "./onboard/sandbox-backup-on-recreate";
@@ -1626,6 +1631,7 @@ async function preflight(
     cliDisplayName: cliDisplayName(),
     dashboardPort: getOnboardDashboardPort(),
     log: console.log,
+    warn: console.warn,
     runOpenshell,
     destroyGateway,
     destroyGatewayForReuse,
@@ -1806,9 +1812,7 @@ async function preflight(
     const mem = getMemoryInfo();
     if (mem) {
       if (mem.totalMB < 12000) {
-        console.log(
-          `  ⚠ Low memory detected (${mem.totalRamMB} MB RAM + ${mem.totalSwapMB} MB swap = ${mem.totalMB} MB total)`,
-        );
+        printLowMemoryWarning(mem);
 
         let proceedWithSwap: boolean = false;
         if (!isNonInteractive()) {
@@ -1834,8 +1838,7 @@ async function preflight(
               console.log(`  ✓ Memory OK: ${mem.totalRamMB} MB RAM + ${mem.totalSwapMB} MB swap`);
             }
           } else {
-            console.log(`  ⚠ Could not create swap: ${swapResult.reason}`);
-            console.log("  Sandbox creation may fail with OOM on low-memory systems.");
+            printSwapCreationFailed(swapResult.reason);
           }
         }
       } else {
@@ -3133,11 +3136,7 @@ async function createSandbox(
   // cannot be verified via CLI yet — only gateway-level existence is checked).
   for (const p of messagingProviders) {
     if (!providerExistsInGateway(p)) {
-      console.error(`  ⚠ Messaging provider '${p}' was not found in the gateway.`);
-      console.error(`    The credential may not be available inside the sandbox.`);
-      console.error(
-        `    To fix: openshell provider create --name ${p} --type generic --credential <KEY>`,
-      );
+      printMessagingProviderMissing(p);
     }
   }
 

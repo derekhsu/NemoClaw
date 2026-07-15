@@ -57,6 +57,7 @@ describe("runImageBuild", () => {
           sourceCommit: "94dc7e6",
           contentHash: "sha256:stage",
         }),
+        resolveBaseImage: vi.fn().mockResolvedValue("ghcr.io/example/base:latest"),
         dockerBuild: vi.fn().mockResolvedValue({
           imageRef: "ghcr.io/example/openclaw-runtime@sha256:built",
           digest: "sha256:built",
@@ -105,7 +106,9 @@ describe("runImageBuild", () => {
   });
 
   it("resolves a default base image when --base-image is not supplied", async () => {
-    const resolveBaseImage = vi.fn().mockResolvedValue("ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc");
+    const resolveBaseImage = vi
+      .fn()
+      .mockResolvedValue("ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc");
     const dockerBuild = vi.fn().mockResolvedValue({
       imageRef: "local/openclaw:test",
       digest: "sha256:built",
@@ -238,7 +241,9 @@ describe("runImageBuild", () => {
   });
 
   it("defaults buildArgs to an empty array when --build-arg is not supplied", async () => {
-    const dockerBuild = vi.fn().mockResolvedValue({ imageRef: "local/openclaw:test", digest: null });
+    const dockerBuild = vi
+      .fn()
+      .mockResolvedValue({ imageRef: "local/openclaw:test", digest: null });
     await runImageBuild(
       { agent: "openclaw", tag: "local/openclaw:test", push: false },
       {
@@ -254,8 +259,6 @@ describe("runImageBuild", () => {
         dockerBuild,
       },
     );
-    expect(dockerBuild).toHaveBeenCalledWith(
-      expect.objectContaining({ buildArgs: [] }),
-    );
+    expect(dockerBuild).toHaveBeenCalledWith(expect.objectContaining({ buildArgs: [] }));
   });
 });

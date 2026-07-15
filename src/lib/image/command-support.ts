@@ -18,6 +18,7 @@ export const imageBuildExamples = [
   "<%= config.bin %> image build --agent hermes --tag ghcr.io/example/hermes-runtime:test --base-image ghcr.io/example/hermes-base@sha256:abc",
   "<%= config.bin %> image build --agent hermes --tag ghcr.io/example/hermes-runtime:test --push",
   "<%= config.bin %> image build --agent openclaw --tag local/openclaw:test --build-arg OPENCLAW_VERSION=2026.5.27",
+  "<%= config.bin %> image build --agent openclaw --tag local/openclaw:test --platform linux/amd64",
 ];
 
 export type ImageStageFlags = {
@@ -33,6 +34,7 @@ export type ImageBuildFlags = {
   push: boolean | undefined;
   "base-image": string | undefined;
   "build-arg": string[] | undefined;
+  platform: string | undefined;
   json: boolean | undefined;
   quiet: boolean | undefined;
 };
@@ -75,6 +77,10 @@ export function buildImageBuildFlags(): Record<string, any> {
       description:
         "Forward a Docker build ARG as KEY=VALUE (repeatable). Use to override pinned versions such as OPENCLAW_VERSION or HERMES_VERSION.",
       multiple: true,
+    }),
+    platform: Flags.string({
+      description:
+        "Target platform for the build (e.g. linux/amd64, linux/arm64). Defaults to the Docker daemon host architecture.",
     }),
     json: Flags.boolean({
       description: "Emit the image build result as JSON",

@@ -17,6 +17,7 @@ export type ImageBuildFlags = {
   push?: boolean;
   "base-image"?: string;
   "build-arg"?: string[];
+  platform?: string;
   json?: boolean;
   quiet?: boolean;
 };
@@ -27,6 +28,7 @@ export type DockerBuildInput = {
   push?: boolean;
   baseImage: string | null;
   buildArgs: string[];
+  platform?: string;
   contextPath: string;
 };
 
@@ -90,6 +92,7 @@ export async function runImageBuild(
     push: flags.push,
     baseImage,
     buildArgs: flags["build-arg"] ?? [],
+    platform: flags.platform,
     contextPath: staged.contextPath,
   });
 
@@ -135,6 +138,7 @@ async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildR
   const result = adapterDockerBuild(dockerfilePath, input.tag, input.contextPath, {
     quiet: false,
     buildArgs,
+    platform: input.platform,
   });
   if (result.status !== 0) {
     throw new Error(`docker build failed for ${input.tag} (exit ${result.status})`);

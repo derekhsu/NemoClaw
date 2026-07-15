@@ -14,6 +14,7 @@ export type DockerBuildOptions = DockerRunOptions & {
   buildArgs?: Record<string, string> | string[];
   labels?: Record<string, string>;
   quiet?: boolean;
+  platform?: string;
 };
 
 export function dockerBuild(
@@ -22,7 +23,7 @@ export function dockerBuild(
   contextDir: string = ROOT,
   opts: DockerBuildOptions = {},
 ): DockerRunResult {
-  const { buildArgs, labels, quiet, ...rest } = opts;
+  const { buildArgs, labels, quiet, platform, ...rest } = opts;
   // Dockerfile.base relies on `RUN --mount=type=bind`, which is BuildKit-only.
   // Hosts whose Docker daemon defaults to the legacy builder (e.g. fresh
   // Debian/Ubuntu Docker 29 without /etc/docker/daemon.json) abort the
@@ -36,9 +37,11 @@ export function dockerBuild(
     : Object.entries(buildArgs ?? {})
         .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]);
+  const platformFlags: string[] = platform ? ["--platform", platform] : [];
   const args = [
     "build",
     ...(quiet ? ["--quiet"] : []),
+    ...platformFlags,
     ...buildArgFlags,
     ...Object.entries(labels ?? {})
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))

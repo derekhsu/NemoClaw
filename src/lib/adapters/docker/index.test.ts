@@ -189,6 +189,39 @@ describe("docker helpers", () => {
     );
   });
 
+  it("forwards platform as --platform flag before --build-arg in dockerBuild argv", () => {
+    dockerBuild("Dockerfile", "example:tag", "/tmp/build", {
+      platform: "linux/amd64",
+      buildArgs: ["BASE_IMAGE=ghcr.io/example/base:latest"],
+    });
+
+    expect(runMock).toHaveBeenCalledWith(
+      [
+        "docker",
+        "build",
+        "--platform",
+        "linux/amd64",
+        "--build-arg",
+        "BASE_IMAGE=ghcr.io/example/base:latest",
+        "-f",
+        "Dockerfile",
+        "-t",
+        "example:tag",
+        "/tmp/build",
+      ],
+      { env: { DOCKER_BUILDKIT: "1" } },
+    );
+  });
+
+  it("omits --platform when platform is absent", () => {
+    dockerBuild("Dockerfile", "example:tag", "/tmp/build");
+
+    expect(runMock).toHaveBeenCalledWith(
+      ["docker", "build", "-f", "Dockerfile", "-t", "example:tag", "/tmp/build"],
+      { env: { DOCKER_BUILDKIT: "1" } },
+    );
+  });
+
   it("prefixes docker argv for info/inspect capture helpers", () => {
     dockerInfoFormat("{{.KernelVersion}}", { ignoreError: true });
     dockerContainerInspectFormat("{{.State.Status}}", "example-container", {

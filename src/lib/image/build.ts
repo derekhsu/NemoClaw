@@ -5,7 +5,11 @@ import path from "node:path";
 
 import { dockerBuild as adapterDockerBuild, dockerImageInspectFormat } from "../adapters/docker";
 import { resolveSandboxBaseImage, OPENCLAW_SANDBOX_BASE_IMAGE } from "../sandbox-base-image";
-import { resolveSourceCommit, stageImageBuildContext, type StageImageBuildContextResult } from "./stage";
+import {
+  resolveSourceCommit,
+  stageImageBuildContext,
+  type StageImageBuildContextResult,
+} from "./stage";
 
 export type ImageBuildFlags = {
   agent?: string;
@@ -123,13 +127,14 @@ async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildR
   const dockerfilePath = path.join(input.contextPath, "Dockerfile");
   const buildArgs: string[] = [];
   if (input.baseImage) {
-    buildArgs.push("--build-arg", `BASE_IMAGE=${input.baseImage}`);
+    buildArgs.push(`BASE_IMAGE=${input.baseImage}`);
   }
   for (const arg of input.buildArgs) {
-    buildArgs.push("--build-arg", arg);
+    buildArgs.push(arg);
   }
   const result = adapterDockerBuild(dockerfilePath, input.tag, input.contextPath, {
     quiet: false,
+    buildArgs,
   });
   if (result.status !== 0) {
     throw new Error(`docker build failed for ${input.tag} (exit ${result.status})`);

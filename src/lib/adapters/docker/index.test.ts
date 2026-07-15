@@ -157,6 +157,38 @@ describe("docker helpers", () => {
     );
   });
 
+  it("forwards buildArgs as --build-arg flags before -f in dockerBuild argv", () => {
+    dockerBuild("Dockerfile", "example:tag", "/tmp/build", {
+      buildArgs: ["BASE_IMAGE=ghcr.io/example/base:latest", "OPENCLAW_VERSION=2026.6.10"],
+    });
+
+    expect(runMock).toHaveBeenCalledWith(
+      [
+        "docker",
+        "build",
+        "--build-arg",
+        "BASE_IMAGE=ghcr.io/example/base:latest",
+        "--build-arg",
+        "OPENCLAW_VERSION=2026.6.10",
+        "-f",
+        "Dockerfile",
+        "-t",
+        "example:tag",
+        "/tmp/build",
+      ],
+      { env: { DOCKER_BUILDKIT: "1" } },
+    );
+  });
+
+  it("omits --build-arg entries when buildArgs is empty or absent", () => {
+    dockerBuild("Dockerfile", "example:tag", "/tmp/build", { buildArgs: [] });
+
+    expect(runMock).toHaveBeenCalledWith(
+      ["docker", "build", "-f", "Dockerfile", "-t", "example:tag", "/tmp/build"],
+      { env: { DOCKER_BUILDKIT: "1" } },
+    );
+  });
+
   it("prefixes docker argv for info/inspect capture helpers", () => {
     dockerInfoFormat("{{.KernelVersion}}", { ignoreError: true });
     dockerContainerInspectFormat("{{.State.Status}}", "example-container", {

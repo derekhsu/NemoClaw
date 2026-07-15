@@ -11,8 +11,7 @@ import {
 } from "./run";
 
 export type DockerBuildOptions = DockerRunOptions & {
-  buildArgs?: Record<string, string>;
-
+  buildArgs?: Record<string, string> | string[];
   labels?: Record<string, string>;
   quiet?: boolean;
 };
@@ -32,13 +31,15 @@ export function dockerBuild(
   // rebuild path works regardless of daemon defaults.
   const env: NodeJS.ProcessEnv = { ...(rest.env ?? {}) };
   if (env.DOCKER_BUILDKIT === undefined) env.DOCKER_BUILDKIT = "1";
+  const buildArgFlags = Array.isArray(buildArgs)
+    ? buildArgs.flatMap((arg) => ["--build-arg", arg])
+    : Object.entries(buildArgs ?? {})
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]);
   const args = [
     "build",
     ...(quiet ? ["--quiet"] : []),
-
-    ...Object.entries(buildArgs ?? {})
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .flatMap(([key, value]) => ["--build-arg", `${key}=${value}`]),
+    ...buildArgFlags,
     ...Object.entries(labels ?? {})
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .flatMap(([key, value]) => ["--label", `${key}=${value}`]),

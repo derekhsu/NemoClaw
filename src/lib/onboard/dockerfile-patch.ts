@@ -8,12 +8,20 @@ import {
   type WebSearchConfig,
   webSearchProviderForConfig,
 } from "../inference/web-search";
-import { hydrateDerivedSandboxMessagingPlanFields, MessagingSetupApplier } from "../messaging";
+import {
+  hydrateDerivedSandboxMessagingPlanFields,
+  MessagingSetupApplier,
+  type SandboxMessagingPlan,
+} from "../messaging";
 import { parseSandboxMessagingPlan } from "../messaging/plan-validation";
 import {
   formatSandboxBaseImageResolutionLabels,
   type SandboxBaseImageResolutionMetadata,
 } from "../sandbox-base-image";
+import {
+  mergeHermesPreservedEnvIntoMessagingPlan,
+  type PreservedEnvFile,
+} from "../state/preserved-env/index";
 import {
   DEFAULT_TOOL_DISCLOSURE,
   normalizeToolDisclosure,
@@ -36,10 +44,13 @@ import {
   replaceDockerfilePatchSnapshot,
   validateToolDisclosureDockerfileContract,
 } from "./dockerfile-tool-disclosure-contract";
+import { normalizeReasoningEffort, REASONING_EFFORT_ENV } from "./reasoning-mode";
 
 export { assertToolDisclosureDockerfileContract } from "./dockerfile-tool-disclosure-contract";
 
 const SANDBOX_BASE_IMAGE = "ghcr.io/nvidia/nemoclaw/sandbox-base";
+const NODE_RUNTIME_REFRESH_INSTRUCTION =
+  "COPY --from=builder /usr/local/bin/node /usr/local/bin/node";
 const PROXY_HOST_RE = /^[A-Za-z0-9._-]+$/;
 const POSITIVE_INT_RE = /^[1-9][0-9]*$/;
 
@@ -91,7 +102,9 @@ export interface PatchStagedDockerfileOptions {
   baseImageResolutionMetadata?: SandboxBaseImageResolutionMetadata | null;
   dcodeAutoApprovalMode?: DcodeAutoApprovalMode;
   upstreamEndpointUrl?: string | null;
+  compatibleEndpointReasoning?: "true" | "false";
   wslDashboardExposure?: boolean;
+  rebuildPreservedEnv?: readonly PreservedEnvFile[];
 }
 
 export function patchDcodeAutoApprovalDockerArg(
@@ -124,6 +137,40 @@ export function isValidProxyPort(value: string): boolean {
 export type PatchedDockerfileMetadata = { dashboardRemoteBindPrepared: boolean };
 
 export { hasPreparedRemoteDashboardBind } from "./dockerfile-remote-dashboard-bind-contract";
+
+function patchMessagingPlanDockerArg(
+  dockerfile: string,
+  plan: SandboxMessagingPlan,
+  preservedEnv: readonly PreservedEnvFile[] | undefined,
+): string {
+  const baseMessagingPlan = hydrateDerivedSandboxMessagingPlanFields(
+    parseSandboxMessagingPlan(plan) ?? plan,
+  );
+  const imageMessagingPlan = mergeHermesPreservedEnvIntoMessagingPlan(
+    baseMessagingPlan,
+    preservedEnv,
+  );
+  const messagingPlanArgPattern = /^ARG NEMOCLAW_MESSAGING_PLAN_B64=.*$/m;
+  if (!messagingPlanArgPattern.test(dockerfile)) {
+    throw new Error(
+      "Dockerfile is missing ARG NEMOCLAW_MESSAGING_PLAN_B64; cannot apply messaging plan.",
+    );
+  }
+  return dockerfile.replace(
+    messagingPlanArgPattern,
+    `ARG NEMOCLAW_MESSAGING_PLAN_B64=${sanitizeDockerArg(MessagingSetupApplier.encodePlanForImageBuild(imageMessagingPlan))}`,
+  );
+}
+
+export function patchStagedDockerfileMessagingPlan(
+  dockerfilePath: string,
+  plan: SandboxMessagingPlan,
+  preservedEnv: readonly PreservedEnvFile[],
+): void {
+  const patchSnapshot = readDockerfilePatchSnapshot(dockerfilePath);
+  const dockerfile = patchMessagingPlanDockerArg(patchSnapshot.content, plan, preservedEnv);
+  replaceDockerfilePatchSnapshot(dockerfilePath, patchSnapshot, dockerfile);
+}
 
 export function patchStagedDockerfile(
   dockerfilePath: string,
@@ -185,9 +232,38 @@ export function patchStagedDockerfile(
       },
     );
   }
+  // A source=local resolution is built from this checkout's Dockerfile.base,
+  // whose Node image pin is kept identical to the managed Dockerfile builder.
+  // Copying that same 125 MB binary into the final image creates a redundant
+  // export layer. Keep the checked-in COPY as the safe default for published
+  // and legacy bases, and elide it only for this trusted, authoritative local
+  // base path. Custom Dockerfiles never receive trusted resolution metadata.
+  if (
+    options.trustedManagedDockerfile === true &&
+    options.baseImageResolutionMetadata?.imageName === SANDBOX_BASE_IMAGE &&
+    options.baseImageResolutionMetadata.source === "local" &&
+    sanitizedBaseImageRef === options.baseImageResolutionMetadata.ref
+  ) {
+    const instructionCount = dockerfile
+      .split(/\r?\n/)
+      .filter((line) => line.trim() === NODE_RUNTIME_REFRESH_INSTRUCTION).length;
+    if (instructionCount !== 1) {
+      throw new Error(
+        `Managed OpenClaw Dockerfile must contain exactly one ${NODE_RUNTIME_REFRESH_INSTRUCTION} instruction; found ${instructionCount}.`,
+      );
+    }
+    dockerfile = dockerfile.replace(
+      NODE_RUNTIME_REFRESH_INSTRUCTION,
+      "# Node runtime refresh omitted: authoritative local base already uses the builder pin.",
+    );
+  }
   dockerfile = dockerfile.replace(
     /^ARG NEMOCLAW_MODEL=.*$/m,
     `ARG NEMOCLAW_MODEL=${sanitizedModel}`,
+  );
+  dockerfile = dockerfile.replace(
+    /^ARG NEMOCLAW_INFERENCE_PROVIDER_ID=.*$/m,
+    `ARG NEMOCLAW_INFERENCE_PROVIDER_ID=${sanitizeDockerArg(providerKey)}`,
   );
   dockerfile = dockerfile.replace(
     /^ARG NEMOCLAW_PROVIDER_KEY=.*$/m,
@@ -290,11 +366,18 @@ export function patchStagedDockerfile(
       `ARG NEMOCLAW_MAX_TOKENS=${sanitizeDockerArg(maxTokens)}`,
     );
   }
-  const reasoning = process.env.NEMOCLAW_REASONING;
+  const reasoning = options.compatibleEndpointReasoning ?? process.env.NEMOCLAW_REASONING;
   if (reasoning === "true" || reasoning === "false") {
     dockerfile = dockerfile.replace(
       /^ARG NEMOCLAW_REASONING=.*$/m,
       `ARG NEMOCLAW_REASONING=${sanitizeDockerArg(reasoning)}`,
+    );
+  }
+  const reasoningEffort = normalizeReasoningEffort(process.env[REASONING_EFFORT_ENV]);
+  if (reasoningEffort) {
+    dockerfile = dockerfile.replace(
+      /^ARG NEMOCLAW_REASONING_EFFORT=.*$/m,
+      `ARG NEMOCLAW_REASONING_EFFORT=${sanitizeDockerArg(reasoningEffort)}`,
     );
   }
   // Honor NEMOCLAW_INFERENCE_INPUTS for vision-capable models. OpenClaw's
@@ -308,8 +391,8 @@ export function patchStagedDockerfile(
       `ARG NEMOCLAW_INFERENCE_INPUTS=${sanitizeDockerArg(inferenceInputs)}`,
     );
   }
-  // NEMOCLAW_AGENT_TIMEOUT — override agents.defaults.timeoutSeconds at build
-  // time. Lets users increase the per-request inference timeout without
+  // NEMOCLAW_AGENT_TIMEOUT overrides the agent-run and provider-request timeouts
+  // at build time. Users can increase the inference timeout without
   // editing the Dockerfile. Ref: issue #2281
   const agentTimeout = process.env.NEMOCLAW_AGENT_TIMEOUT;
   if (agentTimeout && POSITIVE_INT_RE.test(agentTimeout)) {
@@ -373,18 +456,10 @@ export function patchStagedDockerfile(
   dockerfile = remoteDashboardBindContract.patchManagedDeviceAuthOptOutContract(dockerfile);
   const messagingPlan = MessagingSetupApplier.readPlanFromEnv();
   if (messagingPlan) {
-    const hydratedMessagingPlan = hydrateDerivedSandboxMessagingPlanFields(
-      parseSandboxMessagingPlan(messagingPlan) ?? messagingPlan,
-    );
-    const messagingPlanArgPattern = /^ARG NEMOCLAW_MESSAGING_PLAN_B64=.*$/m;
-    if (!messagingPlanArgPattern.test(dockerfile)) {
-      throw new Error(
-        "Dockerfile is missing ARG NEMOCLAW_MESSAGING_PLAN_B64; cannot apply messaging plan.",
-      );
-    }
-    dockerfile = dockerfile.replace(
-      messagingPlanArgPattern,
-      `ARG NEMOCLAW_MESSAGING_PLAN_B64=${sanitizeDockerArg(MessagingSetupApplier.encodePlan(hydratedMessagingPlan))}`,
+    dockerfile = patchMessagingPlanDockerArg(
+      dockerfile,
+      messagingPlan,
+      options.rebuildPreservedEnv,
     );
   }
   if (hermesToolGateways.length > 0) {

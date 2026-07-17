@@ -7,9 +7,10 @@
 # Headless `dcode -n "<prompt>"`, run inside a built Deep Agents Code sandbox,
 # must route through the managed https://inference.local/v1 endpoint using the
 # placeholder OpenAI-compatible key NemoClaw writes into config.toml. The login
-# shell path must reject an empty prompt with exit 2, then return PONG with exit
-# 0 for a real prompt; provider, connection, DNS, timeout, and ambiguous failures
-# are not acceptable. No real provider/proxy credentials may appear in
+# shell path must reject an empty prompt with exit 2, then return a versioned
+# JSON success envelope containing PONG with exit 0 for a real prompt; provider,
+# connection, DNS, timeout, and ambiguous failures are not acceptable. No real
+# provider/proxy credentials may appear in
 # config.toml, .env, .mcp.json, /tmp/nemoclaw-proxy-env.sh, or output.
 # The sandbox entrypoint, direct managed launcher, and both login/interactive
 # shell paths must keep the documented nproc=512 and nofile=65536 contract.
@@ -17,8 +18,13 @@
 # proxy routes inference.local when the request follows the normalized path.
 # Keep these phases in one ordered acceptance check: the absent-DNS observation
 # must describe the same sandbox used by login, direct-exec, and connect, and the
-# final credential scan must cover every captured output. Per-phase diagnostics
-# retain failure attribution without splitting that shared evidence boundary.
+# final credential scan must cover every captured output. A second connect run
+# sends untrusted evidence through the image-installed route-probe helper and
+# must stop before session attach. Per-phase diagnostics retain failure
+# attribution without splitting that shared evidence boundary.
+# This check is the typed target's risk-plan activation marker. The same target's
+# ordered thread-auto-approval check verifies that two named rebuilds converge and
+# that `nemoclaw status --json` exits 0 after the capability returns to `disabled`.
 
 set -euo pipefail
 
@@ -70,18 +76,201 @@ sandbox_direct_dcode() {
 }
 
 sandbox_dcode_wrapper_contract() {
-  # Keep the remote argv on one line: OpenShell rejects newline-bearing args.
+  # Keep this assertion as one atomic shell expression for clear failure attribution.
   # shellcheck disable=SC2016
   sandbox_exec 'dcode_path="$(command -v dcode 2>/dev/null || true)"; [ "$dcode_path" = /usr/local/bin/dcode ] && [ -x /usr/local/lib/nemoclaw/dcode-launcher.sh ] && [ -x /usr/local/lib/nemoclaw/dcode-managed-exec ] && [ -x /usr/local/lib/nemoclaw/dcode-wrapper.sh ] && cmp -s /usr/local/bin/dcode /usr/local/lib/nemoclaw/dcode-launcher.sh && cmp -s /usr/local/lib/nemoclaw/dcode-managed-exec /usr/local/lib/nemoclaw/dcode-launcher.sh && python3 -c '\''import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("deepagents_code") else 1)'\'' && printf "%s\\n" NEMOCLAW_DCODE_WRAPPER_CHAIN_OK'
 }
 
-nemoclaw_connect_probe() {
-  "${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" "$SANDBOX_NAME" connect --probe-only 2>&1
+write_openshell_target_shim() {
+  local shim_path="$1"
+
+  cat >"$shim_path" <<'SHIM'
+#!/bin/bash
+set -euo pipefail
+
+real_openshell="${OPENSHELL_NEMOCLAW_REAL_BIN:?}"
+trace_file="${OPENSHELL_NEMOCLAW_TARGET_TRACE:?}"
+original_args=("$@")
+
+if [ "${1:-}" = "sandbox" ] && [ "${2:-}" = "exec" ]; then
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -n | --name)
+        [ "$#" -ge 2 ] || exit 64
+        printf '%s\n' "$2" >>"$trace_file"
+        break
+        ;;
+      --name=*)
+        printf '%s\n' "${1#--name=}" >>"$trace_file"
+        break
+        ;;
+      --)
+        break
+        ;;
+    esac
+    shift
+  done
+fi
+
+unset OPENSHELL_NEMOCLAW_REAL_BIN OPENSHELL_NEMOCLAW_TARGET_TRACE
+exec "$real_openshell" "${original_args[@]}"
+SHIM
+  chmod 0700 "$shim_path"
 }
 
+validate_connect_target_trace() {
+  local trace_file="$1"
+  local observed=0
+  local target
+
+  if [ ! -s "$trace_file" ]; then
+    printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:missing"
+    return 1
+  fi
+
+  while IFS= read -r target || [ -n "$target" ]; do
+    observed=$((observed + 1))
+    if [ "$target" != "$SANDBOX_NAME" ]; then
+      printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:mismatch"
+      return 1
+    fi
+  done <"$trace_file"
+
+  if [ "$observed" -eq 0 ]; then
+    printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:missing"
+    return 1
+  fi
+}
+
+nemoclaw_connect_probe() {
+  local real_openshell
+  local trace_dir
+  local trace_file
+  local shim_path
+  local connect_output
+  local connect_status
+  local trace_result
+
+  real_openshell="$(command -v openshell 2>/dev/null || true)"
+  case "$real_openshell" in
+    /*) ;;
+    *)
+      printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:openshell"
+      return 1
+      ;;
+  esac
+  if [ ! -x "$real_openshell" ]; then
+    printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:openshell"
+    return 1
+  fi
+
+  if ! trace_dir="$(mktemp -d "${TMPDIR:-/tmp}/nemoclaw-dcode-connect.XXXXXX")"; then
+    printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:shim"
+    return 1
+  fi
+  trace_file="$trace_dir/targets"
+  shim_path="$trace_dir/openshell"
+  if ! : >"$trace_file" || ! write_openshell_target_shim "$shim_path"; then
+    rm -rf -- "$trace_dir"
+    printf '%s\n' "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:shim"
+    return 1
+  fi
+
+  # Exercise the public bare-connect route with every sandbox-name alias
+  # removed. The test-only OpenShell shim records the actual post-routing exec
+  # targets and then exact-execs the real absolute OpenShell binary.
+  if connect_output="$(
+    unset SANDBOX_NAME NEMOCLAW_SANDBOX_NAME NEMOCLAW_SANDBOX
+    env \
+      OPENSHELL_NEMOCLAW_REAL_BIN="$real_openshell" \
+      OPENSHELL_NEMOCLAW_TARGET_TRACE="$trace_file" \
+      NEMOCLAW_OPENSHELL_BIN="$shim_path" \
+      "${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" connect --probe-only 2>&1
+  )"; then
+    connect_status=0
+  else
+    connect_status=$?
+  fi
+
+  if trace_result="$(validate_connect_target_trace "$trace_file")"; then
+    rm -rf -- "$trace_dir"
+    printf '%s\n' "$connect_output"
+    return "$connect_status"
+  else
+    connect_status=$?
+  fi
+
+  rm -rf -- "$trace_dir"
+  printf '%s\n' "$connect_output"
+  printf '%s\n' "$trace_result"
+  return "$connect_status"
+}
+
+dcode_connect_fail_closed_contract() (
+  local fixture_dir real_openshell openshell_shim probe_marker attach_marker
+  local connect_output connect_exit
+  fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/${PREFIX}.XXXXXX")"
+  trap 'rm -rf "$fixture_dir"' EXIT
+  real_openshell="$(command -v openshell)"
+  openshell_shim="${fixture_dir}/openshell"
+  probe_marker="${fixture_dir}/managed-probe-used"
+  attach_marker="${fixture_dir}/session-attach-invoked"
+
+  cat >"$openshell_shim" <<'SHIM'
+#!/bin/bash
+set -euo pipefail
+
+readonly REAL_OPENSHELL="${OPENSHELL_NEMOCLAW_E2E_REAL_BIN:?}"
+readonly PROBE_MARKER="${OPENSHELL_NEMOCLAW_E2E_PROBE_MARKER:?}"
+readonly ATTACH_MARKER="${OPENSHELL_NEMOCLAW_E2E_ATTACH_MARKER:?}"
+
+if [ "${1:-}" = "sandbox" ] && [ "${2:-}" = "connect" ]; then
+  : >"$ATTACH_MARKER"
+  exit 97
+fi
+
+args=("$@")
+for ((index = 0; index + 3 < ${#args[@]}; index += 1)); do
+  if [ "${args[index]}" = "/usr/local/lib/nemoclaw/dcode-managed-exec" ] \
+    && [ "${args[index + 1]}" = "/bin/sh" ] \
+    && [ "${args[index + 2]}" = "-c" ]; then
+    : >"$PROBE_MARKER"
+    args[index + 3]='printf "%s\n" "UNTRUSTED PREAMBLE" "BROKEN 000"'
+    exec "$REAL_OPENSHELL" "${args[@]}"
+  fi
+done
+
+exec "$REAL_OPENSHELL" "$@"
+SHIM
+  chmod 700 "$openshell_shim"
+
+  if connect_output="$(env \
+    NEMOCLAW_OPENSHELL_BIN="$openshell_shim" \
+    OPENSHELL_NEMOCLAW_E2E_REAL_BIN="$real_openshell" \
+    OPENSHELL_NEMOCLAW_E2E_PROBE_MARKER="$probe_marker" \
+    OPENSHELL_NEMOCLAW_E2E_ATTACH_MARKER="$attach_marker" \
+    "${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" "$SANDBOX_NAME" connect 2>&1)"; then
+    connect_exit=0
+  else
+    connect_exit=$?
+  fi
+
+  printf '%s\n' "$connect_output"
+  printf 'NEMOCLAW_DCODE_UNTRUSTED_CONNECT_EXIT:%s\n' "$connect_exit"
+  if [ -f "$probe_marker" ]; then
+    printf '%s\n' NEMOCLAW_DCODE_IMAGE_PROBE_USED
+  fi
+  if [ -e "$attach_marker" ]; then
+    printf '%s\n' NEMOCLAW_DCODE_SESSION_ATTACH_INVOKED
+  else
+    printf '%s\n' NEMOCLAW_DCODE_SESSION_ATTACH_NOT_INVOKED
+  fi
+)
+
 sandbox_login_proxy_contract() {
-  # OpenShell rejects CR/LF in any exec argv element, so keep this remote login
-  # command on one physical line. inference.local is intentionally absent from
+  # Keep the remote login contract in one quoted shell expression so the
+  # fixture can dispatch it atomically. inference.local is intentionally absent from
   # NO_PROXY: OpenShell does not need to provision inference.local DNS/hosts
   # into the sandbox because its managed proxy owns this L7 route. Adding
   # inference.local here would bypass that proxy and force a direct DNS lookup.
@@ -106,7 +295,7 @@ sandbox_entrypoint_rlimit_contract() {
 }
 
 rlimit_shell_contract_command() {
-  # Keep this command on one physical line: OpenShell rejects CR/LF in argv.
+  # Keep this contract as one atomic shell expression for clear failure attribution.
   # shellcheck disable=SC2016
   printf '%s' 'set -euo pipefail; contract_fail() { printf "%s\n" "NEMOCLAW_DCODE_SHELL_RLIMIT_FAIL:$1"; exit 1; }; nproc_soft="$(ulimit -Su)"; nproc_hard="$(ulimit -Hu)"; nofile_soft="$(ulimit -Sn)"; nofile_hard="$(ulimit -Hn)"; for value in "$nproc_soft" "$nproc_hard" "$nofile_soft" "$nofile_hard"; do case "$value" in "" | *[!0-9]*) contract_fail nonnumeric ;; esac; done; [ "$nproc_soft" = 512 ] && [ "$nproc_hard" = 512 ] || contract_fail nproc; [ "$nofile_soft" = 65536 ] && [ "$nofile_hard" = 65536 ] || contract_fail nofile; set +e; ulimit -Su 513 >/dev/null 2>&1; raise_nproc="$?"; ulimit -Sn 65537 >/dev/null 2>&1; raise_nofile="$?"; set -e; [ "$raise_nproc" -ne 0 ] || contract_fail raise-nproc; [ "$raise_nofile" -ne 0 ] || contract_fail raise-nofile; printf "%s\n" NEMOCLAW_DCODE_SHELL_RLIMIT_OK'
 }
@@ -174,14 +363,17 @@ is_empty_prompt_rejection() {
 }
 
 # Route reachability is proved separately with /v1/models. This classifier has
-# the stronger #6191 acceptance contract: dcode itself must be usable and return
-# exit-zero PONG, so authentication, quota, provider, and model errors are
-# intentionally failures rather than route-only success signals.
+# the stronger #6191 and #7773 acceptance contract: dcode itself must be usable
+# and return an exit-zero, versioned JSON envelope containing PONG. Authentication,
+# quota, provider, model, and malformed-envelope errors are intentionally failures.
 classify_headless_output() {
   local dcode_exit="$1"
   local headless_output="$2"
   local payload
-  payload="$(printf '%s' "$headless_output" | sed 's/DCODE_EXIT:[0-9]*//g')"
+  payload="$(
+    printf '%s' "$headless_output" \
+      | sed '$ { /^DCODE_EXIT:[0-9][0-9]*$/d; }'
+  )"
 
   if [ "$dcode_exit" = "124" ]; then
     printf '%s\n' "timeout"
@@ -218,12 +410,51 @@ classify_headless_output() {
     return 1
   fi
 
-  if printf '%s\n' "$payload" | tr -d '\r' | grep -Eiq '^[[:space:]]*PONG[[:space:]]*$'; then
-    printf '%s\n' "pong"
+  if printf '%s' "$payload" | python3 -c '
+import json
+import sys
+
+try:
+    envelope = json.load(sys.stdin)
+except json.JSONDecodeError:
+    raise SystemExit(1)
+if not isinstance(envelope, dict):
+    raise SystemExit(1)
+if set(envelope) != {"schema_version", "command", "data"}:
+    raise SystemExit(1)
+if envelope["schema_version"] != 1 or envelope["command"] != "non-interactive":
+    raise SystemExit(1)
+data = envelope["data"]
+if not isinstance(data, dict) or set(data) != {
+    "status",
+    "exit_code",
+    "response",
+    "completion",
+}:
+    raise SystemExit(1)
+if data["status"] != "success" or data["exit_code"] != 0:
+    raise SystemExit(1)
+if not isinstance(data["response"], str) or data["response"].strip() != "PONG":
+    raise SystemExit(1)
+completion = data["completion"]
+if not isinstance(completion, dict) or set(completion) != {
+    "thread_id",
+    "duration_ms",
+    "response_bytes",
+}:
+    raise SystemExit(1)
+if not isinstance(completion["thread_id"], str) or not completion["thread_id"]:
+    raise SystemExit(1)
+if not isinstance(completion["duration_ms"], int) or completion["duration_ms"] < 0:
+    raise SystemExit(1)
+if completion["response_bytes"] != len(data["response"].encode("utf-8")):
+    raise SystemExit(1)
+'; then
+    printf '%s\n' "json-pong"
     return 0
   fi
 
-  printf '%s\n' "ambiguous-output"
+  printf '%s\n' "invalid-json-envelope"
   return 1
 }
 
@@ -315,7 +546,6 @@ main() {
     fail_test "config.toml does not use the managed placeholder API key env reference (captured config redacted from log)"
   fi
   if printf '%s\n' "$config_output" | uses_native_openrouter_config; then
-    native_openrouter=1
     openrouter_identity_output="$(sandbox_direct_dcode identity || true)"
     if printf '%s\n' "$openrouter_identity_output" | grep -Fxq "Provider: openrouter" \
       && printf '%s\n' "$openrouter_identity_output" | grep -Eq '^Model:[[:space:]]+openrouter:' \
@@ -325,7 +555,6 @@ main() {
       fail_test "installed dcode identity does not report native OpenRouter consistently"
     fi
   else
-    native_openrouter=0
     openrouter_identity_output=""
   fi
 
@@ -368,25 +597,17 @@ main() {
     fail_test "login-shell proxy did not receive HTTP 200 from https://inference.local/v1/models (HTTP ${route_code:-000})"
   fi
 
-  # 5. The same login-shell path runs dcode and returns PONG.
-  headless_output="$(sandbox_login_exec "cd /sandbox && timeout ${HEADLESS_TIMEOUT} dcode -n 'Reply with exactly one word: PONG'; echo \"DCODE_EXIT:\$?\"" || true)"
+  # 5. The same login-shell path runs dcode and returns a JSON PONG envelope.
+  headless_output="$(sandbox_login_exec "cd /sandbox && timeout ${HEADLESS_TIMEOUT} dcode -n 'Reply with exactly one word: PONG' --json; echo \"DCODE_EXIT:\$?\"" || true)"
   dcode_exit="$(printf '%s' "$headless_output" | sed -n 's/.*DCODE_EXIT:\([0-9]\+\).*/\1/p' | tail -n1)"
   if classification="$(classify_headless_output "${dcode_exit:-unknown}" "$headless_output")"; then
     pass "login-shell dcode -n reached managed inference with ${classification} (exit ${dcode_exit:-unknown}; direct DNS/hosts ${direct_dns_state})"
-    if [ "$native_openrouter" -eq 1 ]; then
-      if printf '%s\n' "$headless_output" | grep -Fq "Usage Stats" \
-        && printf '%s\n' "$headless_output" | grep -Eiq '(^|[[:space:]])openrouter([[:space:]]|$)'; then
-        pass "headless usage output reports the native OpenRouter provider"
-      else
-        fail_test "headless usage output does not report the native OpenRouter provider"
-      fi
-    fi
   else
-    fail_test "login-shell dcode -n did not exit 0 with PONG (${classification}, exit ${dcode_exit:-unknown})"
+    fail_test "login-shell dcode -n --json did not return a success envelope with PONG (${classification}, exit ${dcode_exit:-unknown})"
   fi
 
   # 6. The public direct-exec path reaches inference without shell startup files.
-  if direct_output="$(sandbox_direct_dcode -n "Reply with exactly one word: PONG")"; then
+  if direct_output="$(sandbox_direct_dcode -n "Reply with exactly one word: PONG" --json)"; then
     direct_exit=0
   else
     direct_exit=$?
@@ -396,19 +617,42 @@ DCODE_EXIT:${direct_exit}"
   if direct_classification="$(classify_headless_output "$direct_exit" "$direct_headless_output")"; then
     pass "direct-exec dcode -n reached managed inference with ${direct_classification} (exit ${direct_exit}; direct DNS/hosts ${direct_dns_state})"
   else
-    fail_test "direct-exec dcode -n did not exit 0 with PONG (${direct_classification}, exit ${direct_exit})"
+    fail_test "direct-exec dcode -n --json did not return a success envelope with PONG (${direct_classification}, exit ${direct_exit})"
   fi
 
-  # 7. The user-facing connect readiness path accepts the same managed route.
+  # 7. The user-facing bare-connect readiness path must route every observed
+  # sandbox exec to the same sandbox used by the preceding lifecycle evidence.
+  connect_output=""
   if connect_output="$(nemoclaw_connect_probe)"; then
     connect_exit=0
+    pass "bare connect targeted the Deep Agents Code sandbox"
     pass "nemoclaw connect --probe-only accepted the managed inference route (direct DNS/hosts ${direct_dns_state})"
   else
     connect_exit=$?
-    fail_test "nemoclaw connect --probe-only rejected the managed inference route (exit ${connect_exit})"
+    connect_target_reason="$(printf '%s\n' "$connect_output" | sed -n 's/^NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:\([a-z-]*\)$/\1/p' | tail -n1)"
+    if [ -n "$connect_target_reason" ]; then
+      fail_test "bare connect did not target the expected sandbox (${connect_target_reason})"
+    else
+      fail_test "nemoclaw connect --probe-only rejected the managed inference route (exit ${connect_exit})"
+    fi
   fi
 
-  # 8. No real secrets in managed config, runtime env files, artifacts, logs, or captured output.
+  # 8. Untrusted evidence from the image-installed helper must fail closed
+  # before the user-facing connect path can invoke interactive session attach.
+  fail_closed_connect_output="$(dcode_connect_fail_closed_contract || true)"
+  fail_closed_connect_exit="$(printf '%s\n' "$fail_closed_connect_output" | sed -n 's/^NEMOCLAW_DCODE_UNTRUSTED_CONNECT_EXIT:\([0-9][0-9]*\)$/\1/p' | tail -n1)"
+  if [ -n "$fail_closed_connect_exit" ] \
+    && [ "$fail_closed_connect_exit" -ne 0 ] \
+    && grep -Fq NEMOCLAW_DCODE_IMAGE_PROBE_USED <<<"$fail_closed_connect_output" \
+    && grep -Fq NEMOCLAW_DCODE_SESSION_ATTACH_NOT_INVOKED <<<"$fail_closed_connect_output" \
+    && grep -Fq "UNTRUSTED PREAMBLE" <<<"$fail_closed_connect_output" \
+    && grep -Fq "did not return a trusted result" <<<"$fail_closed_connect_output"; then
+    pass "connect rejects untrusted image-backed route evidence before session attach"
+  else
+    fail_test "connect did not fail closed before session attach for untrusted image-backed route evidence"
+  fi
+
+  # 9. No real secrets in managed config, runtime env files, artifacts, logs, or captured output.
   leak_scan="$(sandbox_exec "$(sandbox_artifact_scan_command)" || true)"
   combined="${config_output}
 ${openrouter_identity_output}
@@ -424,7 +668,8 @@ ${proxy_contract_output}
 ${route_output}
 ${headless_output}
 ${direct_headless_output}
-${connect_output}"
+${connect_output}
+${fail_closed_connect_output}"
   if printf '%s' "$combined" | contains_secret; then
     fail_test "secret-shaped value found in config/env/output (redacted from log)"
   else

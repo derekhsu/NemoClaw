@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { WebSearchConfig } from "../inference/web-search";
+import type { BaselineExclusionEntry } from "../state/registry";
 import type { DockerGpuRoutePlan } from "./docker-gpu-route";
 import type { NamedMessagingChannel } from "./messaging-prep";
 import {
@@ -20,6 +21,7 @@ import {
 
 export type CompleteSandboxCreateIntentInput<Agent, ResourceProfile> = {
   sandboxName: string;
+  inferenceProvider?: string | null;
   enabledChannels: readonly string[] | null;
   webSearchConfig: WebSearchConfig | null;
   agent: Agent;
@@ -29,6 +31,10 @@ export type CompleteSandboxCreateIntentInput<Agent, ResourceProfile> = {
   extraProviders: readonly string[];
   staleExtraProviders: readonly string[];
   policyTier?: string | null;
+  /** Operator baseline exclusions replayed into create/rebuild policy generation. */
+  baselineExclusions?: readonly BaselineExclusionEntry[];
+  /** Internal OpenClaw resume authority for exact registered provider reuse. */
+  reuseRegisteredCredentials?: boolean;
 };
 
 export interface SandboxCreateIntentResolverDeps<Agent, ResourceProfile> {
@@ -55,26 +61,36 @@ export function createSandboxCreateIntentResolver<
   async function prepareMessagingCapabilities(
     input: Pick<
       CompleteSandboxCreateIntentInput<Agent, ResourceProfile>,
-      "sandboxName" | "enabledChannels" | "webSearchConfig" | "agent"
+      "sandboxName" | "enabledChannels" | "webSearchConfig" | "agent" | "reuseRegisteredCredentials"
     >,
     expectedIntent?: SandboxCreateIntent,
+    credentialRegistration = false,
   ) {
+    const preflightDeps = expectedIntent
+      ? {
+          ...deps.messagingPreflightDeps,
+          readMessagingPlanFromEnv: () => null,
+          resolveDisabledChannels: () => [...expectedIntent.disabledChannelNames],
+        }
+      : credentialRegistration
+        ? {
+            ...deps.messagingPreflightDeps,
+            readMessagingPlanFromEnv: () => null,
+            registerExtraPlaceholderProviders: () => [],
+          }
+        : deps.messagingPreflightDeps;
     const result = await prepareSandboxMessagingPreflight(
       {
         channels: deps.channels,
         enabledChannels: filterEnabledChannels(input.enabledChannels, input.agent),
         sandboxName: input.sandboxName,
         agentName: input.agent?.name ?? "openclaw",
+        requireExactProviderBinding:
+          credentialRegistration || input.reuseRegisteredCredentials === true,
         webSearchConfig: input.webSearchConfig,
         env: process.env,
       },
-      expectedIntent
-        ? {
-            ...deps.messagingPreflightDeps,
-            readMessagingPlanFromEnv: () => null,
-            resolveDisabledChannels: () => [...expectedIntent.disabledChannelNames],
-          }
-        : deps.messagingPreflightDeps,
+      preflightDeps,
     );
     if (expectedIntent) {
       validateSandboxCreateIntentBindings(expectedIntent, result.messagingTokenDefs);
@@ -104,6 +120,7 @@ export function createSandboxCreateIntentResolver<
     return resolveSandboxCreateIntent({
       basePolicyPath: deps.getAgentPolicyPath(input.agent) || deps.defaultPolicyPath,
       sandboxName: input.sandboxName,
+      inferenceProvider: input.inferenceProvider,
       channels: deps.channels,
       enabledChannels: filterEnabledChannels(input.enabledChannels, input.agent),
       disabledChannelNames: messaging.disabledChannelNames,
@@ -125,11 +142,18 @@ export function createSandboxCreateIntentResolver<
       extraPlaceholderKeys: messaging.extraPlaceholderKeys,
       agentName: input.agent?.name,
       policyTier: resolveSandboxCreatePolicyTier(input.policyTier),
+      baselineExclusions: input.baselineExclusions,
     });
   }
 
   return {
     resolve,
     rebind: prepareMessagingCapabilities,
+    prepareCredentialProviders: (
+      input: Pick<
+        CompleteSandboxCreateIntentInput<Agent, ResourceProfile>,
+        "sandboxName" | "enabledChannels" | "webSearchConfig" | "agent"
+      >,
+    ) => prepareMessagingCapabilities(input, undefined, true),
   };
 }

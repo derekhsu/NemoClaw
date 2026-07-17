@@ -20,7 +20,7 @@ import path from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { buildHermesConfig } from "../agents/hermes/config/hermes-config.ts";
+import { buildHermesManagedPolicy } from "../agents/hermes/config/managed-policy.ts";
 import { buildOpenshellExecArgs } from "../src/lib/actions/sandbox/exec.ts";
 import { canRun, runWrapper, VALIDATOR, WRAPPER } from "./helpers/hermes-wrapper-harness.ts";
 
@@ -68,9 +68,6 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py", () => {
       SLACK_BOT_TOKEN: "xoxb-OPENSHELL-RESOLVE-ENV-SLACK_BOT_TOKEN",
       TELEGRAM_BOT_TOKEN: "openshell:resolve:env:TELEGRAM_BOT_TOKEN",
       OPENCLAW_GATEWAY_TOKEN: "raw-gateway-token",
-      OPENSHELL_TLS_CA: "/etc/openshell/tls/client/ca.crt",
-      OPENSHELL_TLS_CERT: "/etc/openshell/tls/client/tls.crt",
-      OPENSHELL_TLS_KEY: "/etc/openshell/tls/client/tls.key",
     });
 
     expect(run.status).toBe(0);
@@ -79,13 +76,16 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py", () => {
     expect(run.realArgs).toBe("gateway run");
   });
 
-  it("refuses `gateway` with a noncanonical OpenShell TLS key path", () => {
-    const value = "/tmp/not-openshell/tls.key";
-    const run = runWrapper(["gateway", "run"], { OPENSHELL_TLS_KEY: value });
+  it.each([
+    ["OPENSHELL_TLS_CA", "/etc/openshell/tls/client/ca.crt"],
+    ["OPENSHELL_TLS_CERT", "/etc/openshell/tls/client/tls.crt"],
+    ["OPENSHELL_TLS_KEY", "/etc/openshell/tls/client/tls.key"],
+  ])("refuses `gateway` when supervisor-only %s reaches the child", (name, value) => {
+    const run = runWrapper(["gateway", "run"], { [name]: value });
 
     expect(run.status).toBe(1);
     expect(run.stderr).toContain("process environment");
-    expect(run.stderr).toContain("OPENSHELL_TLS_KEY");
+    expect(run.stderr).toContain(name);
     expect(run.stderr).not.toContain(value);
     expect(run.realInvoked).toBe(false);
   });
@@ -1046,7 +1046,7 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py", () => {
     }
   });
 
-  it("masks every api_key emitted by buildHermesConfig so the generated config cannot leak through `config show`", () => {
+  it("masks every api_key emitted by the managed policy so generated config cannot leak through `config show`", () => {
     const settings = {
       model: "meta/llama-3.1-8b-instruct",
       baseUrl: "https://inference.local/v1",
@@ -1056,10 +1056,11 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py", () => {
       contextWindow: null,
       toolDisclosure: "progressive" as const,
       webSearchProvider: null,
+      managedImageCapabilityUnion: false,
       messagingCredentialPlaceholders: [],
       managedToolGateways: { brokerEnabled: false, presets: [] },
     };
-    const generated = buildHermesConfig(settings);
+    const generated = buildHermesManagedPolicy(settings).config;
     const fixture = JSON.stringify(generated, null, 2);
     expect(fixture).toContain("sk-OPENSHELL-PROXY-REWRITE");
     const run = runWrapper(["config", "show"], {}, { stub: { stdout: fixture, exitCode: 0 } });
@@ -1104,10 +1105,11 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py", () => {
         contextWindow: null,
         toolDisclosure: "progressive" as const,
         webSearchProvider: null,
+        managedImageCapabilityUnion: false,
         messagingCredentialPlaceholders: [],
         managedToolGateways: { brokerEnabled: false, presets: [] },
       };
-      const generated = buildHermesConfig(settings);
+      const generated = buildHermesManagedPolicy(settings).config;
       const fixture = JSON.stringify(generated, null, 2);
       const stubScript = [
         "#!/usr/bin/env bash",

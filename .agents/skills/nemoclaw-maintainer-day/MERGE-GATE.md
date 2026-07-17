@@ -3,69 +3,169 @@
 
 # Merge Gate Workflow
 
-Run the last maintainer check before approval. Never merge automatically.
+Run the maintainer check before approval. Never merge.
 
 ## Gates
 
-For the full priority list see [PR-REVIEW-PRIORITIES.md](PR-REVIEW-PRIORITIES.md). A PR is approval-ready only when **all** hard gates pass:
+Approve a PR only when all hard gates pass. See [PR-REVIEW-PRIORITIES.md](PR-REVIEW-PRIORITIES.md).
 
-1. **Product scope approved** — confirm that the PR implements existing supported behavior or a linked, accepted product decision. Do not approve a new integration, solution, third-party stack, custom image, or canonical documentation surface merely because it works. Require defined ownership, lifecycle, compatibility, security, and validation expectations. Route independent solutions through [Community Solutions](../../../docs/resources/community-contributions.mdx).
-2. **Contributor compliance** — the PR body contains the contributor's `Signed-off-by:` declaration and every PR commit appears as `Verified` in GitHub. Reject noncompliant PRs; maintainers do not repair contributor history.
-3. **CI green** — all required checks in `statusCheckRollup`.
-4. **No conflicts** — `mergeStateStatus` clean.
-5. **No major CodeRabbit** — ignore style nits; block on correctness/security bugs.
-6. **Risky code tested** — see [RISKY-AREAS.md](RISKY-AREAS.md). Confirm tests exist (added or pre-existing).
+1. **Product scope approved** — Confirm that the PR implements supported behavior or a linked product decision.
+   Do not approve a new product surface because it works.
+   Require ownership, lifecycle, compatibility, security, and validation requirements.
+   Route independent solutions through [Community Solutions](../../../docs/resources/community-contributions.mdx).
+2. **Contributor requirements pass** — Require the contributor's `Signed-off-by:` declaration in the PR body.
+   Require every commit to appear as `Verified` in GitHub.
+   Authors with a case-normalized login of `dependabot[bot]` or `app/dependabot` do not need the PR-body declaration.
+   Dependabot commits must still appear as `Verified`.
+3. **CI passed for the PR SHA** — Require successful evidence for each check on the PR SHA and base SHA.
+4. **PR state did not change** — Require the PR to remain open and not draft.
+   During evaluation, its title, body, PR SHA, base branch, base SHA, mergeability, and merge state must not change.
+   Require `MERGEABLE` and a merge state that the gate permits.
+5. **No major CodeRabbit findings** — Confirm that there is no unresolved correctness or security issue.
+   Ignore style comments. Block correctness and security defects.
+6. **Risky code has tests** — See [RISKY-AREAS.md](RISKY-AREAS.md). Tests can be new or existing.
 
-## Step 1: Run the Gate Checker
+## Step 1: Run the gate checker
 
 ```bash
 node --experimental-strip-types --no-warnings .agents/skills/nemoclaw-maintainer-day/scripts/check-gates.ts <pr-number>
 ```
 
-This checks all gates programmatically and returns structured JSON with `allPass`, per-gate `pass`/`details`, and non-blocking `advisories`, including contributor/approver overlap. Use [PR CI and Review Follow-Up](../_shared/pr-follow-up.md) for the shared triage loop when individual findings need investigation.
-The product-scope gate is a human decision and is not represented by `allPass`.
+The script checks gates that do not require judgment. It returns JSON with `allPass`, gate results, and advisories.
+The contributor and approver overlap advisory does not change `allPass`.
+A maintainer must decide product scope. `allPass` does not include that decision.
 
-## Step 2: Interpret Results
+Use [Follow Up on PR CI and Reviews](../_shared/pr-follow-up.md) to investigate CI or review findings.
 
-The script handles the deterministic checks. You handle judgment calls:
+## Step 2: Interpret the results
 
-- **Product scope not established:** Stop before approval when the PR would create a new supported product surface and no accepted issue or design decision establishes ownership and lifecycle expectations. Technical correctness, successful tests, green CI, and positive advisor output do not substitute for product approval. Ask a maintainer for the product decision or route an independent solution through [Community Solutions](../../../docs/resources/community-contributions.mdx).
-- **Missing required checks:** The checked-in script requires `checks`, `check-hash`, `changes`, `commit-lint`, `dco-check`, and `E2E / PR Gate` in the status rollup, including while the repository ruleset rollout is staged. First-time fork contributors may need "Approve and run" before the ordinary `pull_request` checks appear. The trusted E2E controller records the head and base for internal and fork PRs without executing PR code. Never waive a missing, neutral, or skipped E2E gate, and never run untrusted fork code with privileged credentials to manufacture a result.
-- **Controller workflow versus PR verdict:** `E2E / PR Gate Controller` reports whether the trusted controller safely published an outcome. It can be green while the custom `E2E / PR Gate` check is failed or cancelled. Merge authority comes from the custom check for the current head and base, not from the controller workflow. `Superseded by PR update` and `PR closed — gate no longer applies` are cancelled outcomes for an obsolete revision and require no action on that old check; the current revision still needs its own successful gate. The closed-PR outcome also covers a deleted fork repository whose GitHub head-repository field is empty.
-- **CI or selected E2E did not pass:** A handled prerequisite-CI or selected-E2E failure leaves `E2E / PR Gate` red while `E2E / PR Gate Controller` completes successfully. Follow the CI run, E2E run, non-passing job, and failed-step links in the custom check, fix or rerun the failing work, and require a successful gate for the resulting revision. A green controller run does not override the red verdict.
-- **Evidence could not be verified:** If a selected child succeeds but `Download evidence` fails, is cancelled, or is skipped, the custom check fails closed with `Evidence could not be verified` and `E2E / PR Gate Controller` is red. Inspect the `Download evidence` step and rerun the gate; the green child alone is not accepted evidence. A successful download with missing, duplicate, skipped, pending, or reported-failing signals is a handled red PR verdict with a green controller. Malformed or unsafe evidence, schema or identity mismatches, and traversal-limit violations remain controller verification errors: both the check and controller fail closed.
-- **Fork PR credentialed E2E skip approval:** The primary fork path uses the same failed `E2E / PR Gate` check. Follow the explicit `E2E / PR Gate Controller run <id>` link embedded in the check summary rather than relying on the custom check's **Details** destination, choose **Review deployments**, select `approve-credentialed-e2e-skip-for-fork-pr`, add a comment if useful, and approve. This records that the selected credential-bearing E2E jobs will not run; it does not authorize fork code to run with repository secrets. The waiting job has `deployment: false`, no secrets, and no PR-controlled execution. The controller reads GitHub's approval history, requires one approval for only that environment, verifies that the recorded reviewer still has `maintain` or `admin`, and then applies the existing PR/head/base, deterministic-plan, matching-failed-check, compatible-`main`, and final stale-revision checks. A recorded approval completes the custom check successfully with `Credentialed E2E skipped for fork PR — approved by @<maintainer>` and leads with `Outcome: APPROVED SKIP — credentialed E2E did not run.` Treat this as an audited skip, not passing E2E evidence. Configure the environment before rollout with required reviewers whose approving members have `maintain` or `admin`; add no secrets, variables, or custom protection app, and preferably disable administrator bypass. If **Review deployments** is absent, the environment may be missing or unprotected, or the run may no longer be waiting. Configure it and trigger fresh upstream PR CI for a new gate run, or use the manual fork-skip fallback below. Do not rerun the waiting workflow: environment approvals are not attempt-bound, so the controller accepts only the first attempt. Per-PR concurrency cancels an older waiting approval when a newer revision reaches the gate.
-- **Manual fork PR credentialed E2E skip:** Use this only when the gate has failed with `Maintainer approval required to skip credentialed E2E`. Independently review the fork change and non-secret PR CI, then prefer the protected-environment approval above. The controller rejects a closed PR, a changed head or base, an internal PR, an empty E2E plan, a non-failed gate, a controller commit that is neither current `main` nor a safely validated ancestor of it, or a recorded reviewer below maintainer role. A safe `main` advance must preserve the controller commit as its merge base, contain fewer than 300 fully enumerated changed files, and avoid `e2e-control-plane` changes; other advances fail closed. It re-reads the open PR's head and base immediately before writing success. The result records the reviewer, optional bounded comment, validated approval-run URL, plan, and jobs that did not run. For the fallback, choose **Run workflow** on `main`, select `approve-fork-e2e-skip`, and provide the fork PR number, its current 40-character head SHA as `expected_head_sha`, its current 40-character base SHA as `expected_base_sha`, and a specific 10–500-character reason. Re-read both PR SHAs immediately before dispatch. Optionally set `evidence_url` to a reviewed URL matching `https://github.com/NVIDIA/NemoClaw/actions/runs/<run-id>`, or leave it blank when no supporting run exists. PR, issue, comment, job, and external URLs are rejected. The controller validates the optional URL's repository and run-ID shape but does not inspect that run's head, jobs, or conclusion.
-- **E2E control-plane authorization:** The deterministic `e2e-control-plane` family remains a conservative path boundary covering E2E and PR-CI workflows, risk policy, dependency and test configuration, preparation and upload actions, and non-documentation files under `tools/e2e/` and `test/e2e/`, including shell and Python support files. Internal PRs whose matched control-plane files are drawn only from `.github/workflows/pr-e2e-gate.yaml` and `tools/e2e/pr-e2e-gate.mts` automatically dispatch the selected jobs for that SHA. Any other or mixed internal control-plane diff fails with `Maintainer authorization required to run E2E` without running selected jobs or exposing repository secrets. Independently review the revision and its non-secret CI, then choose **Run workflow** on `main`, select `run-control-plane`, and provide the PR number, current 40-character `expected_head_sha`, current 40-character `expected_base_sha`, and a specific 10–500-character `review_reason`. Re-read both SHAs immediately before dispatch. The first-attempt workflow requires the triggering actor to have `maintain` or `admin`, and rejects forks, stale or closed PRs, plans that do not require authorization, empty selections, a missing or mismatched failed gate, and an incompatible trusted controller commit. It re-reads the current head and base before dispatch. Authorization returns the existing check to in progress and runs the selected jobs through the normal wait, evidence-download, and finish path; it cannot directly record success. Only verified evidence for that SHA can make `E2E / PR Gate` green.
-- **Two-phase ruleset rollout and backfill:** First deploy the E2E check producer and its trusted fork handling. Re-run `CI / Pull Request` for every already-open PR head/base pair (approving a first-time fork run when necessary), then verify that `E2E / PR Gate` is attached to that same head SHA for the current base. The fail-closed maintainer checker identifies any head still needing backfill. Adding the workflow does not retroactively report the context, and enabling the ruleset first leaves existing PRs at "Waiting for status to be reported." Do not activate the context as a security boundary while it is scoped only to the shared GitHub Actions app: that app identity cannot distinguish this workflow from another workflow. First give the gate distinct provenance through a dedicated GitHub App or an organization required-workflow rule. When the context is finally activated, also enable strict/up-to-date required status checks; otherwise a successful head can remain mergeable after `main` advances and changes the effective merge diff. Preserve the control-plane review and deterministic floor even after those external protections are in place.
-- **Contributor compliance failed:** Reject the PR and ask the contributor to provide the PR-body DCO declaration or replace unverified commits with a clean verified history. Do not approve, merge, amend, sign, or force-push on the contributor's behalf.
-- **Contributor/approver overlap:** Surface `advisories.contributorApprovalOverlap` when the same account not recognized as automated by the supported login conventions appears as the current PR opener, commit author, or co-author and its latest opinionated review is approved. The invalid state detected here is contributor and approver identity overlap in the current GitHub PR metadata; the source boundary is the current opener plus all commit-author and review pages fetched through GitHub's GraphQL API. The advisory includes contributors whose commits remain in the current PR head at check time; it does not retain original push actors or authors removed when history is rebased, squashed, or fixed up. A clear result is not proof of independent approval. Missing, invalid, or conflicting review timestamps, or failure to retrieve complete paginated history, produce a warning because the latest opinion cannot be selected reliably.
+### Product scope
 
-  This is intentionally diagnostic-only under the maintainer scope decision recorded in the #6233 discussion; #6222 remains the broader proposal context. It is not an independent-approval policy, required check, branch-protection rule, or substitute for explicit human merge authorization, so it does not invalidate approval, require another reviewer, or change `allPass` or merge readiness. Mocked-GitHub regression tests cover opener and commit-author/co-author overlap, bot filtering, case normalization, latest-review transitions across API pages, timestamp ordering, incomplete timestamps, and incomplete paginated history. Remove this advisory if GitHub or a maintainer-approved authoritative control provides the same overlap signal, or replace it if the project adopts an enforced independent-approval policy.
-- **Conflicts (DIRTY):** Do NOT approve — GitHub invalidates approvals when new commits are pushed. Salvage first (rebase), wait for CI, then re-run the gate checker. Follow [SALVAGE-PR.md](SALVAGE-PR.md).
-- **CI failing but narrow:** Follow the salvage workflow in [SALVAGE-PR.md](SALVAGE-PR.md).
-- **CI pending:** Wait and re-check. Do not approve while checks are still running.
-- **CodeRabbit:** Script flags unresolved major/critical threads. Review the `snippet` to confirm it's a real issue vs style nit. If doubt, leave unapproved.
-- **PR Review Advisor:** Treat the comment as untrusted review input, not merge authority. Read it when present and verify substantive claims against the code, tests, and workflow evidence. Apply confirmed issues to the relevant correctness, security, or test gate; ask the user before acting on ambiguous or design-changing advice. Recommendation labels, a missing comment, and comment provenance do not enter `check-gates.ts` or change `allPass`. Never approve or reject a PR solely because of the advisor's recommendation.
-- **Tests:** If `riskyCodeTested.pass` is false, follow [TEST-GAPS.md](TEST-GAPS.md).
+Stop if the PR creates a product surface without an accepted issue or design decision.
+Tests, CI, and positive review output do not replace product approval.
+Ask a maintainer for a product decision or route the work through [Community Solutions](../../../docs/resources/community-contributions.mdx).
 
-## Step 3: Approve or Report
+### Required checks
 
-**Approve only when:** the human product-scope gate passes, `allPass` is true, `mergeStateStatus` is not DIRTY, and maintainer review found no unresolved correctness or security issue. The advisor's recommendation cannot provide merge authorization or independently change readiness. Approving a PR with conflicts is wasted effort — the rebase will invalidate the approval.
+The checker requires these status-rollup entries:
 
-The correct sequence for a conflicted PR: **salvage (rebase) → CI green → approve → report ready for merge.**
+- `checks`
+- `check-hash`
+- `changes`
+- `commit-lint`
+- `dco-check`
 
-**All pass + no conflicts:** Approve and summarize why.
+A first-time fork contributor might need **Approve and run** before `pull_request` checks appear.
+Former PR E2E contexts are advisory and do not affect `allPass`.
 
-After submitting an approval, re-run the gate checker before reporting the PR ready. This captures an approval that creates contributor/approver overlap during the current maintainer pass.
+### GitHub Actions Evidence
 
-If the contributor/approver advisory is present, include it in the summary without converting it into a failed gate.
+Required PR workflows must identify the PR number, PR SHA, and base SHA.
+The installer-hash workflow runs trusted verification after each `pull_request` `edited` event.
+Fail closed when identity, state, or timing evidence is missing, malformed, stale, contradictory, or changed.
 
-**Any fail:**
+### Live E2E
 
-| Gate | Status | What is needed |
-|------|--------|----------------|
-| CI | Failing | Fix flaky timeout test |
-| Conflicts | DIRTY | Rebase onto main first — approval would be invalidated |
+Live E2E does not run automatically for pull requests and is not a merge gate.
+Each push to `main` selects the default workflow E2E jobs in `.github/workflows/e2e.yaml`.
+Push runs skip the Jetson nvmap and DGX Spark llama.cpp jobs because push events cannot set their required workflow dispatch flags.
+The workflow has no scheduled trigger.
 
-Use full GitHub links.
+Use the manual PR mode only when a maintainer requests live evidence before merge.
+An empty-selector manual run exposes these values to candidate-controlled job processes:
+
+- Long-lived API keys from repository secrets: `NVIDIA_INFERENCE_API_KEY`, `NVIDIA_API_KEY`, and `BRAVE_API_KEY`.
+- Long-lived messaging credentials from repository secrets: `TELEGRAM_BOT_TOKEN_REAL`, `DISCORD_BOT_TOKEN_REAL`, `SLACK_BOT_TOKEN_REAL`, and `SLACK_APP_TOKEN_REAL`.
+- The job-scoped `GITHUB_TOKEN` in the `token-rotation` and `openshell-gateway-upgrade` jobs. It has `checks: read`, `contents: read`, and `pull-requests: read` access. Candidate code can use it while either job runs. GitHub Actions invalidates it after the job.
+- Messaging account and channel identifiers from repository secrets: `TELEGRAM_ALLOWED_IDS`, `TELEGRAM_AUTHORIZED_CHAT_IDS`, `TELEGRAM_CHAT_ID`, `TELEGRAM_CHAT_ID_E2E`, `DISCORD_CHANNEL_ID_E2E`, and `SLACK_CHANNEL_ID_E2E`.
+
+The workflow does not rotate or revoke these API keys or messaging credentials. To remove later access, rotate or revoke every listed credential in the external service that issued it. The workflow cannot erase identifiers copied by candidate code. Review the complete candidate diff before dispatch.
+Live targets can create external resources.
+After a failure, inspect the artifacts and remove resources that target cleanup did not remove.
+
+Dispatch the trusted `main` workflow with the current PR number, lowercase 40-character head SHA, head repository, lowercase 40-character base SHA, trusted workflow SHA, and a review reason containing 10 to 500 printable characters.
+Leave job and target selectors empty and keep Launchable disabled.
+Keep `allow_jetson_runner_queue=false` and `allow_dgx_spark_runner_queue=false` for the default PR revision selection.
+If the DGX Spark flag is `true`, GitHub can pause `llama-cpp-dgx-spark-qualification` for the `approve-dgx-spark-image-qualification` environment.
+An authorized environment reviewer must approve it before qualification starts.
+The trusted pre-checkout step requires current `maintain` or `admin` access and validates the exact open PR before candidate code runs.
+
+The manual run is advisory.
+Treat it as passing evidence only when the `E2E` workflow concludes with `success` for the recorded PR number, head repository, head SHA, base SHA, and workflow SHA.
+A changed head repository, head SHA, or base SHA invalidates the result.
+
+### Contributor requirement failure
+
+Reject a PR that lacks the PR-body DCO declaration or has an unverified commit.
+Ask the contributor to correct the PR body or replace the commit history.
+Only the two Dependabot logins above do not need the PR-body declaration.
+They still need verified commits.
+Do not approve, merge, amend, sign, or force-push for the contributor.
+
+### Contributor and approver overlap
+
+Report `advisories.contributorApprovalOverlap` when the same non-bot account contributes and approves.
+The contributor set contains the PR opener, commit authors, and co-authors.
+Use the account's most recent opinionated review.
+
+Read all GraphQL pages for contributors and reviews.
+The advisory includes contributors whose commits remain in the PR SHA.
+It does not retain push actors or authors removed from the history.
+If review timestamps are missing, invalid, or conflicting, report a warning.
+Also report a warning if all pages cannot be read.
+
+The advisory does not prove that approval is independent.
+It is not a policy, required check, or branch-protection rule.
+It does not change `allPass`, approval, or merge readiness.
+This scope follows the maintainer decision in issue #6233. Issue #6222 contains the related proposal.
+
+Tests cover opener, author, and co-author overlap.
+They also cover bot filtering, case normalization, review changes, pagination, and timestamp errors.
+Remove the advisory if GitHub or approved policy provides the same signal.
+Replace it if the project adopts an independent-approval requirement.
+
+### Other results
+
+- **Base or PR changed:** Do not approve.
+  Refresh the branch when needed, wait for CI, and run the checker again.
+  Follow [SALVAGE-PR.md](SALVAGE-PR.md).
+- **CI failure with a small fix:** Follow [SALVAGE-PR.md](SALVAGE-PR.md).
+- **CI pending:** Wait and check again. Do not approve.
+- **CodeRabbit finding:** Read the snippet. Decide whether it reports a correctness or security problem, or a style comment.
+- **PR Review Advisor finding:** Treat it as review input, not merge authority.
+  Verify each claim against code, tests, and workflow evidence.
+  Apply confirmed problems to a gate. Ask the user about ambiguous or design-changing advice.
+  Advisor labels, absence, and source do not affect `check-gates.ts` or `allPass`.
+- **Missing tests:** Follow [TEST-GAPS.md](TEST-GAPS.md).
+
+## Step 3: Approve or report
+
+Approve only when all these conditions are true:
+
+- The product-scope gate passes.
+- `allPass` is true for the PR SHA and base SHA.
+- GitHub reports `MERGEABLE` and a permitted merge state.
+- No correctness or security problem remains.
+
+The advisor cannot authorize a merge or change readiness.
+Do not approve a stale or conflicted PR. A later refresh invalidates the approval.
+
+For a conflicted PR, use this order:
+
+1. Rebase and resolve conflicts.
+2. Wait for CI to pass.
+3. Approve.
+4. Report that the PR is ready for a merge decision.
+
+After approval, run the gate checker again.
+This check can find contributor and approver overlap created by the approval.
+Report that advisory. Do not treat it as a failed gate.
+
+If a gate fails, report the gate and the required action:
+
+| Gate | Status | Required action |
+|------|--------|-----------------|
+| CI | Failing | Fix the named job or test. |
+| Conflicts | GitHub does not report `MERGEABLE`, or the merge state is not permitted for the base SHA. | Rebase before approval. |
+
+Use GitHub links.

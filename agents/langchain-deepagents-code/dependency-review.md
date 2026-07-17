@@ -7,12 +7,22 @@ This file records the reviewed dependency baseline for the Deep Agents Code sand
 Update it whenever `requirements.lock` changes.
 
 - Lockfile: `agents/langchain-deepagents-code/requirements.lock`
-- Lockfile SHA-256: `7889fd275175ceadde843480587a3ed5b3dc517537222e60fa6fdfe4d5b21332`
+- Lockfile SHA-256: `2e9d59768ea20953c184b52220334e969356ac1a684ff334f0f3767c9f859229`
 - Audit command: `uv tool run --python 3.13 pip-audit -r agents/langchain-deepagents-code/requirements.lock --progress-spinner off --disable-pip`
-- Audit date: 2026-07-09
-- Audit result: `No known vulnerabilities found`
+- Audit date: August 3, 2026
+- Targeted audit result: `aiohttp 3.14.3, cryptography 50.0.0, uv 0.11.33, MCP 1.28.1, Pillow 12.3.0, and pyasn1 0.6.4 have no known vulnerabilities`
+- Complete-lock audit result: `2 duplicate records in 1 unrelated package`
 
 The Dockerfile installs this lockfile with `pip3 install --require-hashes`, so this review covers the exact package versions selected for the managed image install.
+The lock now selects `aiohttp==3.14.3`, `cryptography==50.0.0`, `uv==0.11.33`, `mcp==1.28.1`, `Pillow==12.3.0`, and `pyasn1==0.6.4`.
+These selections clear `GHSA-cq5v-8q36-5273` and `GHSA-g6cj-pr64-35w5`.
+The direct MCP and pyasn1 requirements are temporary, hash-locked constraints for the released Deep Agents Code `0.1.34` graph.
+Deep Agents Code `0.1.45` and later contain the MCP and pyasn1 fixes, but their hook boundary has changed.
+Remove the temporary direct constraints only as part of a separately validated semantic migration to `>=0.1.45` that preserves NemoClaw's managed runtime hooks.
+
+The image build runs `pip3 check` and asserts all seven installed package versions, including Deep Agents Code itself, before publishing.
+The complete point-in-time audit now reports only two duplicate database records for `setuptools==82.0.1`; that record is outside the Critical/High remediation scope.
+This review does not claim the complete lock is vulnerability-free.
 
 ## Managed `fetch_url` Proxy Adapter
 
@@ -124,7 +134,8 @@ aliases. They are not a new provider profile and do not modify the reviewed
 canonical NVIDIA profile.
 
 The two managed model IDs remain language-local constants in the TypeScript
-config generator and the isolated Python image/plugin validators. NemoClaw
+config generator, the managed package patch, and the isolated Python
+image/plugin validators. NemoClaw
 registers both IDs under the managed OpenAI adapter and the managed OpenRouter
 adapter because Deep Agents Code applies provider-native request shaping before
 it reaches the shared `inference.local` route. Those components run on opposite
@@ -137,17 +148,22 @@ another mutable build artifact.
 For `force_nonempty_content`, the invalid state originates in the NVIDIA Ultra
 chat template/serving path: a Chat Completions response that combines reasoning
 and tool calls can otherwise carry empty assistant content. That response shape
-is outside NemoClaw; this repository owns only the generated DCode provider
-configuration, so `generate-config.ts` supplies the model-specific template
-argument at that request boundary. Fixing the serving template, model, or
-third-party client in this repository would require vendoring an upstream
+is outside NemoClaw; this repository owns the generated DCode provider
+configuration and the managed package patch, so each supplies the model-specific
+template argument at its own boundary. `generate-config.ts` writes the per-model
+`config.toml` entry. The patched `_get_provider_kwargs` resolver derives the
+same argument from its language-local ID set because it never consumes the
+mutable `config.toml` params table (#7441). Fixing the serving template, model,
+or third-party client in this repository would require vendoring an upstream
 component and would violate the released-dependency boundary. The focused config
-tests prove both managed Ultra IDs receive the argument and unrelated models do
-not; the Deep Agents E2E verifies the installed request shape. Remove this
-argument only after a reviewed serving-template or client update produces
-nonempty assistant content for reasoning-plus-tool-call turns without it, and
-the live DCode Ultra E2E passes for both managed model IDs with the override
-deleted.
+tests verify that both managed Ultra IDs receive the argument and unrelated
+models do not. The focused managed-model-params patch test verifies that the
+managed provider resolver supplies it only for those IDs, and the Deep Agents
+E2E test verifies the installed request settings.
+Remove this argument only after a reviewed serving-template or client update
+produces nonempty assistant content for reasoning-plus-tool-call turns without
+it, and the live DCode Ultra E2E passes for both managed model IDs with both
+supply points deleted.
 
 For the `[content]` guard, the invalid state is a model-produced tool call whose
 complete `execute.command` is the placeholder, ignoring case and whitespace
@@ -202,10 +218,11 @@ staged into the image, and image regression tests enforce that absence.
 
 Deep Agents Code `0.1.34` is the released consumer; prerelease risk is limited
 to its exact `deepagents==0.7.0a6` SDK pin. That risk is accepted because the
-consumer and SDK are hash locked, the dependency audit is clean, and all source,
-version, middleware, graph, and dispatch contracts are enforced by the isolated
-image-build validator. That validator is the fail-closed gate because Deep
-Agents deliberately isolates and logs third-party plugin callback failures.
+consumer and SDK are hash locked and all source, version, middleware, graph,
+and dispatch contracts are enforced by the isolated image-build validator.
+Separately, the point-in-time audit reports no known vulnerabilities for
+Pillow `12.3.0`. The validator is the fail-closed gate because Deep Agents
+deliberately isolates and logs third-party plugin callback failures.
 
 The exact version and source-hash gates remain the executable lifecycle check
 for the alias adapter: any dependency change stops the image build and requires

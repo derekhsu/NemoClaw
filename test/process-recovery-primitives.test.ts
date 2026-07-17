@@ -13,6 +13,7 @@ const requireSource = createRequire(import.meta.url);
 const {
   classifyForwardHealthWithReachability,
   classifySandboxForwardHealth,
+  executeGatewaySupervisorAction,
   executeSandboxCommand,
   executeSandboxExecCommand,
   resolveSandboxDashboardPort,
@@ -22,6 +23,36 @@ const {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("executeGatewaySupervisorAction", () => {
+  it("sanitizes a temporarily unavailable direct container into the retry marker", () => {
+    const privilegedExec = requireSource("../src/lib/sandbox/privileged-exec.ts");
+    vi.spyOn(privilegedExec, "privilegedSandboxExecArgv").mockImplementation(() => {
+      throw new Error("temporary direct-container discovery detail");
+    });
+    vi.spyOn(privilegedExec, "isDirectSandboxFallbackUnavailableError").mockReturnValue(true);
+
+    expect(executeGatewaySupervisorAction("new-clone", "probe", 100)).toEqual({
+      status: 1,
+      stdout: "",
+      stderr: "PRIVILEGED_CONTROL_UNAVAILABLE",
+    });
+  });
+
+  it("keeps other privileged-control refusals terminal and classified", () => {
+    const privilegedExec = requireSource("../src/lib/sandbox/privileged-exec.ts");
+    vi.spyOn(privilegedExec, "privilegedSandboxExecArgv").mockImplementation(() => {
+      throw new Error("container identity changed");
+    });
+    vi.spyOn(privilegedExec, "isDirectSandboxFallbackUnavailableError").mockReturnValue(false);
+
+    expect(executeGatewaySupervisorAction("new-clone", "probe", 100)).toEqual({
+      status: 1,
+      stdout: "",
+      stderr: "PRIVILEGED_CONTROL_UNAVAILABLE: container identity changed",
+    });
+  });
 });
 
 function withFakeOpenshellBinary<T>(fn: () => T): T {
@@ -412,7 +443,7 @@ describe("executeSandboxExecCommand", () => {
     expect(dockerSpawnSync).not.toHaveBeenCalled();
   });
 
-  it("passes a newline-free Hermes validator payload to OpenShell", () => {
+  it("keeps the Hermes validator source out of the host shell payload", () => {
     const childProcess = requireSource("node:child_process");
     const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
       status: 0,
@@ -430,10 +461,9 @@ describe("executeSandboxExecCommand", () => {
     const args = spawn.mock.calls[0]?.[1] as string[];
     const shellPayload = args.at(-1) ?? "";
     expect(result).toEqual({ status: 0, stdout: "SECRET_BOUNDARY_OK", stderr: "" });
-    expect(shellPayload.includes("\n")).toBe(false);
-    expect(shellPayload.includes("\r")).toBe(false);
     expect(shellPayload).toContain("printf '%s\\n' '__NEMOCLAW_SANDBOX_EXEC_STARTED__'");
     expect(shellPayload).toContain("base64 -d | sh");
+    expect(shellPayload).not.toContain("echo SECRET_BOUNDARY_OK");
   });
 
   it("falls back to local Docker root exec when OpenShell exec output has no marker", () => {

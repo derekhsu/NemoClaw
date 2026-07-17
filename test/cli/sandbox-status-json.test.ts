@@ -23,12 +23,14 @@ function createInferenceRouteStatusSetup(options: {
 }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-status-route-"));
   const localBin = path.join(home, "bin");
-  const sandboxName = `route-${process.pid}-${Date.now()}`;
+  const sandboxName = `r-${process.pid.toString(36).slice(-3)}-${Date.now().toString(36).slice(-8)}`;
   fs.mkdirSync(localBin, { recursive: true });
   writeSandboxRegistry(home, sandboxName, {
     model: "nvidia/nemotron",
     provider: "nvidia-prod",
-    openshellDriver: "docker",
+    // These cases test only inference.local classification. Use the VM driver
+    // so Docker post-reboot delivery recovery does not affect their assertions.
+    openshellDriver: "vm",
   });
   fs.writeFileSync(
     path.join(localBin, "docker"),
@@ -104,7 +106,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
   it("sandbox status --json emits structured per-sandbox report", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-sandbox-status-json-"));
     const localBin = path.join(home, "bin");
-    const sandboxName = `alpha-${process.pid}-${Date.now()}`;
+    const sandboxName = `a-${process.pid.toString(36).slice(-3)}-${Date.now().toString(36).slice(-8)}`;
     fs.mkdirSync(localBin, { recursive: true });
     writeSandboxRegistry(home, sandboxName, {
       model: "configured-model",
@@ -133,6 +135,10 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
       path.join(localBin, "openshell"),
       [
         "#!/usr/bin/env bash",
+        'if [ "$1" = "gateway" ] && [ "$2" = "select" ]; then',
+        "  printf \"\\033[32m✓ Active gateway set to 'nemoclaw'\\033[0m\\n\"",
+        "  exit 0",
+        "fi",
         'if [ "$1" = "inference" ] && [ "$2" = "get" ]; then',
         "  echo 'Gateway inference:'",
         "  echo",
@@ -168,6 +174,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
     expect(r.out.trim().endsWith("}")).toBe(true);
     expect(r.out).not.toContain("Sandbox: ");
     expect(r.out).not.toContain("Nonexistent flag: --json");
+    expect(r.out).not.toContain("Active gateway set");
 
     const parsed = JSON.parse(r.out);
     expect(parsed).toMatchObject({
@@ -246,7 +253,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
     ]);
   });
 
-  it("sandbox status --json ignores failed upstream diagnostics when inference.local is healthy (#6192)", () => {
+  it("sandbox status --json reports a missing upstream credential as not probed when inference.local is reachable (#6192)", () => {
     const { home, localBin, sandboxName } = createInferenceRouteStatusSetup({
       routeOutput: "OK 200",
       upstreamHttpStatus: "000",
@@ -266,7 +273,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
       endpoint: "https://inference.local/v1/models",
     });
     expect(parsed.inferenceHealth.subprobes).toEqual([
-      expect.objectContaining({ ok: false, probeLabel: "upstream" }),
+      expect.objectContaining({ ok: true, probed: false, probeLabel: "upstream" }),
     ]);
   });
 
@@ -568,7 +575,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
       path.join(localBin, "openshell"),
       [
         "#!/usr/bin/env bash",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
+        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && { [ "$3" = "alpha" ] || [ "$5" = "alpha" ]; }; then',
         "  echo 'Sandbox:'",
         "  echo '  Name: alpha'",
         "  echo '  Phase: Error'",
@@ -616,20 +623,33 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
       model: "gpt-4o-mini",
       openshellDriver: "docker",
     });
-    writeHealthyDockerStub(localBin);
+    fs.writeFileSync(
+      path.join(localBin, "docker"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "info" ]; then echo "24.0.0"; exit 0; fi',
+        'if [ "$1" = "ps" ]; then echo "openshell-alpha"; exit 0; fi',
+        'if [ "$1" = "exec" ]; then',
+        "  echo 'oom_kill=3'",
+        "  echo 'source=/sys/fs/cgroup/memory.oom_control'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     fs.writeFileSync(
       path.join(localBin, "openshell"),
       [
         "#!/usr/bin/env bash",
-        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
+        'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && { [ "$3" = "alpha" ] || [ "$5" = "alpha" ]; }; then',
         "  echo 'Sandbox:'",
         "  echo '  Name: alpha'",
         "  echo '  Phase: Ready'",
         "  exit 0",
         "fi",
         'if [ "$1" = "sandbox" ] && [ "$2" = "exec" ]; then',
-        "  echo 'oom_kill=3'",
-        "  echo 'source=/sys/fs/cgroup/memory.oom_control'",
+        "  echo 'OK 200'",
         "  exit 0",
         "fi",
         'if [ "$1" = "inference" ] && [ "$2" = "get" ]; then',
@@ -710,7 +730,7 @@ describe("CLI sandbox status JSON output", testTimeoutOptions(20_000), () => {
         path.join(localBin, "openshell"),
         [
           "#!/usr/bin/env bash",
-          'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
+          'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && { [ "$3" = "alpha" ] || [ "$5" = "alpha" ]; }; then',
           "  echo 'Sandbox:'",
           "  echo '  Name: alpha'",
           "  echo '  Phase: Error'",

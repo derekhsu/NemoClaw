@@ -1,15 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
 
+import { decisionSelected, decisionUnset } from "../../../state/onboard-checkpoint-decision";
+import { deriveCheckpointFromSession } from "../../../state/onboard-checkpoint-migrate";
+import type { CheckpointSandboxIdentity } from "../../../state/onboard-checkpoint-types";
 import { createSession } from "../../../state/onboard-session";
-import { patchStagedDockerfile } from "../../dockerfile-patch";
-import { clearCompatibleEndpointReasoning } from "../../reasoning-mode";
 import {
   handleProviderInferenceState,
   type ProviderInferenceStateOptions,
@@ -23,6 +20,19 @@ import {
   type Gpu,
   type Host,
 } from "./provider-inference.test-support";
+
+function setupOptions(
+  session: { sessionId: string },
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    gatewayName: "nemoclaw",
+    allowToolsIncompatible: false,
+    endpointSource: null,
+    reservationSessionId: session.sessionId,
+    ...overrides,
+  };
+}
 
 describe("handleProviderInferenceState", () => {
   it("runs provider selection and inference setup on a fresh flow", async () => {
@@ -43,6 +53,11 @@ describe("handleProviderInferenceState", () => {
       expect.any(Function),
       session.sessionId,
     );
+    const selectionUpdates = (
+      calls.complete.mock.calls as unknown as Array<[string, Record<string, unknown>]>
+    ).find(([stepName]) => stepName === "provider_selection")?.[1];
+    expect(selectionUpdates).not.toHaveProperty("endpointSource");
+    expect(selectionUpdates).not.toHaveProperty("onboardEndpointUrl");
     expect(calls.promptName).toHaveBeenCalledWith(null);
     expect(calls.log).toHaveBeenCalledWith("summary:nvidia-prod/nvidia/test/my-assistant");
     expect(calls.startStep).toHaveBeenNthCalledWith(2, "inference", {
@@ -57,12 +72,9 @@ describe("handleProviderInferenceState", () => {
       "NVIDIA_INFERENCE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
+      setupOptions(session, {
         preferredInferenceApi: "openai-responses",
-        reservationSessionId: session.sessionId,
-      },
+      }),
     );
     expect(calls.deleteEnv).toHaveBeenCalledWith("NVIDIA_INFERENCE_API_KEY");
     expect(result).toMatchObject({
@@ -71,6 +83,7 @@ describe("handleProviderInferenceState", () => {
       provider: "nvidia-prod",
       preferredInferenceApi: "openai-responses",
       compatibleEndpointReasoning: null,
+      compatibleEndpointReasoningEffort: null,
     });
     expect(result.stateResult).toEqual({
       type: "transition",
@@ -128,12 +141,9 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_ANTHROPIC_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
+      setupOptions(session, {
         preferredInferenceApi: "openai-completions",
-        reservationSessionId: session.sessionId,
-      },
+      }),
     );
     expect(result.preferredInferenceApi).toBe("openai-completions");
   });
@@ -172,12 +182,9 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_ANTHROPIC_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
+      setupOptions(session, {
         preferredInferenceApi: "openai-completions",
-        reservationSessionId: session.sessionId,
-      },
+      }),
     );
     expect(calls.complete).toHaveBeenCalledWith(
       "inference",
@@ -230,79 +237,11 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_ANTHROPIC_API_KEY",
       null,
       [],
-      {
+      setupOptions(session, {
         gatewayName: "nemoclaw-9090",
-        allowToolsIncompatible: false,
         preferredInferenceApi: "openai-completions",
-        reservationSessionId: session.sessionId,
-      },
+      }),
     );
-  });
-
-  describe("compatible endpoint reasoning mode", () => {
-    it("records reasoning state during provider selection", async () => {
-      const setupNim = vi.fn(async () => ({
-        ...baseSelection,
-        compatibleEndpointReasoning: "true",
-        provider: "compatible-endpoint",
-        credentialEnv: "COMPATIBLE_API_KEY",
-      }));
-      const { deps } = createDeps({ setupNim });
-
-      const result = await handleProviderInferenceState({
-        ...baseOptions(deps),
-        env: { NEMOCLAW_REASONING: "true" },
-      });
-
-      expect(result).toMatchObject({
-        compatibleEndpointReasoning: "true",
-        provider: "compatible-endpoint",
-      });
-    });
-
-    it("clears stale resumed state before writing a non-compatible artifact", async () => {
-      vi.stubEnv("NEMOCLAW_REASONING", "true");
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-reasoning-resume-"));
-      const dockerfilePath = path.join(tempDir, "Dockerfile");
-      fs.writeFileSync(dockerfilePath, "ARG NEMOCLAW_REASONING=false\n");
-      const session = createSession({
-        provider: "nvidia-prod",
-        model: "nvidia/test",
-        compatibleEndpointReasoning: "true",
-      });
-      session.steps.provider_selection.status = "complete";
-      const setupInference = vi.fn(async () => {
-        expect(process.env.NEMOCLAW_REASONING).toBeUndefined();
-        patchStagedDockerfile(
-          dockerfilePath,
-          "nvidia/test",
-          "https://chat.example",
-          "build-1",
-          "nvidia-prod",
-        );
-        return { ok: true as const };
-      });
-      const { deps } = createDeps({
-        clearCompatibleEndpointReasoning,
-        setupInference,
-        isInferenceRouteReady: vi.fn(() => false),
-      });
-
-      try {
-        const result = await handleProviderInferenceState({
-          ...baseOptions(deps, session),
-          resume: true,
-          sandboxName: "my-assistant",
-        });
-
-        expect(setupInference).toHaveBeenCalledOnce();
-        expect(result.compatibleEndpointReasoning).toBeNull();
-        expect(fs.readFileSync(dockerfilePath, "utf-8")).toContain("ARG NEMOCLAW_REASONING=false");
-      } finally {
-        vi.unstubAllEnvs();
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    });
   });
 
   it("does not use resume shortcuts when fresh is also set", async () => {
@@ -375,6 +314,7 @@ describe("handleProviderInferenceState", () => {
       provider: "compatible-endpoint",
       model: "mock/mcp-bridge",
       endpointUrl: "https://compatible.example.test/v1",
+      endpointSource: null,
       credentialEnv: "COMPATIBLE_API_KEY",
       preferredInferenceApi: "openai-completions",
       gatewayName: "nemoclaw",
@@ -417,6 +357,34 @@ describe("handleProviderInferenceState", () => {
     await expect(handleProviderInferenceState(baseOptions(deps))).rejects.toThrow("probe failed");
 
     expect(calls.deleteEnv).toHaveBeenCalledWith("COMPATIBLE_API_KEY");
+  });
+
+  it("retains Station Express intent without committing a failed managed provider selection", async () => {
+    const setupNim = vi.fn(async () => {
+      throw new Error("injected managed vLLM download failure");
+    });
+    const { deps, calls } = createDeps({ setupNim });
+    const session = createSession({
+      mode: "non-interactive",
+      stationExpressIntent: {
+        version: 1,
+        model: "nemotron-3-ultra-550b-a55b",
+        sandboxName: "my-assistant",
+      },
+    });
+
+    await expect(handleProviderInferenceState(baseOptions(deps, session))).rejects.toThrow(
+      "injected managed vLLM download failure",
+    );
+
+    expect(session.stationExpressIntent).toEqual({
+      version: 1,
+      model: "nemotron-3-ultra-550b-a55b",
+      sandboxName: "my-assistant",
+    });
+    expect(session.provider).toBeNull();
+    expect(session.model).toBeNull();
+    expect(calls.complete).not.toHaveBeenCalledWith("provider_selection", expect.anything());
   });
 
   it("exits through the injected CLI boundary when provider selection is incomplete", async () => {
@@ -481,7 +449,12 @@ describe("handleProviderInferenceState", () => {
       state: "provider_selection",
       metadata: { repair: "ollama-systemd-loopback" },
     });
-    expect(calls.repair).toHaveBeenCalledWith("ollama-local", deps.isNonInteractive);
+    expect(calls.repair).toHaveBeenCalledWith({
+      provider: "ollama-local",
+      model: "llama3.1",
+      contextWindowFloor: 16_384,
+      isNonInteractive: deps.isNonInteractive,
+    });
     expect(calls.repairEvent).toHaveBeenCalledWith("state.repair.completed", {
       state: "provider_selection",
       metadata: { repair: "ollama-systemd-loopback" },
@@ -493,6 +466,126 @@ describe("handleProviderInferenceState", () => {
       model: "llama3.1",
     });
     expect(result).toMatchObject({ provider: "ollama-local", model: "llama3.1" });
+  });
+
+  it("reuses a persisted vLLM served alias when resume repairs inference (#7023)", async () => {
+    const persistedServedAlias = "my-ultra-served-alias";
+    const session = createSession({
+      provider: "vllm-local",
+      model: persistedServedAlias,
+      endpointUrl: "http://host.openshell.internal:8000/v1",
+      credentialEnv: null,
+      preferredInferenceApi: "openai-completions",
+    });
+    session.steps.provider_selection.status = "complete";
+    const { deps, calls } = createDeps({ isInferenceRouteReady: vi.fn(() => false) });
+
+    const result = await handleProviderInferenceState({
+      ...baseOptions(deps, session),
+      resume: true,
+      sandboxName: "my-assistant",
+    });
+
+    expect(calls.setupNim).not.toHaveBeenCalled();
+    expect(calls.setupInference).toHaveBeenCalledWith(
+      "my-assistant",
+      persistedServedAlias,
+      "vllm-local",
+      "http://host.openshell.internal:8000/v1",
+      null,
+      null,
+      [],
+      expect.objectContaining({
+        gatewayName: "nemoclaw",
+        preferredInferenceApi: "openai-completions",
+      }),
+    );
+    expect(calls.complete).toHaveBeenCalledWith(
+      "inference",
+      expect.objectContaining({ provider: "vllm-local", model: persistedServedAlias }),
+    );
+    expect(result).toMatchObject({ provider: "vllm-local", model: persistedServedAlias });
+  });
+
+  it("keeps a persisted vLLM served alias across a failed repair and resume retry (#7023)", async () => {
+    const persistedServedAlias = "my-ultra-served-alias";
+    const persistedEndpointUrl = "http://host.openshell.internal:8000/v1";
+    const session = createSession({
+      provider: "vllm-local",
+      model: persistedServedAlias,
+      endpointUrl: persistedEndpointUrl,
+      credentialEnv: null,
+      preferredInferenceApi: "openai-completions",
+    });
+    session.steps.provider_selection.status = "complete";
+    const setupInference = vi
+      .fn<ProviderInferenceStateOptions<Gpu, Agent, Host>["deps"]["setupInference"]>()
+      .mockRejectedValueOnce(new Error("alias repair failed"))
+      .mockResolvedValueOnce({ ok: true });
+    const { deps, calls } = createDeps({
+      setupInference,
+      isInferenceRouteReady: vi.fn(() => false),
+    });
+    calls.complete.mockResolvedValue(session);
+    const resumeOptions = {
+      ...baseOptions(deps, session),
+      resume: true,
+      sandboxName: "my-assistant",
+    };
+
+    await expect(handleProviderInferenceState(resumeOptions)).rejects.toThrow(
+      "alias repair failed",
+    );
+
+    expect(calls.setupNim).not.toHaveBeenCalled();
+    expect(calls.complete).not.toHaveBeenCalledWith("inference", expect.anything());
+
+    const result = await handleProviderInferenceState(resumeOptions);
+
+    expect(setupInference).toHaveBeenNthCalledWith(
+      1,
+      "my-assistant",
+      persistedServedAlias,
+      "vllm-local",
+      persistedEndpointUrl,
+      null,
+      null,
+      [],
+      expect.objectContaining({
+        gatewayName: "nemoclaw",
+        preferredInferenceApi: "openai-completions",
+      }),
+    );
+    expect(setupInference).toHaveBeenNthCalledWith(
+      2,
+      "my-assistant",
+      persistedServedAlias,
+      "vllm-local",
+      persistedEndpointUrl,
+      null,
+      null,
+      [],
+      expect.objectContaining({
+        gatewayName: "nemoclaw",
+        preferredInferenceApi: "openai-completions",
+      }),
+    );
+    expect(calls.setupNim).not.toHaveBeenCalled();
+    expect(calls.complete).toHaveBeenCalledOnce();
+    expect(calls.complete).toHaveBeenCalledWith(
+      "inference",
+      expect.objectContaining({ provider: "vllm-local", model: persistedServedAlias }),
+    );
+    expect(result).toMatchObject({
+      provider: "vllm-local",
+      model: persistedServedAlias,
+      endpointUrl: persistedEndpointUrl,
+      session: {
+        provider: "vllm-local",
+        model: persistedServedAlias,
+        endpointUrl: persistedEndpointUrl,
+      },
+    });
   });
 
   it("reserves the prompted sandbox route when resume skips already-ready inference (#6562)", async () => {
@@ -507,8 +600,10 @@ describe("handleProviderInferenceState", () => {
     const { deps, calls } = createDeps({ isInferenceRouteReady: vi.fn(() => true) });
     calls.promptName.mockResolvedValueOnce("tm");
 
+    const options = baseOptions(deps, session);
+    options.initial.endpointSource = "inference-set";
     const result = await handleProviderInferenceState({
-      ...baseOptions(deps, session),
+      ...options,
       resume: true,
       sandboxName: null,
     });
@@ -520,12 +615,47 @@ describe("handleProviderInferenceState", () => {
       provider: "nvidia-prod",
       model: "nvidia/nemotron-test",
       endpointUrl: "https://integrate.api.nvidia.com/v1",
+      endpointSource: "inference-set",
       credentialEnv: "NVIDIA_INFERENCE_API_KEY",
       preferredInferenceApi: "openai-responses",
       gatewayName: "nemoclaw",
       reservationSessionId: session.sessionId,
     });
     expect(result.sandboxName).toBe("tm");
+  });
+
+  it.each([
+    ["is unset", decisionUnset<CheckpointSandboxIdentity>()],
+    ["names another sandbox", decisionSelected({ name: "other-sandbox", agent: "openclaw" })],
+  ])("prompts before route reservation when the checkpoint identity %s", async (_label, identity) => {
+    const session = createSession({
+      sandboxName: "stale-sandbox",
+      provider: "nvidia-prod",
+      model: "nvidia/nemotron-test",
+      endpointUrl: "https://integrate.api.nvidia.com/v1",
+      credentialEnv: "NVIDIA_INFERENCE_API_KEY",
+      preferredInferenceApi: "openai-responses",
+    });
+    session.steps.provider_selection.status = "complete";
+    session.checkpoint = {
+      ...deriveCheckpointFromSession(session),
+      sandboxIdentity: identity,
+    };
+    const { deps, calls } = createDeps({ isInferenceRouteReady: vi.fn(() => true) });
+    calls.promptName.mockResolvedValueOnce("prompted-sandbox");
+
+    const result = await handleProviderInferenceState({
+      ...baseOptions(deps, session),
+      resume: true,
+      sandboxName: "stale-sandbox",
+    });
+
+    expect(calls.promptName).toHaveBeenCalledWith(null);
+    expect(calls.reserveRoute).toHaveBeenCalledWith(
+      "prompted-sandbox",
+      expect.objectContaining({ reservationSessionId: session.sessionId }),
+    );
+    expect(result.sandboxName).toBe("prompted-sandbox");
   });
 
   it("does not reserve a route when resume skips inference after sandbox completion (#6562)", async () => {
@@ -574,6 +704,7 @@ describe("handleProviderInferenceState", () => {
       provider: "nvidia-prod",
       model: "nvidia/test",
       endpointUrl: "https://integrate.api.nvidia.com/v1",
+      endpointSource: null,
       credentialEnv: "NVIDIA_INFERENCE_API_KEY",
       preferredInferenceApi: "openai-responses",
       gatewayName: "nemoclaw",
@@ -763,11 +894,7 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
-        reservationSessionId: session.sessionId,
-      },
+      setupOptions(session),
     );
   });
 
@@ -804,11 +931,7 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
-        reservationSessionId: session.sessionId,
-      },
+      setupOptions(session),
     );
   });
 
@@ -846,11 +969,7 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
-        reservationSessionId: session.sessionId,
-      },
+      setupOptions(session),
     );
     expect(calls.log).toHaveBeenCalledWith(
       "  [resume] Refreshing compatible-endpoint inference route for messaging.",
@@ -953,15 +1072,12 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
+      setupOptions(session, {
         skipHostInferenceSmoke: true,
         reuseGatewayCredentialWithoutLocalKey: true,
         preferredInferenceApi: "openai-completions",
-        reservationSessionId: session.sessionId,
         isRecordedProviderRecoveryAuthorized: expect.any(Function),
-      },
+      }),
     );
     expect(recoveryAuthorization?.()).toBe(true);
   });
@@ -1049,11 +1165,7 @@ describe("handleProviderInferenceState", () => {
       "COMPATIBLE_API_KEY",
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
-        allowToolsIncompatible: false,
-        reservationSessionId: session.sessionId,
-      },
+      setupOptions(session),
     );
     expect(calls.log).toHaveBeenCalledWith(
       "  [resume] Refreshing compatible-endpoint inference route for messaging.",
@@ -1061,7 +1173,17 @@ describe("handleProviderInferenceState", () => {
   });
 
   it("reconciles model router on resumed routed inference", async () => {
-    const session = createSession({ provider: "nvidia-router", model: "router/model" });
+    const session = createSession({
+      sandboxName: "router-sandbox",
+      provider: "nvidia-router",
+      model: "router/model",
+      sandboxPromptProgress: {
+        sandboxName: true,
+        webSearch: false,
+        messaging: false,
+        resourceProfile: false,
+      },
+    });
     session.steps.provider_selection.status = "complete";
     const { deps, calls } = createDeps({ isInferenceRouteReady: vi.fn(() => true) });
 
@@ -1076,6 +1198,7 @@ describe("handleProviderInferenceState", () => {
       provider: "nvidia-router",
       model: "router/model",
       endpointUrl: "http://host.openshell.internal:4000/v1",
+      endpointSource: null,
       credentialEnv: null,
       preferredInferenceApi: null,
       gatewayName: "nemoclaw",
@@ -1196,6 +1319,7 @@ describe("handleProviderInferenceState", () => {
       provider: "nvidia-router",
       model: "router/model",
       endpointUrl: "http://host.openshell.internal:4000/v1",
+      endpointSource: null,
       credentialEnv: "NVIDIA_INFERENCE_API_KEY",
       preferredInferenceApi: null,
       gatewayName: "nemoclaw",
@@ -1336,12 +1460,10 @@ describe("handleProviderInferenceState", () => {
       null,
       null,
       [],
-      {
-        gatewayName: "nemoclaw",
+      setupOptions(session, {
         allowToolsIncompatible: true,
         preferredInferenceApi: "openai-responses",
-        reservationSessionId: session.sessionId,
-      },
+      }),
     );
   });
 });

@@ -53,6 +53,7 @@ type OnboardTestInternals = {
     session: T,
     selectedAgentName: string,
   ) => T;
+  arePolicyPresetsApplied: (sandboxName: string, selectedPresets?: string[]) => boolean;
   pullAndResolveBaseImageDigest: () => { digest: string | null; ref: string } | null;
   createSetupInference: (overrides?: Partial<SetupInferenceDeps>) => SetupInference;
   SANDBOX_BASE_IMAGE: string;
@@ -90,6 +91,7 @@ const {
   getResumeConfigConflicts,
   getResumeSandboxConflict,
   clearAgentScopedResumeState,
+  arePolicyPresetsApplied,
   createSetupInference,
   SANDBOX_BASE_IMAGE,
 } = onboardTestInternals;
@@ -98,6 +100,10 @@ const createDirectSetupInferenceHarness =
   createDirectSetupInferenceHarnessFactory(createSetupInference);
 
 describe("onboard helpers", () => {
+  it("does not treat an empty policy preset selection as already applied (#6042)", () => {
+    expect(arePolicyPresetsApplied("unused", [])).toBe(false);
+  });
+
   it("adds host proxy variables to sandbox startup env args", () => {
     const envArgs = ["CHAT_UI_URL=http://127.0.0.1:18789"];
 
@@ -593,6 +599,16 @@ startGateway(null).catch(() => {});
       nimContainer: "nim-hermes",
       routerPid: 123,
       routerCredentialHash: "hash",
+      sandboxName: "hermes-box",
+      webSearchConfig: { fetchEnabled: true, provider: "tavily" },
+      messagingPlan: null,
+      resourceProfile: { cpu: "75%", memory: "75%" },
+      sandboxPromptProgress: {
+        sandboxName: true,
+        webSearch: true,
+        messaging: true,
+        resourceProfile: true,
+      },
       policyPresets: ["nous-web", "brave"],
       lastCompletedStep: "policies",
       lastStepStarted: "policies",
@@ -621,6 +637,16 @@ startGateway(null).catch(() => {});
     expect(cleared.nimContainer).toBeNull();
     expect(cleared.routerPid).toBeNull();
     expect(cleared.routerCredentialHash).toBeNull();
+    expect(cleared.sandboxName).toBe("hermes-box");
+    expect(cleared.webSearchConfig).toBeNull();
+    expect(cleared.messagingPlan).toBeNull();
+    expect(cleared.resourceProfile).toEqual({ cpu: "75%", memory: "75%" });
+    expect(cleared.sandboxPromptProgress).toEqual({
+      sandboxName: false,
+      webSearch: false,
+      messaging: false,
+      resourceProfile: true,
+    });
     expect(cleared.policyPresets).toBeNull();
     expect(cleared.steps.gateway.status).toBe("complete");
     expect(cleared.steps.provider_selection.status).toBe("pending");
@@ -657,7 +683,7 @@ startGateway(null).catch(() => {});
       expect(fs.existsSync(path.join(buildCtx, "nemoclaw", "src"))).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "nemoclaw-blueprint", ".venv"))).toBe(false);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "nemoclaw-start.sh"))).toBe(true);
-      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-tool-catalog.js"))).toBe(
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-tool-catalog.mts"))).toBe(
         true,
       );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "setup.sh"))).toBe(false);
@@ -741,7 +767,7 @@ runner.run = (command, opts = {}) => {
   return { status: 0 };
 };
 runner.runCapture = (command) => {
-  if (_n(command).includes("sandbox get my-assistant")) return "my-assistant";
+  if (_n(command).includes("sandbox get") && _n(command).includes("my-assistant")) return ["my-assistant", "Id: sbx-4f2a91c0d7"].join(String.fromCharCode(10));
   if (_n(command).includes("sandbox list")) return "my-assistant Ready";
   if (_n(command).includes("forward list")) return "my-assistant 127.0.0.1 18789 12345 running";
   return "";

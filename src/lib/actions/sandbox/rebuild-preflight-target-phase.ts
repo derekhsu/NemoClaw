@@ -6,22 +6,30 @@ import { CLI_NAME } from "../../cli/branding";
 import type { SandboxMessagingPlan } from "../../messaging";
 import { isSandboxBaseImageRefreshRequested } from "../../onboard/base-image-resolution-flow";
 import type { DcodeAutoApprovalMode } from "../../onboard/dcode-auto-approval";
-
 import {
   createRebuildProviderReconfigureHandoff,
   mintProviderRecoveryReceipt,
   type ProviderRecoveryReceipt,
   type RegistryInferenceRoute,
 } from "../../onboard/rebuild-route-handoff";
+import { requireRuntimeProviderBundleForSandbox } from "../../onboard/runtime-provider/access";
+import { CURRENT_RUNTIME_PROVIDER_BUNDLES } from "../../onboard/runtime-provider/current";
+import {
+  prepareManagedWorkloadRebuildHandoff,
+  prepareSandboxWorkloadSourceFromRebuildHandoff,
+} from "../../onboard/workload/rebuild";
+import { resolveSandboxWorkloadRuntimeCapabilities } from "../../onboard/workload/runtime";
 import { readSandboxBaseImageResolutionMetadata } from "../../sandbox-base-image";
 import * as registry from "../../state/registry";
 import type { ToolDisclosure } from "../../tool-disclosure";
+import { prepareManagedRebuildProfileHandoff } from "./agents/managed-workload-rebuild-profile";
 import { getSandboxTargetGatewayName } from "./gateway-target";
 import type { RebuildBail, RebuildLog } from "./rebuild-credential-preflight";
 import type { PreparedRebuildImage } from "./rebuild-custom-image-preflight";
 import { isDcodeRebuildAgent } from "./rebuild-dcode-orchestrator";
 import { validatedRebuildRegistryUpdate } from "./rebuild-durable-config";
 import {
+  disposeRebuildAgentBaseImagePreflight,
   ensureRebuildAgentBaseImage,
   ensureRebuildTargetGatewaySelected,
   pinRebuildAgentBaseImageForRecreate,
@@ -31,7 +39,11 @@ import {
 import type { RebuildRecreateOnboardOpts } from "./rebuild-gpu-opt-out";
 import { preflightRebuildMessagingConflicts } from "./rebuild-messaging-conflict-preflight";
 import { stageRebuildMessagingPlanOrBail } from "./rebuild-messaging-phase";
-import { checkRebuildGatewaySchemaPreflight } from "./rebuild-preflight-guards";
+import {
+  checkRebuildGatewaySchemaPreflight,
+  commitRebuildRoutePreflight,
+  type RebuildRoutePreflightReceipt,
+} from "./rebuild-preflight-guards";
 import { disposePreparedBuildContext } from "./rebuild-prepared-image-context";
 import {
   hydrateMessagingConfigForRebuild,
@@ -74,6 +86,34 @@ export interface RebuildPreparedTarget {
   messagingPlan: SandboxMessagingPlan | null;
   baseImagePreflight: RebuildAgentBaseImagePreflight;
   preparedImage: PreparedRebuildImage | null;
+  routePreflightReceipt: RebuildRoutePreflightReceipt;
+}
+
+/** Carry the outer resolver's verified provenance into the inner onboard build. */
+export function stageRebuildBaseImageResolutionHandoff(
+  recreateOptions: Pick<RebuildRecreateOnboardOpts, "preResolvedBaseImageMetadata">,
+  preflight: RebuildAgentBaseImagePreflight,
+): void {
+  const metadata = preflight.resolutionMetadata;
+  if (!metadata) return;
+  const imageId = metadata.imageId.match(/^sha256:([0-9a-f]{64})$/i)?.[1]?.toLowerCase();
+  const localHandoffPattern = imageId
+    ? new RegExp(
+        `^nemoclaw-[a-z0-9][a-z0-9._-]*-sandbox-base-local:(?:image-|rebuild-[1-9][0-9]*-[0-9a-f]{16}-image-)${imageId}$`,
+        "i",
+      )
+    : null;
+  const imageRef = preflight.imageRef ?? "";
+  const remoteDigest = metadata.digest?.match(/^sha256:([0-9a-f]{64})$/i)?.[1]?.toLowerCase();
+  const immutableRemoteHandoff =
+    remoteDigest !== undefined &&
+    metadata.source !== "local" &&
+    metadata.ref === imageRef &&
+    imageRef.toLowerCase() === `${metadata.imageName}@sha256:${remoteDigest}`.toLowerCase();
+  if (!localHandoffPattern?.test(imageRef) && !immutableRemoteHandoff) {
+    throw new Error("Rebuild base-image provenance did not match its immutable handoff");
+  }
+  recreateOptions.preResolvedBaseImageMetadata = metadata;
 }
 
 /** Resolve, validate, and persist the complete non-destructive recreate target. */
@@ -132,6 +172,32 @@ export async function prepareRebuildTargetPreflights(args: {
     bail,
   );
   if (!recreateOptions) return null;
+  let managedWorkloadRebuildCatalog: Awaited<
+    ReturnType<typeof prepareManagedWorkloadRebuildHandoff>
+  > = null;
+  try {
+    const runtimeProvider = requireRuntimeProviderBundleForSandbox(
+      sandboxEntry,
+      CURRENT_RUNTIME_PROVIDER_BUNDLES,
+    );
+    const runtime = resolveSandboxWorkloadRuntimeCapabilities({
+      driverName: runtimeProvider.identity.id,
+    });
+    managedWorkloadRebuildCatalog = await prepareManagedWorkloadRebuildHandoff(sandboxEntry, {
+      runtime,
+      provider: runtimeProvider,
+    });
+    if (managedWorkloadRebuildCatalog) {
+      prepareSandboxWorkloadSourceFromRebuildHandoff(
+        managedWorkloadRebuildCatalog,
+        runtime,
+        runtimeProvider,
+      );
+    }
+  } catch (error) {
+    bail(error instanceof Error ? error.message : String(error));
+    return null;
+  }
   // The durable resolver may recover a legacy row's choice from its matching
   // session. Use that authoritative value for both preflight and inner onboard,
   // never the raw registry fallback used while constructing generic options.
@@ -160,6 +226,19 @@ export async function prepareRebuildTargetPreflights(args: {
     log,
     bail,
   );
+  if (managedWorkloadRebuildCatalog) {
+    try {
+      recreateOptions.managedWorkloadRebuild = prepareManagedRebuildProfileHandoff({
+        catalogHandoff: managedWorkloadRebuildCatalog,
+        targetConfig,
+        recreateOptions,
+        messagingPlan,
+      });
+    } catch (error) {
+      bail(error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  }
   // Detect cross-sandbox credential conflicts immediately after staging the
   // exact rebuild plan, before host/runtime probes and every destructive phase.
   await preflightRebuildMessagingConflicts(messagingPlan, {
@@ -197,78 +276,106 @@ export async function prepareRebuildTargetPreflights(args: {
   if (!checkRebuildGatewaySchemaPreflight(sandboxName, sandboxEntry, bail)) return null;
 
   const rebuildsDcodeSandbox = isDcodeRebuildAgent(rebuildAgent);
-  const baseImagePreflight = rebuildsDcodeSandbox
-    ? { ok: true, imageRef: null, overrideEnvVar: null }
-    : ensureRebuildAgentBaseImage(rebuildAgent, bail, {
-        resolutionHint: baseImageResolutionHint,
-        forceBaseImageRefresh,
-      });
+  const rebuildsManagedWorkload = recreateOptions.managedWorkloadRebuild !== undefined;
+  const baseImagePreflight =
+    rebuildsDcodeSandbox || rebuildsManagedWorkload
+      ? { ok: true, imageRef: null, overrideEnvVar: null }
+      : ensureRebuildAgentBaseImage(rebuildAgent, bail, {
+          resolutionHint: baseImageResolutionHint,
+          forceBaseImageRefresh,
+        });
   if (!baseImagePreflight.ok) return null;
-  const restoreBaseImageOverride = pinRebuildAgentBaseImageForRecreate(baseImagePreflight);
-  let targetRuntimePreflight: Awaited<ReturnType<typeof preflightRebuildTargetRuntime>> = {
-    ok: false,
-  };
+  let retainBaseImagePreflight = false;
   try {
-    targetRuntimePreflight = await preflightRebuildTargetRuntime(
-      targetConfig,
-      sandboxEntry,
-      recreateOptions,
-      log,
-      bail,
-      {
-        allowMissingGatewayProviderWithHostCredential: preparedBackupRecovery,
-        skipImagePreflight: rebuildsDcodeSandbox,
-      },
-    );
-  } finally {
-    restoreBaseImageOverride();
-  }
-  if (!targetRuntimePreflight.ok) return null;
-
-  if (targetRuntimePreflight.requiresGatewayProviderReconfigure) {
-    if (!resumeConfig.credentialEnv) {
-      bail("Prepared provider reconfiguration is missing its credential binding");
-      return null;
-    }
-    recreateOptions.rebuildProviderReconfigure = createRebuildProviderReconfigureHandoff({
-      sandboxName,
-      provider: resumeConfig.provider,
-      model: resumeConfig.model,
-      credentialEnv: resumeConfig.credentialEnv,
-      endpointUrl: resumeConfig.endpointUrl,
-    });
-  }
-
-  const preparedImage = targetRuntimePreflight.preparedImage;
-  let retainPreparedImage = false;
-  try {
-    const validatedRegistryUpdate = validatedRebuildRegistryUpdate(
-      resumeConfig,
-      durableConfig,
-      fromDockerfile,
-      credentialEnv,
-    );
-    if (!registry.updateSandbox(sandboxName, validatedRegistryUpdate)) {
-      bail("Sandbox registry entry disappeared during rebuild preflight");
-      return null;
-    }
-    Object.assign(sandboxEntry, validatedRegistryUpdate);
-    if (preparedImage) {
-      recreateOptions.preparedImageRebuild = {
-        buildContext: preparedImage,
-        gatewayName: recreateOptions.targetGatewayName,
-      };
-    }
-
-    retainPreparedImage = true;
-    return {
-      targetConfig,
-      recreateOptions,
-      messagingPlan,
-      baseImagePreflight,
-      preparedImage,
+    stageRebuildBaseImageResolutionHandoff(recreateOptions, baseImagePreflight);
+    const restoreBaseImageOverride = pinRebuildAgentBaseImageForRecreate(baseImagePreflight);
+    let targetRuntimePreflight: Awaited<ReturnType<typeof preflightRebuildTargetRuntime>> = {
+      ok: false,
     };
+    try {
+      targetRuntimePreflight = await preflightRebuildTargetRuntime(
+        targetConfig,
+        sandboxEntry,
+        recreateOptions,
+        log,
+        bail,
+        {
+          allowMissingGatewayProviderWithHostCredential: preparedBackupRecovery,
+          skipImagePreflight: rebuildsDcodeSandbox || rebuildsManagedWorkload,
+        },
+      );
+    } finally {
+      restoreBaseImageOverride();
+    }
+    if (!targetRuntimePreflight.ok) return null;
+
+    if (targetRuntimePreflight.requiresGatewayProviderReconfigure) {
+      if (!resumeConfig.credentialEnv) {
+        bail("Prepared provider reconfiguration is missing its credential binding");
+        return null;
+      }
+      recreateOptions.rebuildProviderReconfigure = createRebuildProviderReconfigureHandoff({
+        sandboxName,
+        provider: resumeConfig.provider,
+        model: resumeConfig.model,
+        credentialEnv: resumeConfig.credentialEnv,
+        endpointUrl: resumeConfig.endpointUrl,
+      });
+    }
+
+    const preparedImage = targetRuntimePreflight.preparedImage;
+    let retainPreparedImage = false;
+    try {
+      const validatedRegistryUpdate = validatedRebuildRegistryUpdate(
+        resumeConfig,
+        durableConfig,
+        fromDockerfile,
+        credentialEnv,
+      );
+      const routePreflight = commitRebuildRoutePreflight({
+        sandboxName,
+        gatewayName: recreateOptions.targetGatewayName,
+        targetUpdate: validatedRegistryUpdate,
+      });
+      if (!routePreflight.ok) {
+        bail(routePreflight.message);
+        return null;
+      }
+      Object.assign(sandboxEntry, validatedRegistryUpdate);
+      if (routePreflight.receipt.migratedSandboxNames.length > 0) {
+        console.log(
+          `Migrated legacy shared-gateway credential metadata for: ${routePreflight.receipt.migratedSandboxNames.join(", ")}`,
+        );
+      }
+      if (preparedImage) {
+        recreateOptions.preparedImageRebuild = {
+          buildContext: preparedImage,
+          gatewayName: recreateOptions.targetGatewayName,
+        };
+      }
+
+      retainPreparedImage = true;
+      retainBaseImagePreflight = true;
+      return {
+        targetConfig,
+        recreateOptions,
+        messagingPlan,
+        baseImagePreflight,
+        preparedImage,
+        routePreflightReceipt: routePreflight.receipt,
+      };
+    } finally {
+      if (!retainPreparedImage && preparedImage) disposePreparedBuildContext(preparedImage);
+    }
   } finally {
-    if (!retainPreparedImage && preparedImage) disposePreparedBuildContext(preparedImage);
+    if (!retainBaseImagePreflight) {
+      try {
+        if (!disposeRebuildAgentBaseImagePreflight(baseImagePreflight)) {
+          console.warn("  Warning: temporary rebuild base-image handoff could not be removed.");
+        }
+      } catch {
+        // Best effort; preserve the original preflight result or error.
+      }
+    }
   }
 }

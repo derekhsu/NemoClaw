@@ -18,9 +18,10 @@ const { runOclifArgv, runOclifCommandById } = require("./oclif-runner");
 const {
   canonicalUsageList,
   globalCommandTokens,
-  sandboxActionTokens,
+  sandboxActionTokensForDispatch,
 } = require("./command-registry");
 
+import { migrateLegacyPortState } from "../state/legacy-port-migration";
 import {
   type NormalizedArgv,
   type NormalizedGlobalArgv,
@@ -40,6 +41,7 @@ import {
 
 const GLOBAL_COMMANDS = globalCommandTokens();
 const NATIVE_OCLIF_NAMESPACES = new Set(["internal", "sandbox"]);
+const MIGRATION_RECOVERY_SANDBOX_ACTIONS = new Set(["doctor", "recover"]);
 
 type RegistryModule = typeof import("../state/registry");
 type RegistryRecoveryModule = typeof import("../registry-recovery-action");
@@ -110,6 +112,22 @@ function hasPublicSandboxHelpFlag(action: string, args: readonly string[]): bool
   return hasHelpFlag(argsBeforeSeparator(args));
 }
 
+function isMigrationRecoveryInvocation(argv: readonly string[]): boolean {
+  if (argv[0] === "internal") {
+    const isStatefulUninstall =
+      argv[1] === "uninstall" && (argv[2] === "plan" || argv[2] === "run-plan");
+    return !isStatefulUninstall;
+  }
+  if (argv[0] === "sandbox") {
+    return MIGRATION_RECOVERY_SANDBOX_ACTIONS.has(argv[1] ?? "");
+  }
+  return (
+    argv.length > 1 &&
+    !GLOBAL_COMMANDS.has(argv[0] ?? "") &&
+    MIGRATION_RECOVERY_SANDBOX_ACTIONS.has(argv[1] ?? "")
+  );
+}
+
 function findRegisteredSandboxName(tokens: string[]): string | null {
   const registered = new Set(
     registry()
@@ -127,7 +145,7 @@ function printConnectOrderHint(candidate: string | null): void {
 }
 
 function sandboxActionList(): string[] {
-  return sandboxActionTokens();
+  return sandboxActionTokensForDispatch();
 }
 
 type OpenShellCommandHint = {
@@ -149,7 +167,7 @@ function getOpenShellCommandHint(argv: readonly string[]): OpenShellCommandHint 
     return {
       entered: argv.join(" "),
       command: "openshell policy set --policy <policy-file> --wait <sandbox-name>",
-      note: `For NemoClaw presets, use: ${CLI_NAME} <sandbox-name> policy-add <preset>`,
+      note: `For NemoClaw presets, use: ${CLI_NAME} <sandbox-name> policy add <preset>`,
     };
   }
   if (cmd === "gateway" && subcommand === "stop") {
@@ -456,6 +474,31 @@ function printUnknownSandboxOrCommand(cmd: string): never {
 
 /** Normalize public argv and route it to oclif or sandbox-first command handlers. */
 export async function dispatchCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const stateFreeInvocation =
+    argv.length === 0 ||
+    argv.includes("--help") ||
+    argv.includes("-h") ||
+    argv.includes("--version") ||
+    argv[0] === "version" ||
+    argv[0] === "help" ||
+    argv[0] === "completion";
+  if (!stateFreeInvocation && !isMigrationRecoveryInvocation(argv)) {
+    try {
+      const migration = migrateLegacyPortState();
+      if (migration.migratedSandboxNames.length > 0 || migration.migratedSession) {
+        console.error(
+          `  Migrated legacy state for gateway port ${process.env.NEMOCLAW_GATEWAY_PORT}: ` +
+            `${String(migration.migratedSandboxNames.length)} sandbox(s).`,
+        );
+      }
+      for (const warning of migration.warnings) console.error(`  Warning: ${warning}`);
+    } catch (error) {
+      console.error(`  ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   if (argv[0] && NATIVE_OCLIF_NAMESPACES.has(argv[0])) {
     await runNativeOclifArgv(argv);
     return;

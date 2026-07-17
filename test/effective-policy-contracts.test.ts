@@ -187,7 +187,7 @@ describe("effective built-in policy contracts", () => {
     expect(
       loadAgent("openclaw").expectedVersion,
       "Revalidate the bundled OpenClaw weather skill before changing its reviewed egress contract",
-    ).toBe("2026.6.10");
+    ).toBe("2026.7.1");
   });
 
   it("uses raw L4 tunnels only for protocols that cannot be REST-inspected", () => {
@@ -232,10 +232,11 @@ describe("effective built-in policy contracts", () => {
   });
 
   it("keeps mutable web APIs on their reviewed hosts, methods, and paths", () => {
-    const effective = composePresets(["tavily", "outlook", "openclaw-pricing"]);
+    const effective = composePresets(["tavily", "outlook", "openclaw-pricing", "teams"]);
     const tavily = requireNetworkPolicy(effective, "tavily");
     const outlook = requireNetworkPolicy(effective, "outlook_graph");
     const pricing = requireNetworkPolicy(effective, "openclaw-pricing");
+    const teams = requireNetworkPolicy(effective, "teams");
 
     expect(tavily.endpoints).toEqual([
       {
@@ -276,6 +277,12 @@ describe("effective built-in policy contracts", () => {
       "outlook.office365.com",
     ]);
     expect(methods(graph)).toEqual(["GET", "PATCH", "POST"]);
+    for (const host of ["graph.microsoft.com", "login.microsoftonline.com"]) {
+      expect(requireEndpoint(outlook, host).request_body_credential_rewrite).toBe(true);
+      expect(requireEndpoint(outlook, host).request_body_credential_rewrite).toBe(
+        requireEndpoint(teams, host).request_body_credential_rewrite,
+      );
+    }
     for (const host of [
       "login.microsoftonline.com",
       "outlook.office365.com",
@@ -359,6 +366,10 @@ describe("effective built-in policy contracts", () => {
       });
       expect(methods(endpoint ?? {})).toEqual(["GET", "POST"]);
     }
+    const llamaCpp = (localInference.endpoints ?? []).find(
+      (candidate) => candidate.host === "host.openshell.internal" && candidate.port === 8081,
+    );
+    expect(llamaCpp?.rules).toEqual([{ allow: { method: "POST", path: "/v1/chat/completions" } }]);
     expect(binaries(localInference)).toEqual(
       expect.arrayContaining([
         "/usr/local/bin/openclaw",
@@ -500,8 +511,20 @@ describe("effective built-in policy contracts", () => {
         "/usr/local/bin/brew",
       ].sort(),
     );
+    for (const host of ["github.com", "raw.githubusercontent.com"]) {
+      const endpoint = requireEndpoint(brew, host);
+      expect(endpoint).toMatchObject({ port: 443, access: "full" });
+      expect(endpoint).not.toHaveProperty("protocol");
+      expect(endpoint).not.toHaveProperty("tls");
+    }
+    for (const endpoint of (brew.endpoints ?? []).filter(
+      (candidate) => !["github.com", "raw.githubusercontent.com"].includes(candidate.host ?? ""),
+    )) {
+      expect(endpoint).toMatchObject({ access: "full", tls: "skip" });
+    }
     expect((claude.endpoints ?? []).map((endpoint) => endpoint.host).sort()).toEqual([
       "api.anthropic.com",
+      "platform.claude.com",
       "sentry.io",
       "statsig.anthropic.com",
     ]);
@@ -511,5 +534,23 @@ describe("effective built-in policy contracts", () => {
       expect(methods(endpoint)).toEqual(["GET", "POST"]);
     }
     expect(binaries(claude)).not.toContain("/**");
+    // OpenShell enforces on the resolved /proc/<pid>/exe, so the npm-installed
+    // launcher (not just the bin/claude shim) must be allowlisted or egress is
+    // denied for the documented `--prefix /tmp/npm-global` install (#7579).
+    expect(binaries(claude)).toContain(
+      "/tmp/npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe",
+    );
+  });
+
+  it("allows the Claude Code browser login to exchange its authorization code on the OAuth paths only (#7637)", () => {
+    const effective = composePresets(["claude-code"]);
+    const claude = requireNetworkPolicy(effective, "claude_code");
+    const login = requireEndpoint(claude, "platform.claude.com");
+
+    expect(login).toMatchObject({ port: 443, protocol: "rest", enforcement: "enforce" });
+    expect(rules(login)).toEqual([
+      { method: "GET", path: "/v1/oauth/**" },
+      { method: "POST", path: "/v1/oauth/**" },
+    ]);
   });
 });

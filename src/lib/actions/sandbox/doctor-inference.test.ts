@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderHealthStatus } from "../../inference/health";
-import { collectInferenceChecks } from "./doctor-inference";
+import { collectInferenceChecks, collectManagedLlamaCppDoctorChecks } from "./doctor-inference";
 
 const endpoint = "https://inference.local/v1/models";
 
@@ -32,6 +32,44 @@ function upstream(overrides: Partial<ProviderHealthStatus> = {}): ProviderHealth
 }
 
 describe("doctor inference checks", () => {
+  it.each([
+    ["running", "ok", false],
+    ["preparing", "warn", true],
+    ["stopped", "warn", true],
+    ["absent", "fail", true],
+    ["conflict", "fail", true],
+    ["unknown", "fail", true],
+  ] as const)("maps managed llama.cpp %s to an actionable %s diagnostic", (state, status, hinted) => {
+    const checks = collectManagedLlamaCppDoctorChecks("spark-agent", 7443, {
+      inspectManagedLlamaCppStatusImpl: vi.fn(() => ({
+        recipeId: "llama-cpp.nemotron.spark.v1",
+        modelDigest: state === "preparing" ? null : `sha256:${"a".repeat(64)}`,
+        imageReference:
+          state === "preparing"
+            ? null
+            : `ghcr.io/nvidia/nemoclaw/llama-cpp-server@sha256:${"b".repeat(64)}`,
+        endpoint: "https://inference.local/v1" as const,
+        state,
+        detail: `${state} managed runtime`,
+      })),
+    });
+
+    expect(checks).toHaveLength(2);
+    expect(checks[1]).toMatchObject({
+      label: "Managed llama.cpp runtime",
+      status,
+      detail: `${state}: ${state} managed runtime; endpoint https://inference.local/v1`,
+      ...(hinted
+        ? { hint: "re-run `nemoclaw onboard` for 'spark-agent' to recover the exact runtime" }
+        : {}),
+    });
+    expect(checks[1]?.hint).toBe(
+      hinted
+        ? "re-run `nemoclaw onboard` for 'spark-agent' to recover the exact runtime"
+        : undefined,
+    );
+  });
+
   it("makes a broken inference.local route authoritative over a healthy upstream (#6192)", async () => {
     const checks = await collectInferenceChecks(
       "alpha",
@@ -164,6 +202,41 @@ describe("doctor inference checks", () => {
     );
   });
 
+  it("keeps serving-process health explicitly unchecked until a probe contract exists (#7003)", async () => {
+    const checks = await collectInferenceChecks(
+      "alpha",
+      { provider: "nvidia-prod", model: "model" },
+      true,
+      {
+        probeProviderHealthImpl: () => upstream(),
+        probeSandboxInferenceGatewayHealthImpl: async () => gateway(true),
+      },
+    );
+
+    expect(checks).toContainEqual(
+      expect.objectContaining({
+        label: "Serving process",
+        status: "info",
+        detail: "not checked — serving-process probing is not implemented",
+      }),
+    );
+  });
+
+  it("omits serving-process health for terminal agents without a gateway process (#7003)", async () => {
+    const checks = await collectInferenceChecks(
+      "alpha",
+      { provider: "nvidia-prod", model: "model" },
+      true,
+      {
+        probeProviderHealthImpl: () => upstream(),
+        probeSandboxInferenceGatewayHealthImpl: async () => gateway(true),
+        includeServingProcessCheck: false,
+      },
+    );
+
+    expect(checks).not.toContainEqual(expect.objectContaining({ label: "Serving process" }));
+  });
+
   it("does not mutate direct provider health while adding route evidence", async () => {
     const providerHealth = upstream();
 
@@ -174,5 +247,21 @@ describe("doctor inference checks", () => {
 
     expect(providerHealth).not.toHaveProperty("subprobes");
     expect(providerHealth).not.toHaveProperty("probeLabel");
+  });
+
+  it("passes the live route model to direct provider diagnostics", async () => {
+    const probe = vi.fn(() => upstream());
+
+    await collectInferenceChecks(
+      "alpha",
+      { provider: "ollama-local", model: "nemotron-mini:latest" },
+      true,
+      {
+        probeProviderHealthImpl: probe,
+        probeSandboxInferenceGatewayHealthImpl: async () => gateway(true),
+      },
+    );
+
+    expect(probe).toHaveBeenCalledWith("ollama-local", { model: "nemotron-mini:latest" });
   });
 });

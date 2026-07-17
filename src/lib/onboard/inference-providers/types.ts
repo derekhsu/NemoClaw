@@ -15,6 +15,7 @@
 // so they accept whatever the orchestrator hands in without needing to
 // duplicate every helper's exact signature.
 
+import type { TrustedPrivateEndpointCapability } from "../../inference/endpoint-ssrf-preflight";
 import type { HermesAuthMethod } from "../hermes-auth";
 import type { OnboardInferenceCapabilityCache } from "../inference-capability-cache";
 
@@ -67,6 +68,7 @@ export type VerifyOnboardInferenceSmoke = (input: {
   credentialEnv?: string | null;
   forceOpenAiLike?: boolean;
   pinnedAddresses?: readonly string[];
+  trustedPrivateCapability?: TrustedPrivateEndpointCapability;
   capabilityCache?: OnboardInferenceCapabilityCache;
 }) => void | Promise<void>;
 
@@ -224,6 +226,7 @@ export type VllmDeps = CommonDeps & {
   applyLocalInferenceRoute: (provider: string, model: string) => Promise<boolean>;
   run: RunFn;
   VLLM_LOCAL_CREDENTIAL_ENV: string;
+  getManagedVllmProviderBinding: () => { baseUrl: string; apiKey: string } | null;
 };
 
 export type OllamaDeps = CommonDeps & {
@@ -277,6 +280,7 @@ export const REMOTE_PROVIDER_NAMES = [
   "compatible-anthropic-endpoint",
   "gemini-api",
   "compatible-endpoint",
+  "llama-cpp-local",
 ] as const;
 
 export type RemoteProviderName = (typeof REMOTE_PROVIDER_NAMES)[number];

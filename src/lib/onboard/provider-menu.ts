@@ -34,6 +34,7 @@ export interface BuildInferenceProviderMenuInput {
   ollamaInstallEntry: ProviderMenuChoice | null;
   vllmEntries: readonly ProviderMenuChoice[];
   routedEnabled: boolean;
+  managedLlamaCppAvailable?: boolean;
 }
 
 export interface InferenceProviderMenu {
@@ -104,7 +105,7 @@ export function buildInferenceProviderMenu(
     });
   }
 
-  if (input.isWsl && !input.hasWindowsOllama) {
+  if (input.isWsl && !input.hasWindowsOllama && !input.isWindowsHostOllama) {
     options.push({
       key: "install-windows-ollama",
       label: input.windowsHostInstallLabel,
@@ -117,8 +118,20 @@ export function buildInferenceProviderMenu(
     options.push({ key: "routed", label: "Model Router (experimental)" });
   }
 
+  if (input.managedLlamaCppAvailable) {
+    options.push({
+      key: "install-llama-cpp",
+      label: "NVIDIA Nemotron with managed llama.cpp (DGX Spark)",
+    });
+  }
+
   for (const providerKey of input.agentProviderOptions) {
     pushUniqueRemoteProviderOption(options, input.remoteProviderConfig, providerKey);
+  }
+
+  // Existing-server attachment stays visible without probing or claiming lifecycle ownership.
+  if (!options.some((option) => option.key === "llama-cpp")) {
+    options.push({ key: "llama-cpp", label: "Local llama.cpp" });
   }
 
   return {

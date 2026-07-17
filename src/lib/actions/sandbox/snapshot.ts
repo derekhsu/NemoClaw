@@ -60,7 +60,15 @@ import {
   DCODE_PROBE_STATE,
   parseDcodeProbeState,
 } from "./dcode-activity-probe";
-import { cleanupShieldsDestroyArtifacts, removeSandboxRegistryEntry } from "./destroy";
+import {
+  cleanupShieldsDestroyArtifacts,
+  removeSandboxRegistryEntryOutcome,
+  requireSandboxDestructiveCleanupAuthority,
+} from "./destroy";
+import {
+  establishRestoredSandboxGatewayPairing,
+  waitForRestoredSandboxGatewaySupervisor,
+} from "./restore-gateway-pairing";
 import {
   buildSandboxExecMarkedCommand,
   createSandboxExecMarker,
@@ -71,6 +79,18 @@ import {
   selectSandboxGatewayIfRegistered,
   usesGatewayMetadataProbe,
 } from "./sandbox-gateway-routing";
+import {
+  backupSandboxStateWithManagedAuthority,
+  confirmSandboxRuntimeRestore,
+  type PreparedSandboxRuntimeRestore,
+  prepareManagedSnapshotProfileRestore,
+  prepareSandboxRuntimeRestore,
+  readManagedSnapshotProfileAuthority,
+  rejectManagedSnapshotCloneUntilRebind,
+  requireCurrentSnapshotRuntimeProvider,
+} from "./snapshot/dependencies";
+import { formatSnapshotBaselineExclusionSummary } from "./snapshot-baseline-exclusion-summary";
+import { printHermesGatewayRestoreHint } from "./snapshot-hermes-gateway-hint";
 
 const useColor = !process.env.NO_COLOR && !!process.stdout.isTTY;
 const trueColor =
@@ -116,6 +136,36 @@ function snapshotExit(exitCode = 1): never {
 function formatSnapshotVersion(b: unknown) {
   const snapshotVersion = (b as { snapshotVersion?: number }).snapshotVersion ?? 0;
   return `v${snapshotVersion}`;
+}
+
+export function requireSnapshotDestinationRegistryRemoval(
+  name: string,
+  removalOutcome: ReturnType<typeof removeSandboxRegistryEntryOutcome>,
+): void {
+  if (removalOutcome.status !== "blocked") return;
+  // SOURCE_OF_TRUTH
+  // Invalid state: a bypassing registry writer changed cleanup authority after
+  // the locked pre-delete proof, leaving the destination absent while its
+  // ownership row must be retained.
+  // Source boundary: deleteSandboxForRestore proves provider/workload cleanup
+  // authority under the destination lifecycle lock, then registry removal
+  // rechecks that authority after the live delete.
+  // Source-fix constraint: the current runtime API has no authenticated atomic
+  // replace primitive and raw writers do not participate in NemoClaw's lock.
+  // Regression proof: snapshot-restore-lifecycle.test.ts covers pre-delete
+  // refusal; snapshot restore authority tests cover this retained-row stop.
+  // Removal condition: an exact provider-native replace transaction supplies
+  // durable delete, rollback, and cleanup receipts.
+  console.error(
+    `  Destination '${name}' is deleted, but local runtime ownership cleanup is incomplete.`,
+  );
+  console.error(
+    "  The registry entry was preserved because provider/workload cleanup authority could not be proven.",
+  );
+  console.error(
+    `  Run '${CLI_NAME} ${name} doctor --json'; restore trusted ownership metadata or resolve the runtime conflict, then retry. Do not rewrite a receipt to match a mutable name.`,
+  );
+  snapshotExit(1);
 }
 
 function renderSnapshotTable(
@@ -272,6 +322,35 @@ function resolveCloneDashboardEnvArgs(
   return envArgs;
 }
 
+async function prepareSnapshotClonePolicy(srcEntry: SandboxEntry): Promise<{
+  policyPath: string;
+  cleanup?: () => boolean;
+}> {
+  if (srcEntry.baselineExclusionTransition) {
+    const transition = srcEntry.baselineExclusionTransition;
+    throw new Error(
+      `Cannot clone baseline policy while '${transition.operation} ${transition.exclusion.key}' needs repair. Re-run that policy command on '${srcEntry.name}' first.`,
+    );
+  }
+  const agentName = srcEntry.agent || "openclaw";
+  const baseline = policies.resolveAgentBaselinePolicy(agentName);
+  if (!baseline) {
+    throw new Error(`Cannot resolve the '${agentName}' baseline policy for snapshot restore.`);
+  }
+  const baselineExclusions = srcEntry.baselineExclusions ?? [];
+  if (baselineExclusions.length === 0) return { policyPath: baseline.policyPath };
+
+  const disabledChannels = new Set(registry.getDisabledMessagingChannelsFromEntry(srcEntry));
+  const activeMessagingChannels = registry
+    .getConfiguredMessagingChannelsFromEntry(srcEntry)
+    .filter((channel) => !disabledChannels.has(channel));
+  const { prepareInitialSandboxCreatePolicy } = await import("../../onboard/initial-policy");
+  return prepareInitialSandboxCreatePolicy(baseline.policyPath, activeMessagingChannels, {
+    agentName,
+    baselineExclusions,
+  });
+}
+
 // Used by `snapshot restore --to <dst>` when dst does not exist yet: reuses
 // the source's baked image so the user does not have to re-run onboarding.
 // Returns true on success; on failure, logs and throws SnapshotCommandError.
@@ -280,10 +359,10 @@ async function autoCreateSandboxFromSource(
   dstName: string,
   srcEntry: SandboxEntry | { name: string },
   fromImage: string,
+  createPolicyPath: string,
   dstDashboardPort: number | null,
   dashboardEnvArgs: readonly string[],
 ): Promise<void> {
-  const basePolicy = path.join(ROOT, "nemoclaw-blueprint", "policies", "openclaw-sandbox.yaml");
   const openshellBin = getOpenshellBinary();
   const sourceObservabilityEnabled =
     (srcEntry as { observabilityEnabled?: boolean }).observabilityEnabled === true;
@@ -305,7 +384,7 @@ async function autoCreateSandboxFromSource(
     "--from",
     fromImage,
     "--policy",
-    basePolicy,
+    createPolicyPath,
     "--auto-providers",
     "--",
     ...startupCommand,
@@ -376,6 +455,15 @@ async function autoCreateSandboxFromSource(
         : (srcEntry as SandboxEntry).hermesDashboardPort,
   });
 
+  const sourceAgent = (srcEntry as SandboxEntry).agent || "openclaw";
+  if (sourceAgent === "openclaw" && !waitForRestoredSandboxGatewaySupervisor(dstName)) {
+    console.error(
+      `  Sandbox '${dstName}' reached OpenShell Ready, but its managed OpenClaw supervisor did not become ready.`,
+    );
+    console.error("  Snapshot state was not restored into the incomplete clone.");
+    snapshotExit(1);
+  }
+
   console.log(`  ${G}\u2713${R} Sandbox '${dstName}' created`);
 }
 
@@ -393,14 +481,32 @@ async function autoCreateSandboxFromSource(
 // deliberately skipped here because they can also affect the source sandbox
 // we are about to clone from.
 function deleteSandboxForRestore(name: string): void {
-  const sbMeta = registry.getSandbox(name);
-  if (sbMeta?.nimContainer) {
-    nim.stopNimContainerByName(sbMeta.nimContainer);
-  } else {
-    nim.stopNimContainer(name, { silent: true });
-  }
-  console.log(`  Deleting existing destination '${name}' before restore...`);
   withTimerBoundShieldsMutationLock(name, "delete snapshot restore destination", () => {
+    const sbMeta = registry.getSandbox(name);
+    if (!sbMeta) {
+      console.error(
+        `  Cannot delete destination '${name}': its durable runtime ownership entry disappeared.`,
+      );
+      snapshotExit(1);
+    }
+    try {
+      requireSandboxDestructiveCleanupAuthority(name, sbMeta);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(
+        `  Cannot delete destination '${name}' because runtime cleanup authority is unproven: ${detail}`,
+      );
+      console.error(
+        `  Run '${CLI_NAME} ${name} doctor --json' and resolve the recorded ownership conflict before retrying.`,
+      );
+      snapshotExit(1);
+    }
+    if (sbMeta.nimContainer) {
+      nim.stopNimContainerByName(sbMeta.nimContainer);
+    } else {
+      nim.stopNimContainer(name, { silent: true });
+    }
+    console.log(`  Deleting existing destination '${name}' before restore...`);
     if (readTimerMarker(name)) {
       shields.shieldsUp(name, {
         throwOnError: true,
@@ -441,7 +547,7 @@ function deleteSandboxForRestore(name: string): void {
       });
     }
     cleanupShieldsDestroyArtifacts(name);
-    removeSandboxRegistryEntry(name);
+    requireSnapshotDestinationRegistryRemoval(name, removeSandboxRegistryEntryOutcome(name));
   });
   console.log(`  ${G}\u2713${R} '${name}' deleted`);
 }
@@ -553,6 +659,20 @@ function isSnapshotCreationAllowedByDcodeActivity(sandboxName: string): boolean 
   return false;
 }
 
+function removeIncompleteSnapshot(sandboxName: string, backupPath: string): void {
+  const removal = sandboxState.removeIncompleteSnapshot(backupPath);
+  if (removal.removed) {
+    console.error("  Removed the incomplete snapshot.");
+    return;
+  }
+  console.error(
+    `  The incomplete snapshot at '${backupPath}' could not be removed: ${removal.error}`,
+  );
+  console.error(
+    `  It is listed by \`${CLI_NAME} ${sandboxName} snapshot list\`. Remove it before the next restore.`,
+  );
+}
+
 function runSnapshotCreate(
   sandboxName: string,
   request: Extract<SnapshotRequest, { kind: "create" }>,
@@ -566,9 +686,9 @@ function runSnapshotCreate(
     snapshotExit(1);
   }
   return withTimerBoundShieldsMutationLock(sandboxName, "create sandbox snapshot", () => {
-    // Keep the shields check and backup in one timer-bound interval. Normal
-    // auto-restore waits; at the absolute deadline it may preempt this process
-    // and reclaim the token rather than changing policy/config mid-copy.
+    // Keep the shields check and backup in one timer-bound interval. At the
+    // absolute deadline, auto-restore closes the outer lifecycle gate and waits
+    // for this exact owner to finish before changing policy or config.
     if (!isSnapshotCreationAllowedByShields(sandboxName)) {
       console.error("  Cannot create snapshot while shields are up.");
       console.error(`  Run \`${CLI_NAME} ${sandboxName} shields down\` first, then retry.`);
@@ -582,9 +702,13 @@ function runSnapshotCreate(
     }
     const label = request.name ? ` (--name ${request.name})` : "";
     console.log(`  Creating snapshot of '${sandboxName}'${label}...`);
-    const result = sandboxState.backupSandboxState(sandboxName, {
-      name: request.name ?? null,
-    });
+    const result = backupSandboxStateWithManagedAuthority(
+      sandboxName,
+      {
+        name: request.name ?? null,
+      },
+      { getSandbox: registry.getSandbox },
+    );
     if (result.success) {
       const manifest = result.manifest!;
       const entry = sandboxState.findBackup(sandboxName, manifest.timestamp).match ?? manifest;
@@ -593,6 +717,11 @@ function runSnapshotCreate(
       const itemSummary = `${result.backedUpDirs.length} directories, ${result.backedUpFiles.length} files`;
       console.log(`  ${G}✓${R} Snapshot ${v}${nameSuffix} created (${itemSummary})`);
       console.log(`    ${manifest.backupPath}`);
+      for (const line of formatSnapshotBaselineExclusionSummary(
+        registry.getBaselineExclusions(sandboxName),
+      )) {
+        console.log(`    ${line}`);
+      }
       return;
     }
     if (result.error) {
@@ -606,6 +735,10 @@ function runSnapshotCreate(
       if (result.failedFiles.length > 0) {
         console.error(`  Failed files: ${result.failedFiles.join(", ")}`);
       }
+    }
+    const incompletePath = result.manifest?.backupPath;
+    if (incompletePath) {
+      removeIncompleteSnapshot(sandboxName, incompletePath);
     }
     snapshotExit(1);
   });
@@ -763,7 +896,7 @@ function reconcileSnapshotPolicyPresets(
         targetSandbox,
         builtinObservabilityContent,
         policies,
-        { knownBefore: builtinObservabilityState },
+        { knownBefore: builtinObservabilityState, removeOptions: { nonFatal: true } },
       );
       builtinObservabilityState = removal.after;
       if (removal.verifiedAbsent) {
@@ -778,7 +911,12 @@ function reconcileSnapshotPolicyPresets(
       continue;
     }
     try {
-      if (!policies.removePreset(targetSandbox, preset)) failed.push(`${preset} (remove failed)`);
+      // Post-restore policy reconciliation is best-effort by design: a failed
+      // gateway policy mutation must be reported as a warning, not terminate
+      // the restore before gateway pairing. Pass nonFatal so setPolicyFile
+      // returns false on failure instead of exiting the process (#8210).
+      if (!policies.removePreset(targetSandbox, preset, { nonFatal: true }))
+        failed.push(`${preset} (remove failed)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failed.push(`${preset} (remove: ${message})`);
@@ -786,7 +924,8 @@ function reconcileSnapshotPolicyPresets(
   }
   for (const preset of toAdd) {
     try {
-      if (!policies.applyPreset(targetSandbox, preset)) failed.push(`${preset} (apply failed)`);
+      if (!policies.applyPreset(targetSandbox, preset, { nonFatal: true }))
+        failed.push(`${preset} (apply failed)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failed.push(`${preset} (apply: ${message})`);
@@ -809,7 +948,12 @@ function reconcileSnapshotCustomPolicies(
   const toRemove = currentCustom.filter((c) => !snapshotByName.has(c.name));
   const toAdd = snapshotCustom.filter((sp) => {
     const current = currentByName.get(sp.name);
-    return !current || current.content !== sp.content || current.sourcePath !== sp.sourcePath;
+    return (
+      !current ||
+      current.content !== sp.content ||
+      current.sourcePath !== sp.sourcePath ||
+      current.trustedPrivatePins?.contentDigest !== sp.trustedPrivatePins?.contentDigest
+    );
   });
   if (toRemove.length === 0 && toAdd.length === 0) return;
 
@@ -821,7 +965,8 @@ function reconcileSnapshotCustomPolicies(
   const failed: string[] = [];
   for (const entry of toRemove) {
     try {
-      if (!policies.removePreset(targetSandbox, entry.name)) {
+      // Best-effort like the built-in preset reconciliation above (#8210).
+      if (!policies.removePreset(targetSandbox, entry.name, { nonFatal: true })) {
         failed.push(`${entry.name} (remove failed)`);
       }
     } catch (err) {
@@ -831,9 +976,21 @@ function reconcileSnapshotCustomPolicies(
   }
   for (const entry of toAdd) {
     try {
+      const currentAuthority = currentByName.get(entry.name);
+      const trustedPrivatePinCapability =
+        currentAuthority?.content === entry.content && currentAuthority.trustedPrivatePins
+          ? policies.replayTrustedPrivatePolicyPinCapability(
+              currentAuthority.content,
+              currentAuthority.trustedPrivatePins,
+            )
+          : undefined;
       if (
         !policies.applyPresetContent(targetSandbox, entry.name, entry.content, {
-          custom: { sourcePath: entry.sourcePath },
+          custom: {
+            sourcePath: entry.sourcePath,
+            ...(trustedPrivatePinCapability ? { trustedPrivatePinCapability } : {}),
+          },
+          nonFatal: true,
         })
       ) {
         failed.push(`${entry.name} (apply failed)`);
@@ -848,6 +1005,18 @@ function reconcileSnapshotCustomPolicies(
   }
 }
 
+function readCurrentManagedSnapshotProfileAuthority(entry: SandboxEntry | null) {
+  return entry
+    ? readManagedSnapshotProfileAuthority({
+        sandboxName: entry.name,
+        agentType: entry.agent ?? "",
+        imageTag: entry.imageTag,
+        fromDockerfile: entry.fromDockerfile,
+        workload: entry.workload,
+      })
+    : null;
+}
+
 async function runSnapshotRestore(
   sandboxName: string,
   request: Extract<SnapshotRequest, { kind: "restore" }>,
@@ -859,9 +1028,13 @@ async function runSnapshotRestore(
   const target = request.to ?? sandboxName;
   const targetSandbox =
     target === sandboxName ? sandboxName : validateName(target, "target sandbox name");
-  return withSandboxMutationLock(targetSandbox, () =>
-    runSnapshotRestoreUnlocked(sandboxName, request, targetSandbox),
-  );
+  const lockNames = targetSandbox === sandboxName ? [sandboxName] : [sandboxName, targetSandbox];
+  const orderedNames = [...new Set(lockNames)].sort();
+  const acquire = (index: number): Promise<void> =>
+    index === orderedNames.length
+      ? runSnapshotRestoreUnlocked(sandboxName, request, targetSandbox)
+      : withSandboxMutationLock(orderedNames[index], () => acquire(index + 1));
+  return acquire(0);
 }
 
 async function runSnapshotRestoreUnlocked(
@@ -874,8 +1047,19 @@ async function runSnapshotRestoreUnlocked(
     "  Failed to query live sandbox state from OpenShell.",
   );
   const isCrossSandboxRestore = targetSandbox !== sandboxName;
+  let crossSandboxRestoreAgent: string | null = null;
   const targetEntry = isCrossSandboxRestore ? registry.getSandbox(targetSandbox) : null;
   const targetExists = sourceLiveNames.has(targetSandbox) || Boolean(targetEntry);
+  if (targetEntry?.baselineExclusionTransition) {
+    const transition = targetEntry.baselineExclusionTransition;
+    console.error(
+      `  Cannot replace destination '${targetSandbox}' while baseline policy '${transition.operation} ${transition.exclusion.key}' needs repair.`,
+    );
+    console.error(
+      `  Re-run that policy command on '${targetSandbox}' before restoring into it with --force.`,
+    );
+    snapshotExit(1);
+  }
 
   // #3756 P1 preflight: resolve the snapshot selector AND the source pod
   // image before any destructive action. A bad selector, missing snapshot,
@@ -910,12 +1094,92 @@ async function runSnapshotRestoreUnlocked(
     console.log(`  Using latest snapshot ${v}${nameSuffix} (${latest.timestamp})`);
   }
 
+  const snapshotProfileSource = {
+    sandboxName,
+    agentType: resolvedSnapshot.agentType,
+    workload: resolvedSnapshot.workload,
+  };
+  const currentSourceEntry = registry.getSandbox(sandboxName);
+  let hasManagedProfileAuthority = false;
+  let snapshotRestoreAuthority: sandboxState.SnapshotRestoreAuthority | null = null;
+  try {
+    const snapshotAuthority = readManagedSnapshotProfileAuthority(snapshotProfileSource);
+    hasManagedProfileAuthority = snapshotAuthority !== null;
+    if (hasManagedProfileAuthority && !resolvedSnapshot.runtimeSnapshot) {
+      throw new Error("managed snapshot is missing provider runtime authority");
+    }
+    const currentSourceAuthority = readCurrentManagedSnapshotProfileAuthority(currentSourceEntry);
+    const currentTargetAuthority =
+      targetEntry && targetEntry !== currentSourceEntry
+        ? readCurrentManagedSnapshotProfileAuthority(targetEntry)
+        : currentSourceAuthority;
+    if (!hasManagedProfileAuthority && (currentSourceAuthority || currentTargetAuthority)) {
+      throw new Error(
+        "legacy snapshot lacks managed workload and provider runtime authority required by the current source or destination",
+      );
+    }
+    if (isCrossSandboxRestore && hasManagedProfileAuthority) {
+      rejectManagedSnapshotCloneUntilRebind(snapshotProfileSource, targetSandbox);
+    }
+    if (hasManagedProfileAuthority) {
+      snapshotRestoreAuthority = sandboxState.captureSnapshotRestoreAuthority(
+        backupPath,
+        resolvedSnapshot,
+      );
+      if (!snapshotRestoreAuthority) {
+        throw new Error("selected snapshot content changed during restore preflight");
+      }
+    }
+  } catch (error) {
+    console.error(
+      `  Cannot restore managed snapshot authority: ${
+        error instanceof Error ? error.message : String(error)
+      }.`,
+    );
+    console.error(`  Destination '${targetSandbox}' was not changed.`);
+    snapshotExit(1);
+  }
+
+  let preparedRuntimeRestore: PreparedSandboxRuntimeRestore | null = null;
   if (!isCrossSandboxRestore) {
     // Self-restore: target is `sandboxName`. Cannot auto-create; the
     // source pod is the target, so it must already be live.
     if (!targetExists) {
       console.error(`  Sandbox '${targetSandbox}' is not running. Cannot restore snapshot.`);
       snapshotExit(1);
+    }
+    if (hasManagedProfileAuthority) {
+      const currentTarget = registry.getSandbox(targetSandbox);
+      if (!currentTarget || !resolvedSnapshot.runtimeSnapshot) {
+        console.error(
+          `  Cannot restore managed snapshot '${sandboxName}': target or provider runtime authority is missing.`,
+        );
+        snapshotExit(1);
+      }
+      try {
+        const provider = requireCurrentSnapshotRuntimeProvider(currentTarget);
+        const profileRestore = prepareManagedSnapshotProfileRestore(
+          snapshotProfileSource,
+          currentTarget,
+          provider,
+        );
+        if (!profileRestore) {
+          throw new Error("managed profile restore authority is missing");
+        }
+        preparedRuntimeRestore = prepareSandboxRuntimeRestore(
+          provider,
+          currentTarget,
+          resolvedSnapshot.runtimeSnapshot,
+          profileRestore.providerRestoreAuthority,
+        );
+      } catch (error) {
+        console.error(
+          `  Cannot preflight managed snapshot restore: ${
+            error instanceof Error ? error.message : String(error)
+          }.`,
+        );
+        snapshotExit(1);
+      }
     }
   } else {
     // #3756: cross-sandbox restore into a destination that already exists
@@ -934,30 +1198,26 @@ async function runSnapshotRestoreUnlocked(
       );
       snapshotExit(1);
     }
-    // Cross-sandbox restore — whether dst exists (with --force) or not,
-    // we must be able to clone the source's running pod image. Resolve it
-    // upfront so a missing source / unresolvable image cannot delete the
-    // destination first (#3756 P1).
-    if (!sourceLiveNames.has(sandboxName)) {
-      if (targetExists) {
-        console.error(
-          `  Cannot recreate '${targetSandbox}' from snapshot: source '${sandboxName}' not found.`,
-        );
-      } else {
-        console.error(
-          `  Cannot auto-create '${targetSandbox}': source '${sandboxName}' not found.`,
-        );
-        console.error(`  Create '${targetSandbox}' manually with '${CLI_NAME} onboard'.`);
-      }
-      snapshotExit(1);
-    }
+    // Cross-sandbox restore — whether dst exists (with --force) or not, we
+    // must be able to clone the source's image. Resolve it upfront so a
+    // missing source / unresolvable image cannot delete the destination first
+    // (#3756 P1). A source that is no longer running stays restorable while
+    // its registry entry still records the image and inference route, because
+    // that is the case a replacement sandbox exists to recover from.
     const srcEntry = registry.getSandbox(sandboxName) || { name: sandboxName };
     const fromImage = resolveSrcPodImage(sandboxName, srcEntry);
     if (!fromImage) {
-      console.error(
-        `  Cannot resolve image for source sandbox '${sandboxName}' — aborting before ` +
-          (targetExists ? `deleting '${targetSandbox}'.` : `creating '${targetSandbox}'.`),
-      );
+      if (!sourceLiveNames.has(sandboxName)) {
+        console.error(
+          `  Cannot ${targetExists ? "recreate" : "auto-create"} '${targetSandbox}': source '${sandboxName}' is not running and its registry entry records no image.`,
+        );
+        console.error(`  Create '${targetSandbox}' manually with '${CLI_NAME} onboard'.`);
+      } else {
+        console.error(
+          `  Cannot resolve image for source sandbox '${sandboxName}' — aborting before ` +
+            (targetExists ? `deleting '${targetSandbox}'.` : `creating '${targetSandbox}'.`),
+        );
+      }
       snapshotExit(1);
     }
     if (targetExists) {
@@ -992,6 +1252,7 @@ async function runSnapshotRestoreUnlocked(
         );
         snapshotExit(1);
       }
+      crossSandboxRestoreAgent = lockedSourceEntry.agent || "openclaw";
       if (getSandboxEntryInference(lockedSourceEntry).kind !== "configured") {
         console.error(
           `  Cannot auto-create '${targetSandbox}': source '${sandboxName}' has no complete durable inference route.`,
@@ -1028,46 +1289,120 @@ async function runSnapshotRestoreUnlocked(
       // validation the image and gateway-route checks above already do (#3756).
       const dstDashboardPort = allocateCloneDashboardPort(targetSandbox, lockedSourceEntry);
       const dashboardEnvArgs = resolveCloneDashboardEnvArgs(lockedSourceEntry, dstDashboardPort);
-      if (targetExists) {
-        if (targetEntry) {
-          verifyRestoreDestinationOnOwnGateway(targetSandbox);
+      const clonePolicy = await prepareSnapshotClonePolicy(lockedSourceEntry);
+      try {
+        if (targetExists) {
+          if (targetEntry) {
+            verifyRestoreDestinationOnOwnGateway(targetSandbox);
+          }
+          deleteSandboxForRestore(targetSandbox);
+          requireLiveSandboxesOnSandboxGateway(
+            sandboxName,
+            "  Failed to re-select source sandbox gateway after deleting destination.",
+          );
         }
-        deleteSandboxForRestore(targetSandbox);
-        requireLiveSandboxesOnSandboxGateway(
+        await autoCreateSandboxFromSource(
           sandboxName,
-          "  Failed to re-select source sandbox gateway after deleting destination.",
+          targetSandbox,
+          lockedSourceEntry,
+          lockedFromImage,
+          clonePolicy.policyPath,
+          dstDashboardPort,
+          dashboardEnvArgs,
         );
+      } finally {
+        clonePolicy.cleanup?.();
       }
-      await autoCreateSandboxFromSource(
-        sandboxName,
-        targetSandbox,
-        lockedSourceEntry,
-        lockedFromImage,
-        dstDashboardPort,
-        dashboardEnvArgs,
-      );
     };
-    // Lock order matches onboard: sandbox (outer caller), host dashboard,
-    // gateway route. The host-wide lease stays held from port selection until
-    // the clone is durably registered, including across different gateways.
+    // Lock order is both sandbox names (sorted by the outer caller), host
+    // dashboard, then gateway route. The host-wide lease stays held from port
+    // selection until the clone is durably registered, including across
+    // different gateways.
     await withDashboardPortReservationLock(() =>
       withGatewayRouteMutationLock(sourceGatewayName, createAndRegisterClone),
     );
   }
   withTimerBoundShieldsMutationLock(targetSandbox, "restore sandbox snapshot", () => {
     // Serialize filesystem restore, mutable-permission repair, and policy
-    // reconciliation under the active timer generation. Normal auto-restore
-    // waits; the absolute deadline may preempt this process and reclaim the
-    // token, preventing policy/config mutation after lockdown resumes.
+    // reconciliation under the active timer generation. At the absolute
+    // deadline, auto-restore keeps the outer lifecycle gate closed and waits
+    // for this exact owner to finish before restoring lockdown.
+    const validateManagedRestoreBeforeMutation = preparedRuntimeRestore
+      ? () => {
+          const currentTarget = registry.getSandbox(targetSandbox);
+          if (!currentTarget) {
+            throw new Error(`target '${targetSandbox}' is no longer registered`);
+          }
+          const provider = requireCurrentSnapshotRuntimeProvider(currentTarget);
+          const profileRestore = prepareManagedSnapshotProfileRestore(
+            snapshotProfileSource,
+            currentTarget,
+            provider,
+          );
+          if (!profileRestore) {
+            throw new Error("managed profile restore authority is missing");
+          }
+          const prepared = preparedRuntimeRestore;
+          if (!prepared) throw new Error("managed runtime restore authority is missing");
+          // The state layer invokes this after local tar staging and
+          // immediately before its first remote filesystem mutation.
+          preparedRuntimeRestore = prepareSandboxRuntimeRestore(
+            provider,
+            currentTarget,
+            prepared.source,
+            profileRestore.providerRestoreAuthority,
+          );
+        }
+      : null;
     if (targetSandbox !== sandboxName) {
       console.log(`  Restoring snapshot from '${sandboxName}' into '${targetSandbox}'...`);
     } else {
       console.log(`  Restoring snapshot into '${sandboxName}'...`);
     }
-    const result = sandboxState.restoreSandboxState(targetSandbox, backupPath);
+    if (Boolean(snapshotRestoreAuthority) !== Boolean(validateManagedRestoreBeforeMutation)) {
+      console.error(
+        `  Cannot restore managed snapshot '${sandboxName}': content authority and the runtime mutation fence must both be present.`,
+      );
+      console.error(`  Destination '${targetSandbox}' was not changed.`);
+      snapshotExit(1);
+    }
+    const result =
+      snapshotRestoreAuthority && validateManagedRestoreBeforeMutation
+        ? sandboxState.restoreSandboxState(targetSandbox, backupPath, {
+            authority: snapshotRestoreAuthority,
+            validateBeforeMutation: validateManagedRestoreBeforeMutation,
+          })
+        : sandboxState.restoreSandboxState(targetSandbox, backupPath);
     if (result.success) {
+      if (preparedRuntimeRestore) {
+        const currentTarget = registry.getSandbox(targetSandbox);
+        if (!currentTarget) {
+          console.error(
+            `  Managed snapshot state was restored, but target '${targetSandbox}' is no longer registered.`,
+          );
+          snapshotExit(1);
+        }
+        try {
+          const provider = requireCurrentSnapshotRuntimeProvider(currentTarget);
+          confirmSandboxRuntimeRestore(provider, currentTarget, preparedRuntimeRestore);
+        } catch (error) {
+          console.error(
+            `  Managed snapshot state was restored, but provider restore proof failed: ${
+              error instanceof Error ? error.message : String(error)
+            }.`,
+          );
+          console.error("  Retry this exact snapshot after the runtime provider stabilizes.");
+          snapshotExit(1);
+        }
+      }
       console.log(
         `  ${G}\u2713${R} Restored ${result.restoredDirs.length} directories, ${result.restoredFiles.length} files`,
+      );
+      printHermesGatewayRestoreHint(
+        targetSandbox,
+        registry.getSandbox(targetSandbox)?.agent,
+        result.restoredFiles,
+        resolvedSnapshot?.stateFiles ?? [],
       );
     } else {
       console.error(`  Restore failed.`);
@@ -1079,6 +1414,9 @@ async function runSnapshotRestoreUnlocked(
       }
       if (result.failedFiles.length > 0) {
         console.error(`  Failed files: ${result.failedFiles.join(", ")}`);
+      }
+      if (result.error) {
+        console.error(`  Reason: ${result.error}`);
       }
       snapshotExit(1);
     }
@@ -1099,6 +1437,18 @@ async function runSnapshotRestoreUnlocked(
     // managed observability binding from current target state.
     reconcileSnapshotPolicyPresets(targetSandbox, resolvedSnapshot);
   });
+  if (isCrossSandboxRestore && crossSandboxRestoreAgent === "openclaw") {
+    try {
+      await establishRestoredSandboxGatewayPairing(targetSandbox);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new SnapshotCommandError([
+        `State restored into '${targetSandbox}', but gateway pairing could not be verified.`,
+        `Run \`${CLI_NAME} ${targetSandbox} connect\` to retry pairing before running an agent.`,
+        `Details: ${detail}`,
+      ]);
+    }
+  }
 }
 
 export async function runSandboxSnapshot(
@@ -1107,7 +1457,7 @@ export async function runSandboxSnapshot(
 ) {
   switch (request.kind) {
     case "create": {
-      runSnapshotCreate(sandboxName, request);
+      await withSandboxMutationLock(sandboxName, () => runSnapshotCreate(sandboxName, request));
       break;
     }
     case "list": {

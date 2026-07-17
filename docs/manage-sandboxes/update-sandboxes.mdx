@@ -11,24 +11,70 @@ content:
 skill:
   priority: 40
 ---
-import { AgentOnly } from "../_components/AgentGuide";
-
 Update the host CLI first, then check whether existing sandboxes need rebuilds.
 The standard installer follows the admin-promoted `lkg` release tag by default.
+
+## Understand Agent Version Pins
+
+NemoClaw pins the selected agent version into the sandbox image at build time rather than updating it at runtime.
+Existing sandboxes do not auto-upgrade when a newer NemoClaw release ships a newer agent version.
+Run `$$nemoclaw <name> status` to see the agent version currently running in a sandbox.
+After updating the host CLI, run `$$nemoclaw <name> rebuild` to recreate the sandbox with the newer pin while preserving the agent state that NemoClaw manages.
+
+<AgentOnly variant="openclaw">
+
+The OpenClaw runtime build target is declared by `OPENCLAW_VERSION` in the NemoClaw Dockerfiles.
+The `min_openclaw_version` field in `nemoclaw-blueprint/blueprint.yaml` is the compatibility floor for direct blueprint consumers, so it can be lower than the Dockerfile target.
+
+</AgentOnly>
+<AgentOnly variant="hermes">
+
+The Hermes agent manifest declares the expected Hermes version and the `hermes --version` probe command.
+
+</AgentOnly>
+<AgentOnly variant="deepagents">
+
+The `langchain-deepagents-code` agent manifest declares the expected Deep Agents Code version and the `dcode --version` probe command.
+
+</AgentOnly>
+
+<Warning>
+OpenShell 0.0.101 limits a routed sandbox name to 19 characters and rejects consecutive hyphens.
+A NemoClaw sandbox name must contain 1 to 19 characters.
+It must start with a lowercase letter, use lowercase letters, numbers, and single internal hyphens, and end with a letter or number.
+Before the OpenShell upgrade, the installer checks registered sandboxes for the selected gateway.
+If the installer finds incompatible names, it lists each name and exits before it can:
+
+- Prepare the NemoClaw CLI for the upgrade.
+- Start a backup of the registered sandboxes.
+- Retire the selected OpenShell gateway.
+- Install OpenShell 0.0.101.
+- Recreate a sandbox.
+
+NemoClaw does not automatically truncate or change the sandbox name.
+Use the installed NemoClaw and OpenShell versions to create a replacement sandbox with a compatible name.
+Then use [Transfer State Manually](../state-and-backups/transfer-state-manually) to move the required state into the replacement sandbox.
+After you verify the transferred state, destroy the incompatible sandbox with the installed NemoClaw and OpenShell versions.
+Then rerun the installer.
+If you manually retired the gateway, restore the previously installed OpenShell version and its gateway before you transfer the sandbox state.
+</Warning>
 
 ```bash
 curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
 $$nemoclaw upgrade-sandboxes --check
 ```
 
-If a support workflow asks you to pass the maintained tag explicitly, set `NEMOCLAW_INSTALL_TAG` on the `bash` side of the install pipeline.
+If a support workflow asks you to pass the maintained tag explicitly, clear any inherited `NEMOCLAW_INSTALL_REF` and set `NEMOCLAW_INSTALL_TAG` on the `bash` side of the install pipeline.
 
 ```bash
-curl -fsSL https://www.nvidia.com/nemoclaw.sh | NEMOCLAW_INSTALL_TAG=lkg bash
+curl -fsSL https://www.nvidia.com/nemoclaw.sh | NEMOCLAW_INSTALL_REF= NEMOCLAW_INSTALL_TAG=lkg bash
 ```
 
 Before upgrade work, the installer prepares the current NemoClaw CLI without replacing OpenShell and requires a fresh backup of every registered sandbox.
 If any sandbox is skipped or fails, the installer exits before it changes the gateway.
+After backup, the installer requires any existing OpenShell executable it will use to report a version, then compares that version with the supported range declared by the prepared current source.
+It retires the running gateway before replacing an out-of-range OpenShell installation, keeps the gateway when the installed version is supported, and stops without retiring it when the installed version or supported range cannot be validated.
+If the installed OpenShell release cannot retire its gateway through a supported lifecycle command or the verified NemoClaw-owned gateway PID, the installer also stops after backup with the sandbox backups preserved.
 
 After the host CLI and OpenShell update, the installer runs `$$nemoclaw upgrade-sandboxes --auto` to reconcile the existing sandboxes.
 
@@ -59,6 +105,9 @@ $$nemoclaw <sandbox-name> snapshot create --name pre-upgrade
 $$nemoclaw update --yes
 $$nemoclaw upgrade-sandboxes --check
 ```
+
+Use `$$nemoclaw upgrade-sandboxes --check` to read sandbox state without starting, recovering, or selecting a gateway.
+When all your registered sandboxes resolve to one recorded gateway, the command queries that gateway instead of the gateway for your current `NEMOCLAW_GATEWAY_PORT`.
 
 Each rebuild destroys the old container and creates a new one while preserving the manifest-defined workspace or agent state that NemoClaw knows how to snapshot.
 `upgrade-sandboxes --check` can report a sandbox as stale because the running agent version is behind, because the managed NemoClaw image fingerprint differs from the current CLI, or both.

@@ -1,6 +1,6 @@
 ---
 name: nemoclaw-maintainer-release-notes
-description: Drafts NemoClaw release notes from live GitHub tag and compare data. Produces the repo's narrative release-note style with three lead paragraphs, categorized shipped changes, why-it-matters bullets, and external-only contributor thanks. Use after cutting a release tag or when asked to draft release notes, prepare an announcement, write a changelog, or summarize v0.0.x.
+description: Drafts the post-tag NemoClaw Announcement from live GitHub tag and compare data. Produces three lead paragraphs, categorized shipped changes, why-it-matters bullets, and external-only contributor thanks. Use after cutting a release tag or when asked to draft an announcement or summarize v0.0.x. Native `docs/changelog/YYYY-MM-DD.mdx` entries belong to the pre-tag `nemoclaw-contributor-update-docs` workflow.
 user_invocable: true
 ---
 
@@ -9,13 +9,18 @@ user_invocable: true
 
 # NemoClaw Maintainer Release Notes
 
-Draft NemoClaw release notes from live release data. The house style is:
+Draft the post-tag NemoClaw Announcement from GitHub tag and compare data. The house style is:
 
 - three narrative lead paragraphs,
 - a categorized list of shipped changes,
-- one "what changed and why it matters / why we did it" bullet for every included shipped change,
+- one bullet for each shipped change that states what changed and why it matters,
 - external-only contributor thanks,
 - visible `#NNNN` GitHub links.
+
+Follow the shared [Documentation Writing and Review](../_shared/documentation-writing-review.md)
+contract for new or modified Announcement text.
+State the changed behavior, affected users, and required action when one exists.
+Do not rewrite unrelated historical release text.
 
 Create a local Markdown draft. Do not create or update a GitHub Discussion; the maintainer posts the announcement manually.
 
@@ -24,6 +29,7 @@ Create a local Markdown draft. Do not create or update a GitHub Discussion; the 
 - You must be in the NemoClaw git repository.
 - `gh` must be authenticated for `NVIDIA/NemoClaw`.
 - The release tag should already exist. If the user is still cutting the tag, use `nemoclaw-maintainer-cut-release-tag` first.
+- The tagged commit should already contain exactly one `## <current-version>` entry in `docs/changelog/YYYY-MM-DD.mdx`. This skill drafts the post-tag Announcement and does not replace or create that canonical entry.
 - Use live GitHub and remote tag state, not memory or a stale local branch.
 - If `<release-dir>/notes-data.json` exists from `npm run release:notes-data`, use it as the starting source of truth and query GitHub only to fill missing fields.
 - If `notes-data.json` has `status: "partial"` or non-empty `pullRequestWarnings`, report those warnings and ask the maintainer whether to fetch or fill the missing PR metadata before drafting.
@@ -47,6 +53,8 @@ Confirm:
 - The compare range is `<previous-version>...<current-version>`.
 
 ## Step 2: Collect the Shipped Surface
+
+Read the tagged commit's matching dated changelog entry as release context, then verify it against live compare and PR data. Preserve factual consistency with the canonical entry, but use live data to fill the richer Announcement narrative and contributor credit.
 
 If `notes-data.json` exists, read it first. Otherwise, use the compare API as the first source of truth:
 
@@ -79,6 +87,7 @@ Be careful with sensitive internal cleanup:
 - Do not count testing reverts or guardrail reversions as release value unless the user explicitly asks for a full raw changelog.
 - If a revert-like commit must be mentioned, use neutral language and do not frame it as someone else's mistake.
 - Avoid public wording that could embarrass a teammate.
+- Keep the candidate SHA, E2E failure classifications, rerun ledger, and waiver rationale out of the public Announcement. Preserve that information in the release evidence ledger.
 
 ## Step 4: Categorize the Changes
 
@@ -170,5 +179,7 @@ Also return the suggested discussion title: `NemoClaw <current-version> is out`.
 - Never draft from memory alone; use live `gh api compare` and PR metadata.
 - Never mention contributor affiliation unless the user explicitly asks.
 - Never thank internal contributors by default; keep thanks external-only.
+- Never include the candidate SHA, internal E2E failure classifications, rerun details, or waiver rationale in the public Announcement.
 - Never include testing reverts as release-value bullets unless explicitly asked for a raw changelog.
 - Never create duplicate release Discussions.
+- Never create or silently repair `docs/changelog/` from this post-tag Announcement workflow. If the canonical entry is missing, report the release-process defect and route recovery through `nemoclaw-contributor-update-docs`.

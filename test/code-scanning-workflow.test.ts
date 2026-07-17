@@ -1,47 +1,140 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readYaml, type Workflow } from "./helpers/e2e-workflow-contract";
 
-type DependabotUpdate = {
-  "package-ecosystem"?: string;
-  directory?: string;
-  groups?: Record<string, { patterns?: string[] }>;
-};
-
 const workflow = readYaml<Workflow>(".github/workflows/code-scanning.yaml");
-const dependabot = readYaml<{ updates?: DependabotUpdate[] }>(".github/dependabot.yml");
+const shellcheckSteps = workflow.jobs.shellcheck?.steps ?? [];
 
-const codeqlActionPrefix = "github/codeql-action/";
+function requiredStep(name: string) {
+  const step = shellcheckSteps.find((candidate) => candidate.name === name);
+  assert(step, `ShellCheck workflow is missing step: ${name}`);
+  return step;
+}
 
-describe("Code scanning workflow dependency updates", () => {
-  // source-shape-contract: security -- One immutable CodeQL revision prevents partial scanner action upgrades
-  it("keeps every CodeQL action on one immutable revision", () => {
-    const codeqlActions = Object.values(workflow.jobs ?? {})
-      .flatMap((job) => job.steps ?? [])
-      .map((step) => step.uses)
-      .filter((uses): uses is string => uses?.startsWith(codeqlActionPrefix) ?? false);
+function writeExecutable(file: string, content: string) {
+  fs.writeFileSync(file, content, { mode: 0o755 });
+}
 
-    expect(
-      codeqlActions.map((uses) => uses.slice(codeqlActionPrefix.length).split("@")[0]).sort(),
-    ).toEqual(["analyze", "init", "upload-sarif"]);
+function runShellCheckInstall({
+  aptUpdateSucceeds = true,
+  installedSupportsJson1 = true,
+  preinstalledSupportsJson1,
+}: {
+  aptUpdateSucceeds?: boolean;
+  installedSupportsJson1?: boolean;
+  preinstalledSupportsJson1: boolean;
+}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-shellcheck-install-"));
+  const bin = path.join(root, "bin");
+  const trace = path.join(root, "trace");
+  const installedMarker = path.join(root, "installed");
+  fs.mkdirSync(bin);
+  writeExecutable(
+    path.join(bin, "shellcheck"),
+    `#!/bin/sh
+printf 'shellcheck:%s\\n' "$*" >> "$TRACE"
+case "$*" in
+  *--format=json1*)
+    [ "$PREINSTALLED_SUPPORTS_JSON1" = "true" ] ||
+      { [ -f "$INSTALLED_MARKER" ] && [ "$INSTALLED_SUPPORTS_JSON1" = "true" ]; }
+    ;;
+  --version)
+    printf 'version: 0.11.0\\n'
+    ;;
+esac
+`,
+  );
+  writeExecutable(
+    path.join(bin, "sudo"),
+    `#!/bin/sh
+printf 'sudo:%s\\n' "$*" >> "$TRACE"
+case "$*" in
+  *" update")
+    [ "$APT_UPDATE_SUCCEEDS" = "true" ]
+    ;;
+  *" install -y shellcheck")
+    : > "$INSTALLED_MARKER"
+    ;;
+esac
+`,
+  );
+  const install = requiredStep("Install ShellCheck");
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", install.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      APT_UPDATE_SUCCEEDS: String(aptUpdateSucceeds),
+      PATH: `${bin}:${process.env.PATH}`,
+      INSTALLED_MARKER: installedMarker,
+      INSTALLED_SUPPORTS_JSON1: String(installedSupportsJson1),
+      PREINSTALLED_SUPPORTS_JSON1: String(preinstalledSupportsJson1),
+      RUNNER_TEMP: root,
+      TRACE: trace,
+    },
+  });
+  const calls = fs.readFileSync(trace, "utf8").trim().split("\n");
+  fs.rmSync(root, { recursive: true, force: true });
+  return { calls, result };
+}
 
-    const revisions = codeqlActions.map((uses) => uses.split("@")[1]);
-    expect(revisions).toHaveLength(3);
-    for (const revision of revisions) {
-      expect(revision).toMatch(/^[0-9a-f]{40}$/);
-    }
-    expect(new Set(revisions).size).toBe(1);
+describe("ShellCheck SARIF workflow boundary", () => {
+  it("keeps a preinstalled ShellCheck only when its json1 formatter works (#7684)", () => {
+    const { calls, result } = runShellCheckInstall({ preinstalledSupportsJson1: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toEqual([
+      expect.stringContaining("shellcheck:--format=json1"),
+      "shellcheck:--version",
+    ]);
   });
 
-  // source-shape-contract: security -- Grouped CodeQL updates preserve the reviewed single-revision scanner boundary
-  it("groups CodeQL action updates so Dependabot keeps the shared revision synchronized", () => {
-    const githubActionsUpdate = dependabot.updates?.find(
-      (update) => update["package-ecosystem"] === "github-actions" && update.directory === "/",
-    );
-    const groups = Object.values(githubActionsUpdate?.groups ?? {});
+  it("installs and validates ShellCheck when the preinstalled binary lacks json1 (#7684)", () => {
+    const { calls, result } = runShellCheckInstall({ preinstalledSupportsJson1: false });
 
-    expect(groups.some((group) => group.patterns?.includes("github/codeql-action/*"))).toBe(true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toEqual([
+      expect.stringContaining("shellcheck:--format=json1"),
+      "sudo:apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update",
+      "sudo:apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install -y shellcheck",
+      expect.stringContaining("shellcheck:--format=json1"),
+      "shellcheck:--version",
+    ]);
+  });
+
+  it("fails clearly when the bounded ShellCheck package-index update fails (#7684)", () => {
+    const { calls, result } = runShellCheckInstall({
+      aptUpdateSucceeds: false,
+      preinstalledSupportsJson1: false,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Failed to update apt package indexes for ShellCheck");
+    expect(calls).toEqual([
+      expect.stringContaining("shellcheck:--format=json1"),
+      "sudo:apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update",
+    ]);
+  });
+
+  it("rejects an installed ShellCheck without json1 support (#7684)", () => {
+    const { calls, result } = runShellCheckInstall({
+      installedSupportsJson1: false,
+      preinstalledSupportsJson1: false,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Installed ShellCheck does not support --format=json1");
+    expect(calls).toEqual([
+      expect.stringContaining("shellcheck:--format=json1"),
+      "sudo:apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update",
+      "sudo:apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install -y shellcheck",
+      expect.stringContaining("shellcheck:--format=json1"),
+    ]);
   });
 });

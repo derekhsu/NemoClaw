@@ -21,7 +21,7 @@ import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
 import { REPO_ROOT } from "../fixtures/paths.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
 
-const TEST_SANDBOX_PREFIX = "e2e-tunnel-lifecycle";
+const TEST_SANDBOX_PREFIX = "e2e-tunnel-life";
 const SANDBOX_NAME = process.env.NEMOCLAW_SANDBOX_NAME ?? TEST_SANDBOX_PREFIX;
 const LOCAL_DASHBOARD_PORT = process.env.NEMOCLAW_DASHBOARD_PORT ?? "18789";
 const TEST_TIMEOUT_MS = Number(process.env.NEMOCLAW_E2E_TIMEOUT_SECONDS ?? 3_600) * 1_000;
@@ -173,7 +173,7 @@ export const TUNNEL_LIFECYCLE_TEST_TIMEOUT_MS = TEST_TIMEOUT_MS;
 
 type TunnelLifecycleFixtures = Pick<
   E2ETargetFixtures,
-  "artifacts" | "cleanup" | "host" | "secrets"
+  "artifacts" | "cleanup" | "host" | "progress" | "secrets"
 > & {
   skip: (note?: string) => never;
 };
@@ -220,6 +220,7 @@ export async function runTunnelLifecycleContract({
   artifacts,
   cleanup,
   host,
+  progress,
   secrets,
   skip,
 }: TunnelLifecycleFixtures): Promise<void> {
@@ -270,6 +271,7 @@ export async function runTunnelLifecycleContract({
   }
 
   expect(fs.existsSync(path.join(REPO_ROOT, "install.sh"))).toBe(true);
+  progress.phase("onboard the OpenClaw tunnel sandbox");
   await host.bestEffortCleanupSandbox(SANDBOX_NAME, {
     artifactName: "pre-cleanup-nemoclaw-destroy-tunnel-lifecycle",
     timeoutMs: 15 * 60_000,
@@ -290,6 +292,7 @@ export async function runTunnelLifecycleContract({
 
   await host.expectListed(SANDBOX_NAME, { artifactName: "post-install-nemoclaw-list" });
 
+  progress.phase("wait for the local dashboard origin");
   let localReady = false;
   for (let attempt = 1; attempt <= 30; attempt += 1) {
     const local = await host.command(
@@ -322,6 +325,7 @@ export async function runTunnelLifecycleContract({
     `[NemoClaw fault] Local OpenClaw dashboard not reachable on localhost:${LOCAL_DASHBOARD_PORT} after 30s; tunnel cannot proxy a dead origin.`,
   ).toBe(true);
 
+  progress.phase("start the quick tunnel and discover its URL");
   const start = await host.nemoclaw(["tunnel", "start"], {
     artifactName: "tunnel-start",
     env: commandEnv(),
@@ -390,6 +394,7 @@ export async function runTunnelLifecycleContract({
     throw new Error(`[NemoClaw fault] ${reason}`);
   }
 
+  progress.phase("probe public tunnel reachability");
   let lastPublicProbe: CurlProbe | undefined;
   let backoffMs = 2_000;
   for (let attempt = 1; attempt <= 15; attempt += 1) {
@@ -450,6 +455,7 @@ export async function runTunnelLifecycleContract({
     DASHBOARD_MARKER_PATTERN,
   );
 
+  progress.phase("stop the tunnel and confirm status removal");
   const stop = await host.nemoclaw(["tunnel", "stop"], {
     artifactName: "tunnel-stop",
     env: commandEnv(),

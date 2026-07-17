@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import YAML from "yaml";
+import { CLI_ARTIFACT_RESTORE_STEP } from "./cli-artifact-workflow-boundary.mts";
 
 /**
  * SOURCE_OF_TRUTH_REVIEW
@@ -20,7 +21,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DEFAULT_WORKFLOW_PATH = join(REPO_ROOT, ".github", "workflows", "e2e.yaml");
 const FIXTURE = join(REPO_ROOT, "tools", "e2e", "hermes-gpu-docker-runtime-fixture.sh");
 const JOB_NAME = "hermes-gpu-startup";
-const CHECKOUT = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const SOURCE = "tools/e2e/hermes-gpu-docker-runtime-fixture.sh";
 const SHA = "e273c4baa7fe89546d64517cf56eafec30aeda7b355971263605ab1327fade02";
 const F_PATH =
@@ -37,7 +38,7 @@ const HOSTED_PROVIDER_ENV_NAMES = [
 ] as const;
 const SECRET_REFERENCE_PATTERN = /\bsecrets\.[A-Za-z0-9_]+\b/u;
 const EXPECTED_SELECTOR =
-  "${{ github.repository == 'NVIDIA/NemoClaw' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (contains(format(',{0},', inputs.jobs), ',hermes-gpu-startup,') || contains(format(',{0},', inputs.targets), ',hermes-gpu-startup,')) }}";
+  "${{ github.repository == 'NVIDIA/NemoClaw' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && ((inputs.jobs == '' && inputs.targets == '') || contains(format(',{0},', inputs.jobs), ',hermes-gpu-startup,') || contains(format(',{0},', inputs.targets), ',hermes-gpu-startup,')))) }}";
 
 type WorkflowRecord = Record<string, unknown>;
 type WorkflowStep = WorkflowRecord & {
@@ -107,7 +108,9 @@ export function validateHermesGpuStartupWorkflow(
     errors.push(`${JOB_NAME} job must run on the native RTX PRO 6000 GPU runner`);
   }
   if (job.needs !== "generate-matrix" || job.if !== EXPECTED_SELECTOR) {
-    errors.push(`${JOB_NAME} job must remain explicit-only behind generate-matrix`);
+    errors.push(
+      `${JOB_NAME} job must run on main pushes and retain manual selectors behind generate-matrix`,
+    );
   }
   if (job["timeout-minutes"] !== 90) {
     errors.push(`${JOB_NAME} requires a 90 minute timeout`);
@@ -117,11 +120,12 @@ export function validateHermesGpuStartupWorkflow(
   if (
     strategy["fail-fast"] !== false ||
     strategy["max-parallel"] !== 1 ||
-    !Array.isArray(matrix.scenario) ||
-    matrix.scenario.length !== 3 ||
-    matrix.scenario[0] !== "native" ||
-    matrix.scenario[1] !== "fallback" ||
-    matrix.scenario[2] !== "compatibility-only"
+    JSON.stringify(matrix.include) !==
+      JSON.stringify([
+        { scenario: "native", sandbox_name: "e2e-hgpu-native" },
+        { scenario: "fallback", sandbox_name: "e2e-hgpu-fallback" },
+        { scenario: "compatibility-only", sandbox_name: "e2e-hgpu-compat" },
+      ])
   ) {
     errors.push(`${JOB_NAME} must serialize GPU scenarios`);
   }
@@ -134,9 +138,10 @@ export function validateHermesGpuStartupWorkflow(
     E2E_JOB: "1",
     E2E_TARGET_ID: JOB_NAME,
     NEMOCLAW_AGENT: "hermes",
+    NEMOCLAW_E2E_SHARD: "${{ matrix.scenario }}",
     NEMOCLAW_RUN_LIVE_E2E: "1",
     NEMOCLAW_SANDBOX_GPU: "1",
-    NEMOCLAW_SANDBOX_NAME: "e2e-hermes-gpu-startup-${{ matrix.scenario }}",
+    NEMOCLAW_SANDBOX_NAME: "${{ matrix.sandbox_name }}",
   } as const;
   for (const [name, expected] of Object.entries(requiredEnv)) {
     if (jobEnv[name] !== expected) {
@@ -239,15 +244,17 @@ if ! @run restore`;
   }
   const run = stringValue(runStep.run);
   const pi = steps.findIndex((step) => step.name === "Prepare E2E workspace");
+  const restoreI = steps.findIndex((step) => step.name === CLI_ARTIFACT_RESTORE_STEP);
   const ni = steps.findIndex((step) => step.name === "Reassert trusted Node runtime");
   const node = steps[ni];
   if (
     runStep.shell !== BASH ||
     !trustedEnv(runStep) ||
     pi < 0 ||
-    ni !== pi + 1 ||
+    restoreI <= pi ||
+    ni !== restoreI + 1 ||
     ni + 1 !== steps.indexOf(runStep) ||
-    node?.uses !== "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" ||
+    node?.uses !== "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
     asRecord(node?.with)["node-version"] !== "22" ||
     !trustedEnv(node) ||
     asRecord(node?.env).NODE_OPTIONS !== "" ||
@@ -295,7 +302,7 @@ removalCondition:`,
       true,
     ) ||
     /\b(?:install\s+-m|chmod)\s+0?644\b/u.test(run) ||
-    !run.includes("npx vitest run --project e2e-live") ||
+    !run.includes("tools/e2e/live-vitest-invocation.mts run --test-path") ||
     !run.includes("test/e2e/live/hermes-gpu-startup.test.ts")
   ) {
     errors.push(`${JOB_NAME} trusted runtime boundary failed`);

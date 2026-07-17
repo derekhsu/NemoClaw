@@ -18,7 +18,6 @@ import {
   ANALYTICS_DISABLE_ENV_NAMES,
   DCODE_CANONICAL_PATH,
   headlessCheckPath,
-  makeStartScriptFixture as makeHeadlessStartScriptFixture,
   NO_PROXY_ENV_NAMES,
   PROXY_URL_ENV_NAMES,
   runHeadlessCheckHelper,
@@ -30,7 +29,8 @@ import {
   readAgentFile,
   runWrapper,
 } from "./helpers/langchain-deepagents-code-image.ts";
-import { makeStartScriptFixture as makeIdentityStartScriptFixture } from "./support/dcode-start-script-fixture.ts";
+import { dcodeStateDir, makeStartScriptFixture } from "./support/dcode-start-script-fixture.ts";
+import { expectManagedBootstrapNativeImageContract } from "./support/managed-bootstrap-image-contract";
 
 function containsTokenShapedSecret(value: string): boolean {
   return TOKEN_PREFIX_PATTERNS.some((pattern) => {
@@ -155,19 +155,71 @@ function assertEveryRequirementIsHashLocked(requirementsLock: string): void {
 describe("LangChain Deep Agents Code image contracts", () => {
   it("hardens copied NemoClaw blueprints against sandbox-user mutation", () => {
     const dockerfile = readAgentFile("Dockerfile");
+    const finalRuntimeRoot = [
+      "FROM ${BASE_IMAGE}",
+      "",
+      "# The supplied base may end as a non-root runtime user. Reset the build user",
+      "# explicitly before installing the root-owned managed-startup handoff.",
+      "USER root",
+    ].join("\n");
+    const managedRuntimeDirectory = "&& install -d -o root -g root -m 0755 /run/nemoclaw";
+    const runtimeModeReplay = "&& chmod 444 /opt/nemoclaw-deepagents-code/generate-config.ts";
 
     expect(dockerfile).toContain("ARG BASE_IMAGE\n");
     expect(dockerfile).toContain("ARG NEMOCLAW_MODEL=nvidia/nemotron-3-ultra-550b-a55b");
     expect(dockerfile).not.toContain("langchain-deepagents-code-sandbox-base:latest");
+    expect(dockerfile).toContain(
+      'timeout 10 env -i /usr/local/lib/nemoclaw/dcode-wrapper.sh -n ""',
+    );
+    for (const probe of [
+      "/usr/local/lib/nemoclaw/dcode-managed-exec /usr/bin/true",
+      "/usr/local/bin/dcode --version",
+      "/usr/local/bin/dcode.real --version",
+      "/usr/local/bin/deepagents-code --version",
+    ]) {
+      expect(dockerfile).toContain(`env -i ${probe}`);
+    }
     expect(dockerfile).toContain("chown root:root /sandbox/.nemoclaw");
     expect(dockerfile).toContain("chmod 1755 /sandbox/.nemoclaw");
     expect(dockerfile).toContain("chown -R root:root /sandbox/.nemoclaw/blueprints");
     expect(dockerfile).toContain("chmod -R 755 /sandbox/.nemoclaw/blueprints");
+    expect(dockerfile).toContain("cp -r /opt/nemoclaw-blueprint/*");
+    expect(dockerfile).toContain("COPY --from=mcp-tool-discovery-runtime");
     expect(dockerfile.indexOf("cp -r /opt/nemoclaw-blueprint/*")).toBeLessThan(
       dockerfile.indexOf("chown -R root:root /sandbox/.nemoclaw/blueprints"),
     );
+    expect(dockerfile.split(managedRuntimeDirectory)).toHaveLength(2);
+    expect(dockerfile.indexOf("COPY --from=mcp-tool-discovery-runtime")).toBeLessThan(
+      dockerfile.indexOf(managedRuntimeDirectory),
+    );
+    expect(dockerfile).toContain(finalRuntimeRoot);
+    expectManagedBootstrapNativeImageContract(dockerfile);
+    expect(dockerfile.indexOf(finalRuntimeRoot)).toBeLessThan(
+      dockerfile.indexOf(managedRuntimeDirectory),
+    );
+    expect(dockerfile.indexOf(managedRuntimeDirectory)).toBeLessThan(
+      dockerfile.indexOf(runtimeModeReplay),
+    );
+    expect(dockerfile).toContain(
+      "COPY tools/mcp-tool-discovery-runtime/reviewed-runtime-bundle/managed-startup-image-runtime.bundle /out/managed-startup-image-runtime.cjs",
+    );
+    expect(dockerfile).not.toContain(
+      "COPY src/lib/onboard/managed-bootstrap/ ./src/lib/onboard/managed-bootstrap/",
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=managed-bootstrap-entrypoint-builder /out/usr/local/bin/nemoclaw-managed-bootstrap /usr/local/bin/nemoclaw-managed-bootstrap",
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=managed-bootstrap-entrypoint-builder /out/usr/local/lib/nemoclaw/managed-bootstrap-trampoline.sh /usr/local/lib/nemoclaw/managed-bootstrap-trampoline.sh",
+    );
+    expect(dockerfile).toContain(
+      "chmod 755 /usr/local/bin/nemoclaw-start /usr/local/bin/nemoclaw-managed-startup-hold /usr/local/bin/nemoclaw-managed-bootstrap",
+    );
+    expect(dockerfile).toContain("ARG NEMOCLAW_MANAGED_IMAGE_RUNTIME_USER=sandbox");
+    expect(dockerfile).toContain("root|sandbox) ;; \\");
+    expect(dockerfile).toContain("&& command -v setpriv >/dev/null 2>&1");
     expect(dockerfile.trimEnd()).toMatch(
-      /USER sandbox\nENTRYPOINT \["\/usr\/local\/bin\/nemoclaw-start"\]\nCMD \["\/bin\/bash"\]$/,
+      /USER \$\{NEMOCLAW_MANAGED_IMAGE_RUNTIME_USER\}\nENTRYPOINT \["\/usr\/local\/bin\/nemoclaw-start"\]\nCMD \["\/bin\/bash"\]$/,
     );
   });
 
@@ -182,6 +234,8 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(startScript).not.toContain("TELEGRAM_BOT_TOKEN");
     expect(startScript).not.toContain("DISCORD_BOT_TOKEN");
     expect(startScript).not.toContain("SLACK_BOT_TOKEN");
+    expect(startScript).not.toContain("GOOGLECHAT_SERVICE_ACCOUNT");
+    expect(startScript).not.toContain("GOOGLE_CHAT_SERVICE_ACCOUNT");
   });
 
   it("prints NemoClaw setup output before idling as a terminal runtime", () => {
@@ -204,7 +258,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
   it("serializes the sandbox name into the shell env file for in-sandbox identity", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-dcode-start-"));
     try {
-      const { envFile, scriptPath } = makeIdentityStartScriptFixture(tempDir);
+      const { envFile, scriptPath } = makeStartScriptFixture(tempDir);
 
       execFileSync("bash", [scriptPath, "sh", "-c", ":"], {
         env: {
@@ -222,10 +276,9 @@ describe("LangChain Deep Agents Code image contracts", () => {
 
   it("replaces inherited host proxy values with the managed runtime proxy (#6191)", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-dcode-start-"));
-    const { envFile, scriptPath } = makeHeadlessStartScriptFixture(
-      tempDir,
-      readAgentFile("start.sh"),
-    );
+    const { envFile, scriptPath } = makeStartScriptFixture(tempDir, {
+      markerDir: dcodeStateDir(tempDir),
+    });
     const inheritedSecrets = {
       NVIDIA_API_KEY: `nvapi-${"A".repeat(10)}`,
       OPENAI_API_KEY: `sk-${"B".repeat(20)}`,
@@ -619,12 +672,9 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "lacked denial evidence",
       "python_probe_source",
       'DCODE_MANAGED_EXEC="/usr/local/lib/nemoclaw/dcode-managed-exec"',
-      'local -a command_prefix=("${@:3}")',
-      "printf -v remote_cmd '%q '",
-      "base64 | tr -d",
-      "base64 -d",
-      'remote_cmd+="-c',
-      "${url@Q}",
+      "sandbox_exec_argv",
+      'source="$(python_probe_source)"',
+      '"$python_bin" -c "$source" "$url"',
       'expect_reached "arbitrary Python" "GitHub" "https://api.github.com/"',
       'expect_reached "arbitrary Python" "PyPI" "https://pypi.org/"',
       '"direct managed-exec Python"',
@@ -642,6 +692,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     ]) {
       expect(pythonEgressCheck).toContain(expected);
     }
+    expect(pythonEgressCheck).not.toContain("base64 -d");
     for (const expected of [
       "Case: Deep Agents Code dcode secret boundary",
       "env OPENAI_API_KEY=",
@@ -650,9 +701,9 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "dcode_secret_probe_env_file",
       "remote_cmd=",
       "LOG_MARKER_FOUND:%s",
-      "OpenShell rejects newline-bearing exec",
+      "Keep secret injection, output capture, cleanup, and status reporting atomic",
       "NEMOCLAW_E2E_SECRET_BOUNDARY_SELF_TEST",
-      "NO_NEWLINE_IN_COMMAND",
+      "ATOMIC_COMMAND",
       "DCODE_EXIT:%s\\\\n",
       "DCODE_EXIT:0",
       "refusing to start",
@@ -734,8 +785,8 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "policy-add tavily --yes",
       /urllib\.request\.Request[\s\S]*method='POST'/,
       "python_probe_source",
-      "base64 | tr -d",
-      "${python_bin@Q} -c",
+      "sandbox_exec_argv",
+      '"$python_bin" -c "$source" "$url"',
       "NEMOCLAW_E2E_TAVILY_SELF_TEST",
       "/opt/venv/",
       "managed Deep Agents Code python can reach Tavily",
@@ -746,6 +797,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     ]) {
       expect(tavilyOptInCheck).toMatch(expected);
     }
+    expect(tavilyOptInCheck).not.toContain("base64 -d");
     expect(cloudExperimentalChecksForOnboarding("cloud-langchain-deepagents-code")).toEqual([
       "test/e2e/e2e-cloud-experimental/checks/03-deepagents-code-nemotron-ultra-profile.sh",
       "test/e2e/e2e-cloud-experimental/checks/04-deepagents-code-fresh-reonboard.sh",
@@ -764,7 +816,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     for (const expected of [
       'sandbox_exec "test -d /sandbox/.deepagents"',
       "command -v dcode",
-      "dcode -n 'Reply with exactly one word: PONG'",
+      "dcode -n 'Reply with exactly one word: PONG' --json",
       "sandbox_login_exec",
       "sandbox_login_proxy_contract",
       "-u HTTP_PROXY -u HTTPS_PROXY -u NO_PROXY",
@@ -799,9 +851,20 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "NEMOCLAW_DCODE_EMPTY_EXIT",
       "login-shell dcode rejects an empty non-interactive prompt with exit 2",
       "direct-exec dcode rejects an empty non-interactive prompt with exit 2",
+      "write_openshell_target_shim",
+      "OPENSHELL_NEMOCLAW_REAL_BIN",
+      "OPENSHELL_NEMOCLAW_TARGET_TRACE",
+      "validate_connect_target_trace",
+      "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:missing",
+      "NEMOCLAW_DCODE_CONNECT_TARGET_FAIL:mismatch",
       "nemoclaw_connect_probe",
+      "unset SANDBOX_NAME NEMOCLAW_SANDBOX_NAME NEMOCLAW_SANDBOX",
+      '"${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" connect --probe-only 2>&1',
+      "bare connect targeted the Deep Agents Code sandbox",
       "${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}",
       "connect --probe-only 2>&1",
+      "dcode_connect_fail_closed_contract",
+      "connect rejects untrusted image-backed route evidence before session attach",
       "direct-exec dcode -n reached managed inference",
       "connect --probe-only accepted the managed inference route",
       'sandbox_login_exec "cd /sandbox',
@@ -812,6 +875,14 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "references_managed_placeholder_key",
       'api_key_env[[:space:]]*=[[:space:]]*"DEEPAGENTS_CODE_OPENAI_API_KEY"',
       "classify_headless_output",
+      '"schema_version", "command", "data"',
+      '"status"',
+      '"exit_code"',
+      '"response"',
+      '"completion"',
+      '"thread_id"',
+      '"duration_ms"',
+      '"response_bytes"',
       "NEMOCLAW_DCODE_DNS_PROBE_MISSING_GETENT",
       "required DNS diagnostic tool getent is unavailable",
       "NEMOCLAW_DCODE_DNS_PROBE_MISSING_TIMEOUT",
@@ -834,6 +905,27 @@ describe("LangChain Deep Agents Code image contracts", () => {
     ]) {
       expect(headlessCheck).toContain(expected);
     }
+    expect(headlessCheck).not.toContain(
+      '"${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" "$SANDBOX_NAME" connect --probe-only',
+    );
+    const connectProbe = headlessCheck.slice(
+      headlessCheck.indexOf("nemoclaw_connect_probe() {"),
+      headlessCheck.indexOf("sandbox_login_proxy_contract() {"),
+    );
+    const shimWriteIndex = connectProbe.indexOf('write_openshell_target_shim "$shim_path"');
+    const aliasUnsetIndex = connectProbe.indexOf(
+      "unset SANDBOX_NAME NEMOCLAW_SANDBOX_NAME NEMOCLAW_SANDBOX",
+    );
+    const connectCommandIndex = connectProbe.indexOf(
+      '"${NEMOCLAW_CLI_BIN:-${REPO:-.}/bin/nemoclaw.js}" connect --probe-only',
+    );
+    const traceValidationIndex = connectProbe.indexOf(
+      'validate_connect_target_trace "$trace_file"',
+    );
+    expect(shimWriteIndex).toBeGreaterThan(-1);
+    expect(aliasUnsetIndex).toBeGreaterThan(shimWriteIndex);
+    expect(connectCommandIndex).toBeGreaterThan(aliasUnsetIndex);
+    expect(traceValidationIndex).toBeGreaterThan(connectCommandIndex);
     expect(headlessCheck).not.toContain('sandbox_login_exec ". /tmp/nemoclaw-proxy-env.sh');
     expect(headlessCheck).not.toContain("config_output:0:200");
     expect(headlessCheck).toMatch(/headless_output=.*sandbox_login_exec.*\|\| true\)"/);
@@ -984,7 +1076,32 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(review).toContain(
       "uv tool run --python 3.13 pip-audit -r agents/langchain-deepagents-code/requirements.lock --progress-spinner off --disable-pip",
     );
-    expect(review).toContain("Audit result: `No known vulnerabilities found`");
+    expect(review).toContain(
+      "Targeted audit result: `aiohttp 3.14.3, cryptography 50.0.0, uv 0.11.33, MCP 1.28.1, Pillow 12.3.0, and pyasn1 0.6.4 have no known vulnerabilities`",
+    );
+    expect(review).toContain(
+      "Complete-lock audit result: `2 duplicate records in 1 unrelated package`",
+    );
+    expect(review).toContain("`GHSA-cq5v-8q36-5273`");
+    expect(review).toContain("`GHSA-g6cj-pr64-35w5`");
+    expect(review).toContain("Deep Agents Code `0.1.45` and later");
+    expect(review).toContain("semantic migration to `>=0.1.45`");
+    expect(requirementsLock).toContain("uv==0.11.33");
+    expect(requirementsLock).toContain("aiohttp==3.14.3");
+    expect(requirementsLock).toContain("cryptography==50.0.0");
+    expect(requirementsLock).not.toContain("aiohttp==3.14.1");
+    expect(requirementsLock).not.toContain("cryptography==49.0.0");
+    expect(requirementsLock).toContain("mcp==1.28.1");
+    expect(requirementsLock).toContain("pillow==12.3.0");
+    expect(requirementsLock).toContain("pyasn1==0.6.4");
+    const dockerfileBase = readAgentFile("Dockerfile.base");
+    for (const [name, expectedVersion] of [
+      ["aiohttp", "3.14.3"],
+      ["cryptography", "50.0.0"],
+      ["deepagents-code", "0.1.34"],
+    ] as const) {
+      expect(dockerfileBase).toContain(`'${name}': '${expectedVersion}'`);
+    }
     expect(review).toContain(`Adapter module SHA-256: \`${sha256(adapterModule)}\``);
     expect(review).toContain(`Adapter project metadata SHA-256: \`${sha256(adapterMetadata)}\``);
     expect(review).toContain("Adapter dependency audit result: `No known vulnerabilities found`");

@@ -9,7 +9,7 @@
 //
 // Main inputs:
 //   CHAT_UI_URL, NEMOCLAW_DASHBOARD_PORT, NEMOCLAW_MODEL,
-//   NEMOCLAW_PROVIDER_KEY, NEMOCLAW_UPSTREAM_PROVIDER, NEMOCLAW_PRIMARY_MODEL_REF,
+//   NEMOCLAW_INFERENCE_PROVIDER_ID, NEMOCLAW_UPSTREAM_PROVIDER, NEMOCLAW_PRIMARY_MODEL_REF,
 //   NEMOCLAW_INFERENCE_BASE_URL, NEMOCLAW_INFERENCE_API,
 //   NEMOCLAW_INFERENCE_INPUTS, NEMOCLAW_CONTEXT_WINDOW,
 //   NEMOCLAW_MAX_TOKENS, NEMOCLAW_REASONING,
@@ -24,7 +24,8 @@
 //   NEMOCLAW_OPENCLAW_MANAGED_PROXY, NEMOCLAW_WEB_SEARCH_ENABLED,
 //   NEMOCLAW_WEB_SEARCH_PROVIDER,
 //   NEMOCLAW_OPENCLAW_OTEL, NEMOCLAW_OPENCLAW_OTEL_ENDPOINT,
-//   NEMOCLAW_OPENCLAW_OTEL_SERVICE_NAME, NEMOCLAW_OPENCLAW_OTEL_SAMPLE_RATE.
+//   NEMOCLAW_OPENCLAW_OTEL_SERVICE_NAME, NEMOCLAW_OPENCLAW_OTEL_SAMPLE_RATE,
+//   NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION.
 
 import {
   chmodSync,
@@ -122,6 +123,35 @@ const WEB_SEARCH_PROVIDERS = {
 type WebSearchProvider = keyof typeof WEB_SEARCH_PROVIDERS;
 const DEFAULT_OPENCLAW_OTEL_ENDPOINT = "http://host.openshell.internal:4318";
 const DEFAULT_OPENCLAW_OTEL_SERVICE_NAME = "openclaw-gateway";
+// Runtime-facing IDs declared by the built-in messaging manifests. Package
+// selection remains manifest-derived in messaging-build-applier.mts; this
+// paired contract keeps each installed/bundled plugin bound to the channel key
+// that must remain disabled in a neutral managed image.
+export const MANAGED_IMAGE_OPENCLAW_MESSAGING_CAPABILITIES = [
+  { channelId: "telegram", pluginId: "telegram" },
+  { channelId: "discord", pluginId: "discord" },
+  { channelId: "openclaw-weixin", pluginId: "openclaw-weixin" },
+  { channelId: "slack", pluginId: "slack" },
+  { channelId: "whatsapp", pluginId: "whatsapp" },
+  { channelId: "msteams", pluginId: "msteams" },
+  { channelId: "googlechat", pluginId: "googlechat" },
+] as const;
+// OpenClaw also ships channel plugins outside NemoClaw's currently supported
+// messaging manifests. Keep those bundled entrypoints explicitly inert without
+// representing them as activatable managed-image capabilities.
+export const MANAGED_IMAGE_OPENCLAW_BUNDLED_INERT_CAPABILITIES = [
+  { channelId: "imessage", pluginId: "imessage" },
+] as const;
+const MANAGED_IMAGE_OPENCLAW_NEUTRAL_CAPABILITIES = [
+  ...MANAGED_IMAGE_OPENCLAW_MESSAGING_CAPABILITIES,
+  ...MANAGED_IMAGE_OPENCLAW_BUNDLED_INERT_CAPABILITIES,
+] as const;
+const MANAGED_IMAGE_OPENCLAW_PLUGIN_IDS = [
+  ...MANAGED_IMAGE_OPENCLAW_NEUTRAL_CAPABILITIES.map(({ pluginId }) => pluginId),
+  "diagnostics-otel",
+  "brave",
+  "tavily",
+] as const;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SCRIPT_DIR = dirname(SCRIPT_PATH);
 
@@ -638,6 +668,29 @@ function coerceCompatDict(value: unknown): JsonObject {
   throw new Error("NEMOCLAW_INFERENCE_COMPAT_B64 must decode to a JSON object or null");
 }
 
+const REASONING_EFFORT_VALUES = ["low", "medium", "high"];
+const REASONING_EFFORT_DEFAULT = "default";
+const REASONING_EFFORT_PROVIDER = "compatible-endpoint";
+
+// OpenClaw merges params.extra_body into openai-completions request bodies, so
+// this is the config-level route to a reasoning_effort the endpoint receives.
+function buildReasoningEffortParams(env: Env): JsonObject {
+  const raw = (env.NEMOCLAW_REASONING_EFFORT || "").trim().toLowerCase();
+  const upstreamProvider = (env.NEMOCLAW_UPSTREAM_PROVIDER || "").trim();
+  if (!raw || raw === REASONING_EFFORT_DEFAULT) return {};
+  if (upstreamProvider !== REASONING_EFFORT_PROVIDER) return {};
+  if (!REASONING_EFFORT_VALUES.includes(raw)) {
+    throw new Error(
+      `NEMOCLAW_REASONING_EFFORT must be one of: ${[
+        ...REASONING_EFFORT_VALUES,
+        REASONING_EFFORT_DEFAULT,
+      ].join(", ")}`,
+    );
+  }
+  if ((env.NEMOCLAW_INFERENCE_API as string) !== "openai-completions") return {};
+  return { params: { extra_body: { reasoning_effort: raw } } };
+}
+
 // Canonical primary-agent entry. Always written first into agents.list, always
 // flagged default: true. Pinning the slot here prevents the extra-agents env
 // from displacing the primary agent: OpenClaw's resolveDefaultAgentId falls
@@ -1152,7 +1205,7 @@ export function buildConfig(env: Env = process.env): JsonObject {
   ) {
     chatUiUrl = `http://127.0.0.1:${gatewayPort}`;
   }
-  const providerKey = env.NEMOCLAW_PROVIDER_KEY as string;
+  const providerKey = (env.NEMOCLAW_INFERENCE_PROVIDER_ID || env.NEMOCLAW_PROVIDER_KEY) as string;
   const primaryModelRef = env.NEMOCLAW_PRIMARY_MODEL_REF as string;
   const inferenceBaseUrl = env.NEMOCLAW_INFERENCE_BASE_URL as string;
   const inferenceApi = env.NEMOCLAW_INFERENCE_API as string;
@@ -1161,6 +1214,7 @@ export function buildConfig(env: Env = process.env): JsonObject {
   const toolDisclosure = readToolDisclosureEnv(env);
 
   const reasoning = (env.NEMOCLAW_REASONING || "false") === "true";
+  const reasoningEffortParams = buildReasoningEffortParams(env);
   const inferenceInputs = (env.NEMOCLAW_INFERENCE_INPUTS || "text")
     .split(",")
     .map((value) => value.trim())
@@ -1302,6 +1356,7 @@ export function buildConfig(env: Env = process.env): JsonObject {
       id: model,
       name: primaryModelRef,
       reasoning,
+      ...reasoningEffortParams,
       input: inferenceInputs,
       cost: {
         input: 0,
@@ -1337,6 +1392,7 @@ export function buildConfig(env: Env = process.env): JsonObject {
       id: secondaryModelId,
       name: ref,
       reasoning,
+      ...reasoningEffortParams,
       input: inferenceInputs,
       cost: {
         input: 0,
@@ -1353,6 +1409,7 @@ export function buildConfig(env: Env = process.env): JsonObject {
       baseUrl: inferenceBaseUrl,
       apiKey: "unused",
       api: inferenceApi,
+      timeoutSeconds: agentTimeout,
       models: providerModels,
     },
   };
@@ -1360,6 +1417,15 @@ export function buildConfig(env: Env = process.env): JsonObject {
   const pluginEntries: JsonObject = {
     bonjour: { enabled: false },
   };
+  const managedImageCapabilityUnion = readBooleanBuildFlag(
+    env,
+    "NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION",
+  );
+  if (managedImageCapabilityUnion) {
+    for (const pluginId of MANAGED_IMAGE_OPENCLAW_PLUGIN_IDS) {
+      pluginEntries[pluginId] = { enabled: false };
+    }
+  }
   const openclawOtel = buildOpenClawOtelConfig(env);
   if (openclawOtel) {
     pluginEntries["diagnostics-otel"] = { enabled: true };
@@ -1405,13 +1471,20 @@ export function buildConfig(env: Env = process.env): JsonObject {
     agentDefaults.compaction = managedInferenceCompaction;
   }
 
+  const channels: JsonObject = { defaults: {} };
+  if (managedImageCapabilityUnion) {
+    for (const { channelId } of MANAGED_IMAGE_OPENCLAW_NEUTRAL_CAPABILITIES) {
+      channels[channelId] = { enabled: false };
+    }
+  }
+
   const config: JsonObject = {
     agents: {
       defaults: agentDefaults,
       list: buildAgentsList(extraAgents, extraAgentsPayload.main),
     },
     models: { mode: "merge", providers },
-    channels: { defaults: {} },
+    channels,
     tools: openclawTools,
     update: { checkOnStart: false },
     ...(securityAuditSuppressions.length > 0
@@ -1462,6 +1535,9 @@ export function buildConfig(env: Env = process.env): JsonObject {
   const tools = config.tools;
   tools.web ??= {};
   tools.web.fetch = { enabled: true, useTrustedEnvProxy: true };
+  if (managedImageCapabilityUnion) {
+    tools.web.search = { enabled: false };
+  }
 
   if (env.NEMOCLAW_WEB_SEARCH_ENABLED === "1") {
     // OpenClaw 2026.5.x keeps provider-owned credentials under

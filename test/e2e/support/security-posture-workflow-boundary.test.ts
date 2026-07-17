@@ -27,10 +27,30 @@ function validateCentralWorkflowMutation(mutate: (source: string) => string): st
 }
 
 describe("security posture workflow boundary", () => {
+  it("requires the validated helper for the templated live test path", () => {
+    const workflow = readSecurityPostureWorkflow();
+    const job = (workflow.jobs as Record<string, Record<string, unknown>>)["security-posture"];
+    const run = (job.steps as Array<Record<string, unknown>>).find(
+      (step) => step.name === "Run security posture live Vitest test",
+    )!;
+    run.run = [
+      "set -euo pipefail",
+      'npx vitest run --project e2e-live "${{ matrix.test_file }}"',
+    ].join("\n");
+
+    const errors = validateSecurityPostureWorkflow(workflow);
+    expect(errors).toContain(
+      "security-posture step 'Run security posture live Vitest test' must run: tools/e2e/live-vitest-invocation.mts run",
+    );
+    expect(errors).toContain(
+      "security-posture step 'Run security posture live Vitest test' must run: --test-path \"${{ matrix.test_file }}\"",
+    );
+  });
+
   it("rejects missing agent coverage, mode drift, and broadly scoped credentials", () => {
     const hermesMatrixEntry = [
       "          - agent: hermes",
-      "            sandbox_name: e2e-hermes-security-posture",
+      "            sandbox_name: e2e-hm-security",
       "            test_file: test/e2e/live/hermes-e2e.test.ts",
       "",
     ].join("\n");
@@ -46,10 +66,11 @@ describe("security posture workflow boundary", () => {
     const workflow = readSecurityPostureWorkflow();
     const job = (workflow.jobs as Record<string, Record<string, unknown>>)["security-posture"];
     const env = job.env as Record<string, unknown>;
-    job["runs-on"] = "self-hosted";
     job["timeout-minutes"] = 30;
     (job.strategy as Record<string, unknown>)["fail-fast"] = true;
     delete env.NEMOCLAW_E2E_SECURITY_POSTURE;
+    delete env.NEMOCLAW_E2E_EXPECT_OPENSHELL_SPLIT_PROCESS;
+    env.NEMOCLAW_E2E_EXPECT_NON_ROOT_ENTRYPOINT = "1";
     env.E2E_ARTIFACT_DIR = "/tmp/security-posture";
     job.permissions = { contents: "write" };
     env.NVIDIA_INFERENCE_API_KEY = "${{ secrets.NVIDIA_INFERENCE_API_KEY }}";
@@ -68,10 +89,15 @@ describe("security posture workflow boundary", () => {
     expect(install).toBeTruthy();
     install!.run = "bash scripts/install-openshell.sh";
     const errors = validateSecurityPostureWorkflow(workflow);
-    expect(errors).toContain("security-posture must run on ubuntu-latest");
     expect(errors).toContain("security-posture must retain its 75 minute two-agent budget");
     expect(errors).toContain("security-posture matrix must keep fail-fast disabled");
     expect(errors).toContain("security-posture must set NEMOCLAW_E2E_SECURITY_POSTURE=1");
+    expect(errors).toContain(
+      "security-posture must set NEMOCLAW_E2E_EXPECT_OPENSHELL_SPLIT_PROCESS=1",
+    );
+    expect(errors).toContain(
+      "security-posture must not set retired NEMOCLAW_E2E_EXPECT_NON_ROOT_ENTRYPOINT",
+    );
     expect(errors).toContain(
       "security-posture must set E2E_ARTIFACT_DIR=${{ github.workspace }}/e2e-artifacts/live/security-posture-${{ matrix.agent }}",
     );
@@ -84,6 +110,17 @@ describe("security posture workflow boundary", () => {
     );
     expect(errors).toContain(
       "security-posture step 'Install OpenShell CLI' must run: -u DOCKER_CONFIG",
+    );
+  });
+
+  it("rejects split-process posture flag drift", () => {
+    const workflow = readSecurityPostureWorkflow();
+    const job = (workflow.jobs as Record<string, Record<string, unknown>>)["security-posture"];
+    const env = job.env as Record<string, unknown>;
+    env.NEMOCLAW_E2E_EXPECT_OPENSHELL_SPLIT_PROCESS = "0";
+
+    expect(validateSecurityPostureWorkflow(workflow)).toContain(
+      "security-posture must set NEMOCLAW_E2E_EXPECT_OPENSHELL_SPLIT_PROCESS=1",
     );
   });
 });

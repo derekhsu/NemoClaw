@@ -17,7 +17,7 @@ export const PROXY_SCRIPT = path.resolve(
   import.meta.dirname,
   "..",
   "scripts",
-  "ollama-auth-proxy.js",
+  "ollama-auth-proxy.mts",
 );
 const proxyOwners = new WeakMap<ChildProcess, ChildProcessOwner>();
 
@@ -28,6 +28,7 @@ export interface BackendCapture {
 }
 
 export type StartProxyOptions = {
+  backendUrl?: string;
   onSpawn?: (child: ChildProcess) => void;
   readinessPort?: number;
   readinessTimeoutMs?: number;
@@ -58,6 +59,11 @@ export function startBackend(): Promise<{
       resolve({ server, port: (server.address() as AddressInfo).port, captured });
     });
   });
+}
+
+export function closeServer(server: http.Server | undefined): Promise<void> {
+  if (!server) return Promise.resolve();
+  return new Promise((resolve) => server.close(() => resolve()));
 }
 
 /** Grab an ephemeral free TCP port, then release it for the proxy to bind. */
@@ -148,6 +154,7 @@ export async function startProxy(
       OLLAMA_PROXY_TOKEN: token,
       OLLAMA_PROXY_PORT: String(proxyPort),
       OLLAMA_BACKEND_PORT: String(backendPort),
+      ...(options.backendUrl ? { OLLAMA_BACKEND_URL: options.backendUrl } : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -217,6 +224,7 @@ export function request(
           body += chunk;
         });
         res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on("error", reject);
       },
     );
     req.on("error", reject);

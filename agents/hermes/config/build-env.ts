@@ -9,6 +9,9 @@ import { isObjectRecord } from "./object-record.ts";
 
 export type HermesWebSearchProvider = "tavily";
 
+/** Minimum context window Hermes accepts for generated configuration. */
+export const MIN_HERMES_CONTEXT_WINDOW = 64_000;
+
 export type HermesBuildSettings = {
   model: string;
   baseUrl: string;
@@ -19,6 +22,7 @@ export type HermesBuildSettings = {
   contextWindow: number | null;
   toolDisclosure: "progressive" | "direct";
   webSearchProvider: HermesWebSearchProvider | null;
+  managedImageCapabilityUnion: boolean;
   messagingCredentialPlaceholders: Array<{
     envKey: string;
     placeholder: string;
@@ -29,6 +33,7 @@ export type HermesBuildSettings = {
   };
 };
 
+/** Read and validate the environment consumed by the Hermes config generator. */
 export function readHermesBuildSettings(env: NodeJS.ProcessEnv): HermesBuildSettings {
   const model = readRequiredEnv(env, "NEMOCLAW_MODEL");
   const baseUrl = readRequiredEnv(env, "NEMOCLAW_INFERENCE_BASE_URL");
@@ -36,12 +41,20 @@ export function readHermesBuildSettings(env: NodeJS.ProcessEnv): HermesBuildSett
   return {
     model,
     baseUrl,
-    providerKey: env.NEMOCLAW_PROVIDER_KEY || "custom",
-    upstreamProvider: env.NEMOCLAW_UPSTREAM_PROVIDER || env.NEMOCLAW_PROVIDER_KEY || "custom",
+    providerKey: env.NEMOCLAW_INFERENCE_PROVIDER_ID || env.NEMOCLAW_PROVIDER_KEY || "custom",
+    upstreamProvider:
+      env.NEMOCLAW_UPSTREAM_PROVIDER ||
+      env.NEMOCLAW_INFERENCE_PROVIDER_ID ||
+      env.NEMOCLAW_PROVIDER_KEY ||
+      "custom",
     inferenceApi: env.NEMOCLAW_INFERENCE_API || "",
     contextWindow: readContextWindow(env),
     toolDisclosure: readToolDisclosureEnv(env),
     webSearchProvider: readWebSearchProvider(env),
+    managedImageCapabilityUnion: readBooleanBuildFlag(
+      env,
+      "NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION",
+    ),
     messagingCredentialPlaceholders: readMessagingCredentialPlaceholders(env),
     managedToolGateways: {
       brokerEnabled: env.NEMOCLAW_HERMES_TOOL_GATEWAY_BROKER === "1",
@@ -50,14 +63,32 @@ export function readHermesBuildSettings(env: NodeJS.ProcessEnv): HermesBuildSett
   };
 }
 
-// Parse NEMOCLAW_CONTEXT_WINDOW as a positive integer of tokens. Empty, absent,
-// or malformed values return null so the generated config omits context_length
-// and Hermes keeps auto-detecting from the endpoint's /v1/models. See #6177.
+function readBooleanBuildFlag(env: NodeJS.ProcessEnv, name: string): boolean {
+  const value = env[name] ?? "0";
+  if (value !== "0" && value !== "1") {
+    throw new Error(`${name} must be "0" or "1"`);
+  }
+  return value === "1";
+}
+
+/**
+ * Parse `NEMOCLAW_CONTEXT_WINDOW` for Hermes config generation.
+ *
+ * Empty, absent, or malformed values return null so Hermes keeps auto-detecting
+ * from the endpoint's `/v1/models`; explicit values below the Hermes floor fail
+ * before writing an unusable config. See #6177.
+ */
 function readContextWindow(env: NodeJS.ProcessEnv): number | null {
   const raw = (env.NEMOCLAW_CONTEXT_WINDOW || "").trim();
   if (!/^[1-9][0-9]*$/.test(raw)) return null;
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return null;
+  if (parsed < MIN_HERMES_CONTEXT_WINDOW) {
+    throw new Error(
+      `Hermes NEMOCLAW_CONTEXT_WINDOW must be at least ${MIN_HERMES_CONTEXT_WINDOW} tokens, got ${parsed}`,
+    );
+  }
+  return parsed;
 }
 
 function readWebSearchProvider(env: NodeJS.ProcessEnv): HermesWebSearchProvider | null {

@@ -106,6 +106,42 @@ describe("prepareSandboxDockerfilePatch", () => {
     });
   });
 
+  it("passes rebuild-preserved environment assignments to the Dockerfile patch (#7803)", async () => {
+    const patchStagedDockerfile = vi.fn();
+    const rebuildPreservedEnv = [
+      {
+        path: ".env",
+        assignments: ["SLACK_HOME_CHANNEL=C0123"],
+      },
+    ];
+
+    await prepareSandboxDockerfilePatch({
+      agent: { name: "hermes", displayName: "Hermes" } as never,
+      fromDockerfile: null,
+      sandboxBaseImage: resolutionMetadata.imageName,
+      sandboxBaseTag: "latest",
+      stagedDockerfile: "/tmp/Dockerfile",
+      model: "model-a",
+      chatUiUrl: "http://127.0.0.1:7000",
+      provider: null,
+      preferredInferenceApi: null,
+      webSearchConfig: null,
+      rebuildPreservedEnv,
+      hermesToolGateways: [],
+      sandboxGpuConfig,
+      deps: {
+        isLinuxDockerDriverGatewayEnabled: vi.fn(() => false),
+        enforceDockerGpuPatchPreserveNetwork: vi.fn(async () => false),
+        patchStagedDockerfile,
+        now: () => 1,
+      },
+    });
+
+    expect(patchStagedDockerfile.mock.calls[0]?.[11]).toMatchObject({
+      rebuildPreservedEnv,
+    });
+  });
+
   it("pins a resolved base image and patches the staged Dockerfile with the build id", async () => {
     const log = vi.fn();
     const patchStagedDockerfile = vi.fn();
@@ -119,6 +155,7 @@ describe("prepareSandboxDockerfilePatch", () => {
       model: "model-a",
       chatUiUrl: "http://127.0.0.1:7000",
       provider: "nvidia-prod",
+      compatibleEndpointReasoning: "true",
       preferredInferenceApi: "chat",
       webSearchConfig: { fetchEnabled: true },
       hermesToolGateways: ["github"],
@@ -170,6 +207,7 @@ describe("prepareSandboxDockerfilePatch", () => {
       ["github"],
       {
         buildIdPolicy: "preserve",
+        compatibleEndpointReasoning: "true",
         toolDisclosure: "progressive",
         trustedManagedDockerfile: true,
         wslDashboardExposure: false,
@@ -248,6 +286,42 @@ describe("prepareSandboxDockerfilePatch", () => {
     });
   });
 
+  it("stamps pre-resolved provenance on managed agent Dockerfiles (#7144)", async () => {
+    const patchStagedDockerfile = vi.fn();
+    await prepareSandboxDockerfilePatch({
+      agent: { name: "hermes" } as any,
+      fromDockerfile: null,
+      sandboxBaseImage: "ghcr.io/nvidia/nemoclaw/hermes-sandbox-base",
+      sandboxBaseTag: "latest",
+      stagedDockerfile: "/tmp/Dockerfile",
+      model: "model-a",
+      chatUiUrl: "http://127.0.0.1:7000",
+      provider: null,
+      preferredInferenceApi: null,
+      webSearchConfig: null,
+      hermesToolGateways: [],
+      sandboxGpuConfig,
+      preResolvedBaseImageMetadata: resolutionMetadata,
+      deps: {
+        isLinuxDockerDriverGatewayEnabled: vi.fn(() => true),
+        isWsl: vi.fn(() => false),
+        pullAndResolveBaseImageDigest: vi.fn(),
+        dockerImageInspect: vi.fn(),
+        enforceDockerGpuPatchPreserveNetwork: vi.fn(async () => false),
+        patchStagedDockerfile,
+        now: () => 1,
+      },
+    });
+
+    expect(patchStagedDockerfile.mock.calls[0]?.[11]).toEqual({
+      buildIdPolicy: "preserve",
+      toolDisclosure: "progressive",
+      trustedManagedDockerfile: true,
+      requireToolDisclosureContract: false,
+      baseImageResolutionMetadata: resolutionMetadata,
+    });
+  });
+
   it("forwards the DCode auto-approval mode only as a Dockerfile patch option (#6478)", async () => {
     const patchStagedDockerfile = vi.fn();
     await prepareSandboxDockerfilePatch({
@@ -290,6 +364,7 @@ describe("prepareSandboxDockerfilePatch", () => {
       fromDockerfile: "/repo/Containerfile",
       sandboxBaseImage: "ghcr.io/nvidia/nemoclaw/sandbox-base",
       sandboxBaseTag: "latest",
+      preResolvedBaseImageMetadata: resolutionMetadata,
       stagedDockerfile: "/tmp/Dockerfile",
       model: "model-a",
       chatUiUrl: "http://127.0.0.1:7000",

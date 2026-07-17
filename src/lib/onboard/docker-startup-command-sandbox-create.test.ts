@@ -33,6 +33,7 @@ function makeDeps() {
     runCaptureOpenshell: vi.fn(() => ""),
     sleep: vi.fn(),
     dockerCapture: vi.fn(() => ""),
+    detectSandboxFallbackDns: vi.fn(() => null),
   };
 }
 
@@ -67,7 +68,7 @@ describe("Docker startup-command sandbox creation", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the default startup-command recreation path for non-GPU Hermes containers", () => {
+  it("uses the startup-command recreation path with DCode's exact resource limits", async () => {
     const dockerCaptureOutput: Record<string, string> = {
       ps: "old-container-id\n",
       inspect: JSON.stringify([inspectFixture()]),
@@ -90,6 +91,10 @@ describe("Docker startup-command sandbox creation", () => {
       persistStartupCommand: true,
       sandboxName: "alpha",
       openshellSandboxCommand: ["env", "nemoclaw-start"],
+      requiredUlimits: [
+        { name: "nproc", soft: 512, hard: 512 },
+        { name: "nofile", soft: 65_536, hard: 65_536 },
+      ],
       timeoutSecs: 60,
       deps,
       overrides: {
@@ -97,11 +102,18 @@ describe("Docker startup-command sandbox creation", () => {
       },
     });
 
-    patch.ensureApplied();
+    await patch.ensureApplied();
 
     expect(recreatePatch).not.toHaveBeenCalled();
     expect(dockerRunDetached.mock.calls[0]?.[0]).toEqual(
-      expect.arrayContaining(["--env", "OPENSHELL_SANDBOX_COMMAND=env nemoclaw-start"]),
+      expect.arrayContaining([
+        "--env",
+        "OPENSHELL_SANDBOX_COMMAND=env nemoclaw-start",
+        "--ulimit",
+        "nproc=512:512",
+        "--ulimit",
+        "nofile=65536:65536",
+      ]),
     );
     expect(patch.selectedMode()?.kind).toBe("startup-command");
   });
@@ -144,7 +156,102 @@ describe("Docker startup-command sandbox creation", () => {
     expect(context.rolledBack).toBe(true);
   });
 
-  it("reports startup-command creation failures through the composed patch boundary", () => {
+  it("defers a driver-owned managed cutover until the authoritative caller commits", async () => {
+    const deps = makeDeps();
+    let releaseCommit = () => {};
+    const commit = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCommit = resolve;
+        }),
+    );
+    const rollback = vi.fn(async () => {});
+    const patch = createDockerGpuSandboxCreatePatch({
+      route: "native",
+      externalRecreation: true,
+      sandboxName: "alpha",
+      timeoutSecs: 60,
+      deps,
+    });
+    patch.attachManagedBootstrapCutover({
+      selectedMode: {
+        kind: "startup-command",
+        label: "managed bootstrap",
+        device: "",
+        args: [],
+      },
+      failureContext: { sandboxName: "alpha" },
+      commit,
+      rollback,
+    });
+    patch.maybeApplyDuringCreate();
+    await patch.ensureApplied();
+    patch.waitForSupervisorReconnectIfNeeded();
+    expect(commit).not.toHaveBeenCalled();
+    const firstCommit = patch.commitAfterReady();
+    const duplicateCommit = patch.commitAfterReady();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    releaseCommit();
+    await Promise.all([firstCommit, duplicateCommit]);
+  });
+
+  it("rolls back a driver-owned cutover before reporting commit failure", async () => {
+    const deps = makeDeps();
+    const events: string[] = [];
+    const commit = vi.fn(async () => {
+      events.push("commit");
+      throw new Error("receipt validation failed");
+    });
+    const rollback = vi.fn(async () => {
+      events.push("rollback");
+    });
+    const onPatchFailureExit = vi.fn(() => {
+      events.push("exit");
+    });
+    const patch = createDockerGpuSandboxCreatePatch({
+      route: "native",
+      externalRecreation: true,
+      sandboxName: "alpha",
+      timeoutSecs: 60,
+      deps,
+      overrides: { onPatchFailureExit },
+    });
+    patch.attachManagedBootstrapCutover({
+      selectedMode: {
+        kind: "startup-command",
+        label: "managed bootstrap",
+        device: "",
+        args: [],
+      },
+      failureContext: {
+        sandboxName: "alpha",
+        oldContainerId: "held-container",
+        newContainerId: "replacement-container",
+      },
+      commit,
+      rollback,
+    });
+
+    await expect(patch.commitAfterReady()).rejects.toThrow("receipt validation failed");
+
+    expect(events).toEqual(["commit", "rollback", "exit"]);
+    expect(onPatchFailureExit).toHaveBeenCalledWith(
+      "alpha",
+      expect.objectContaining({ message: "receipt validation failed" }),
+      expect.objectContaining({
+        context: expect.objectContaining({
+          oldContainerId: "held-container",
+          newContainerId: "replacement-container",
+          rolledBack: true,
+        }),
+      }),
+    );
+    await patch.rollbackManagedStartupAfterCreateFailure();
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("reports startup-command creation failures through the composed patch boundary", async () => {
     const deps = makeDeps();
     const onPatchFailureExit = vi.fn();
     const patch = createDockerGpuSandboxCreatePatch({
@@ -165,7 +272,7 @@ describe("Docker startup-command sandbox creation", () => {
 
     patch.maybeApplyDuringCreate();
     expect(patch.createFailureMessage()).toMatch(/startup-command patch failed/);
-    patch.exitOnPatchError();
+    await patch.exitOnPatchError();
     expect(onPatchFailureExit).toHaveBeenCalledWith(
       "alpha",
       expect.objectContaining({ message: "startup recreate failed" }),

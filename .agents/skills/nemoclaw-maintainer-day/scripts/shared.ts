@@ -24,6 +24,7 @@ export const RISKY_PATTERNS: RegExp[] = [
   /^nemoclaw\/src\/blueprint\//,
   /^nemoclaw-blueprint\//,
   /^\.github\/workflows\//,
+  /^\.agents\/skills\/nemoclaw-maintainer-day\/scripts\/check-gates\.ts$/,
   /\.prek\./,
   /policy/i,
   /ssrf/i,
@@ -82,9 +83,8 @@ export function ghJson(args: string[]): unknown {
 // Required CI checks
 // ---------------------------------------------------------------------------
 
-// Required merge-gate contexts after the staged E2E gate rollout. First-time
-// fork contributors may need a maintainer to click "Approve and run" before
-// pull_request checks execute. If any context is missing from
+// First-time fork contributors may need a maintainer to click "Approve and run" before
+// pull_request checks execute. If any required context is missing from
 // statusCheckRollup, CI cannot be considered green.
 export const REQUIRED_CHECK_NAMES: string[] = [
   "checks", // pr.yaml — lint, typecheck, test
@@ -92,7 +92,6 @@ export const REQUIRED_CHECK_NAMES: string[] = [
   "changes",
   "commit-lint", // commit-lint.yaml
   "dco-check", // dco-check.yaml
-  "E2E / PR Gate",
 ];
 
 // ---------------------------------------------------------------------------
@@ -104,6 +103,10 @@ export interface StatusCheck {
   __typename?: string;
   name?: string; // CheckRun field
   context?: string; // StatusContext field
+  workflowName?: string; // CheckRun workflow identity
+  startedAt?: string; // CheckRun/StatusContext RFC3339 timestamp
+  completedAt?: string; // CheckRun RFC3339 timestamp
+  detailsUrl?: string; // CheckRun workflow-run identity when Actions produced it
   status?: string; // CheckRun: COMPLETED, IN_PROGRESS, QUEUED, etc.
   conclusion?: string; // CheckRun: SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
   state?: string; // StatusContext: SUCCESS, FAILURE, PENDING, ERROR

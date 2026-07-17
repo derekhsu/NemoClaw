@@ -11,13 +11,15 @@ import os from "node:os";
 import nodePath from "node:path";
 import { detectContainerRuntimeFromDockerInfo } from "../adapters/docker/runtime";
 import { createBearerAuthConfig } from "../adapters/http/auth-config";
+import { CONTAINER_REACHABILITY_IMAGE } from "../adapters/http/container-curl-probe";
 import { buildValidatedCurlCommandArgs } from "../adapters/http/curl-args";
 import type { CurlProbeOptions, CurlProbeResult } from "../adapters/http/probe";
 import { runCurlProbe } from "../adapters/http/probe";
-import { OLLAMA_PORT, OLLAMA_PROXY_PORT, VLLM_PORT } from "../core/ports";
+import { GATEWAY_PORT, OLLAMA_PORT, OLLAMA_PROXY_PORT, VLLM_PORT } from "../core/ports";
 import { sleepSeconds } from "../core/wait";
 import { containerCanReachHostLoopback, isWsl } from "../platform";
 import { type CaptureResult, runCapture, runCaptureEx, shellQuote } from "../runner";
+import { nemoclawStateRoot } from "../state/state-root";
 import { buildSubprocessEnv } from "../subprocess-env";
 import { detectNvidiaPlatform } from "./nim";
 import {
@@ -29,16 +31,29 @@ import {
   OLLAMA_MODEL_REGISTRY,
   SMALLEST_OLLAMA_MODEL_TAG,
 } from "./ollama-model-registry";
-import type { OllamaRuntimeModelStatus } from "./ollama-runtime-context";
+import type {
+  ApplyOllamaRuntimeContextWindowOptions,
+  ApplyOllamaRuntimeContextWindowResult,
+  OllamaRuntimeModelStatus,
+} from "./ollama-runtime-context";
 import {
   applyOllamaRuntimeContextWindow as applyOllamaRuntimeContextWindowWithHost,
+  getOllamaContextWindowFloorForAgent,
   MAX_AUTODETECTED_OLLAMA_CONTEXT_WINDOW,
+  MIN_HERMES_OLLAMA_CONTEXT_WINDOW,
   parsePositiveInteger,
   probeOllamaRuntimeModelStatus as probeOllamaRuntimeModelStatusWithHost,
   resetOllamaRuntimeContextWindowAutoState,
   resolveOllamaRuntimeContextWindow as resolveOllamaRuntimeContextWindowWithHost,
 } from "./ollama-runtime-context";
+import {
+  type RecoveredManagedClusterVllmEndpoint,
+  recoverInstalledManagedClusterVllmEndpoint,
+} from "./serving/managed-cluster-runtime-receipt";
+import { recoverHostLocalManagedVllmEndpoint } from "./serving/vllm-host-local-lifecycle";
+import { loadManagedVllmApiKey } from "./vllm-api-key";
 import { applyVllmRuntimeContextWindow as applyVllmRuntimeContextWindowFromModels } from "./vllm-runtime-context";
+import { getDualStationManagedVllmBaseUrl } from "./vllm-station-cluster-lifecycle";
 
 export type { OllamaRuntimeModelStatus } from "./ollama-runtime-context";
 
@@ -61,7 +76,8 @@ export function resetOllamaContainerPortCache(): void {
 
 export const HOST_GATEWAY_URL = "http://host.openshell.internal";
 export const LOCAL_INFERENCE_SANDBOX_HOST_URL_ENV = "NEMOCLAW_LOCAL_INFERENCE_SANDBOX_HOST_URL";
-export const CONTAINER_REACHABILITY_IMAGE = "curlimages/curl:8.10.1";
+export { CONTAINER_REACHABILITY_IMAGE } from "../adapters/http/container-curl-probe";
+
 // These tags are convenience aliases for callers that want to refer to a
 // specific bootstrap model by role rather than by string. The canonical
 // metadata (memory requirements, download sizes) lives in
@@ -90,13 +106,26 @@ export {
 
 export type RunCaptureExFn = (cmd: string[]) => CaptureResult;
 
-// Hosts that the WSL-side onboard CLI tries when probing Ollama. Native Linux
-// and macOS only ever reach Ollama on the local loopback. WSL with Docker
-// Desktop can also reach a Windows-host Ollama through the docker-desktop
-// integration's `host.docker.internal` alias when that host explicitly exposes
-// Ollama outside Windows loopback.
+// Hosts that local-provider discovery may try when probing Ollama. The Windows
+// onboarding path separately checks host.docker.internal from Docker Desktop's
+// network context because the alias may not resolve from the WSL host.
 export const OLLAMA_LOCALHOST = "127.0.0.1";
 export const OLLAMA_HOST_DOCKER_INTERNAL = "host.docker.internal";
+
+/** Build the credential-free Docker Desktop probe for Windows-host Ollama. */
+export function getWindowsHostOllamaDockerReachabilityArgs(): string[] {
+  return [
+    "run",
+    "--rm",
+    CONTAINER_REACHABILITY_IMAGE,
+    "-sf",
+    "--connect-timeout",
+    "2",
+    "--max-time",
+    "5",
+    `http://${OLLAMA_HOST_DOCKER_INTERNAL}:${OLLAMA_PORT}/api/tags`,
+  ];
+}
 
 let _resolvedOllamaHost: string | null = null;
 
@@ -228,6 +257,8 @@ export interface LocalProviderHealthStatus {
 }
 
 export interface LocalProviderHealthProbeOptions {
+  /** Configured runtime model that must be present in the provider inventory. */
+  model?: string | null;
   runCurlProbeImpl?: (argv: string[], opts?: CurlProbeOptions) => CurlProbeResult;
   /**
    * Lets callers that perform their own Ollama auth-proxy check avoid the
@@ -237,14 +268,23 @@ export interface LocalProviderHealthProbeOptions {
   skipOllamaAuthProxySubprobe?: boolean;
   /**
    * Reads the persisted Ollama auth-proxy bearer token. Injectable for tests.
-   * Default reads from `~/.nemoclaw/ollama-proxy-token` (written by
-   * inference/ollama/proxy.ts during onboard).
+   * Default reads from `ollama-proxy-token` in the selected gateway's host
+   * state root (written by inference/ollama/proxy.ts during onboard).
    */
   loadOllamaProxyTokenImpl?: () => string | null;
+  /** Reads the host-global managed vLLM key. Injectable so tests stay deterministic. */
+  loadVllmApiKeyImpl?: () => string | null;
+  /** Recovers a managed Station endpoint while validating the injected key. */
+  getManagedVllmBaseUrlImpl?: ManagedStationVllmBaseUrlResolver;
+  /** Recovers a receipt-owned managed cluster endpoint. */
+  recoverManagedClusterVllmEndpointImpl?: ManagedClusterVllmEndpointResolver;
 }
 
 function defaultLoadOllamaProxyToken(): string | null {
-  const tokenPath = nodePath.join(os.homedir(), ".nemoclaw", "ollama-proxy-token");
+  const tokenPath = nodePath.join(
+    nemoclawStateRoot(os.homedir(), GATEWAY_PORT),
+    "ollama-proxy-token",
+  );
   try {
     if (fs.existsSync(tokenPath)) {
       const token = fs.readFileSync(tokenPath, "utf-8").trim();
@@ -258,6 +298,52 @@ function defaultLoadOllamaProxyToken(): string | null {
 
 function runLocalCurlProbe(argv: string[], opts: CurlProbeOptions = {}): CurlProbeResult {
   return runCurlProbe(argv, { ...opts, env: buildSubprocessEnv(), replaceEnv: true });
+}
+
+export interface VllmModelsProbeOptions {
+  runCurlProbeImpl?: (argv: string[], opts?: CurlProbeOptions) => CurlProbeResult;
+}
+
+/** Query vLLM's authoritative model inventory without exposing its bearer in process argv. */
+export function probeVllmModels(
+  baseUrl: string,
+  apiKey: string,
+  options: VllmModelsProbeOptions = {},
+): CurlProbeResult {
+  const runCurlProbeImpl = options.runCurlProbeImpl ?? runLocalCurlProbe;
+  let authConfig: ReturnType<typeof createBearerAuthConfig> | undefined;
+  try {
+    authConfig = createBearerAuthConfig(apiKey, { prefix: "nemoclaw-vllm-auth" });
+    return runCurlProbeImpl(
+      [
+        "-sS",
+        "--connect-timeout",
+        "3",
+        "--max-time",
+        "5",
+        ...authConfig.args,
+        `${baseUrl.replace(/\/+$/, "")}/models`,
+      ],
+      {
+        trustedConfigFiles: authConfig.trustedConfigFiles,
+        // Managed dual-Station endpoints are recovered from owned container
+        // labels and use a direct-attached RFC1918 rail. Never delegate that
+        // request through an ambient HTTP proxy.
+        pinnedAddresses: [],
+      },
+    );
+  } catch {
+    return {
+      ok: false,
+      httpStatus: 0,
+      curlStatus: 1,
+      body: "",
+      stderr: "",
+      message: "Could not prepare the authenticated vLLM model probe.",
+    };
+  } finally {
+    authConfig?.cleanup();
+  }
 }
 
 // A 200 response on `/api/tags` alone is not enough to call Ollama healthy —
@@ -275,6 +361,37 @@ function isValidOllamaTagsResponseBody(body: string): boolean {
   } catch {
     return false;
   }
+}
+
+function modelInventory(provider: string, body: string): string[] | null {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const entries = provider === "ollama-local" ? parsed.models : parsed.data;
+    if (!Array.isArray(entries)) return null;
+    return entries.flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const record = entry as Record<string, unknown>;
+      const values = provider === "ollama-local" ? [record.name, record.model] : [record.id];
+      return values.filter((value): value is string => typeof value === "string" && value !== "");
+    });
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOllamaModel(value: string): string {
+  return value.endsWith(":latest") ? value.slice(0, -":latest".length) : value;
+}
+
+function inventoryContainsModel(provider: string, inventory: string[], model: string): boolean {
+  if (provider !== "ollama-local") return inventory.includes(model);
+  const expected = normalizeOllamaModel(model);
+  return inventory.some((candidate) => normalizeOllamaModel(candidate) === expected);
+}
+
+function sanitizeModelNameForDisplay(value: string): string {
+  const sanitized = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+  return sanitized.length > 120 ? `${sanitized.slice(0, 117)}...` : sanitized;
 }
 
 export function validateOllamaPortConfiguration(): ValidationResult {
@@ -306,22 +423,202 @@ function normalizeLocalInferenceHostUrl(raw: string | null | undefined): string 
   return null;
 }
 
-function getLocalInferenceSandboxHostUrl(): string {
+function configuredLocalInferenceHostUrl(hostUrl?: string | null): string | null {
   return (
-    normalizeLocalInferenceHostUrl(process.env[LOCAL_INFERENCE_SANDBOX_HOST_URL_ENV]) ||
-    HOST_GATEWAY_URL
+    normalizeLocalInferenceHostUrl(hostUrl) ||
+    normalizeLocalInferenceHostUrl(process.env[LOCAL_INFERENCE_SANDBOX_HOST_URL_ENV])
   );
+}
+
+type RecoveredManagedVllmBaseUrl =
+  | { readonly kind: "available"; readonly baseUrl: string | null }
+  | { readonly kind: "unavailable" };
+
+function recoveredManagedVllmBaseUrl(): RecoveredManagedVllmBaseUrl {
+  if (configuredLocalInferenceHostUrl()) return { kind: "available", baseUrl: null };
+  try {
+    return {
+      kind: "available",
+      baseUrl: getManagedVllmProviderBinding()?.baseUrl.replace(/\/v1\/?$/, "") ?? null,
+    };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+export interface ManagedVllmProviderBinding {
+  baseUrl: string;
+  apiKey: string;
+}
+
+type ManagedStationVllmBaseUrlResolver = (overrides?: {
+  loadApiKey?: () => string | null;
+  onManagedHeadObserved?: () => void;
+}) => string | null;
+
+type ManagedClusterVllmEndpointResolver = (options?: {
+  loadApiKey?: () => string | null;
+}) => Pick<RecoveredManagedClusterVllmEndpoint, "baseUrl" | "apiKey"> | null;
+
+type HostLocalManagedVllmEndpointResolver = (options?: {
+  loadApiKey?: () => string | null;
+}) => { baseUrl: string; apiKey: string } | null;
+
+export type ManagedVllmProviderState =
+  | { kind: "absent" }
+  | { kind: "invalid-auth"; reason: "missing" | "unsafe" | "mismatched" }
+  | ({ kind: "ready" } & ManagedVllmProviderBinding);
+
+export interface ManagedVllmProviderBindingOptions {
+  hostUrl?: string | null;
+  /** Compatibility seam for the Station lifecycle resolver. */
+  getManagedBaseUrlImpl?: ManagedStationVllmBaseUrlResolver;
+  loadApiKeyImpl?: () => string | null;
+  recoverManagedClusterVllmEndpointImpl?: ManagedClusterVllmEndpointResolver;
+  recoverHostLocalManagedVllmEndpointImpl?: HostLocalManagedVllmEndpointResolver;
+}
+
+function getManagedStationVllmProviderState(
+  options: ManagedVllmProviderBindingOptions,
+  loadApiKey: () => string | null,
+): ManagedVllmProviderState {
+  let keyRead = false;
+  let managedHeadObserved = false;
+  let apiKey: string | null = null;
+  let authFailure: "missing" | "unsafe" | null = null;
+  let managedBaseUrl: string | null;
+  try {
+    managedBaseUrl = (options.getManagedBaseUrlImpl ?? getDualStationManagedVllmBaseUrl)({
+      onManagedHeadObserved: () => {
+        managedHeadObserved = true;
+      },
+      loadApiKey: () => {
+        keyRead = true;
+        try {
+          apiKey = loadApiKey();
+          if (!apiKey) authFailure = "missing";
+          return apiKey;
+        } catch {
+          authFailure = "unsafe";
+          return null;
+        }
+      },
+    });
+  } catch (error) {
+    // A malformed key can make lifecycle fingerprint validation throw. Once
+    // key recovery began, treat every such failure as unsafe authentication;
+    // unrelated endpoint-inspection failures retain their existing behavior.
+    if (keyRead) return { kind: "invalid-auth", reason: "unsafe" };
+    throw error;
+  }
+
+  // Production recovery reports a structurally owned managed head before it
+  // validates fingerprint metadata. Test resolvers may still signal ownership
+  // by invoking the key reader, so only the absence of both signals permits the
+  // legacy single-host path.
+  if (!managedHeadObserved && !keyRead) return { kind: "absent" };
+  if (!managedBaseUrl || !apiKey) {
+    return { kind: "invalid-auth", reason: authFailure ?? "mismatched" };
+  }
+  return { kind: "ready", baseUrl: `${managedBaseUrl.replace(/\/+$/, "")}/v1`, apiKey };
+}
+
+/** Recover the one owned managed endpoint and credential as a validated state. */
+export function getManagedVllmProviderState(
+  options: ManagedVllmProviderBindingOptions = {},
+): ManagedVllmProviderState {
+  if (configuredLocalInferenceHostUrl(options.hostUrl)) return { kind: "absent" };
+
+  const loadApiKey = options.loadApiKeyImpl ?? loadManagedVllmApiKey;
+  let managedClusterAuthFailure: "missing" | "unsafe" | null = null;
+  let managedClusterEndpoint: Pick<
+    RecoveredManagedClusterVllmEndpoint,
+    "baseUrl" | "apiKey"
+  > | null;
+  try {
+    managedClusterEndpoint = (
+      options.recoverManagedClusterVllmEndpointImpl ?? recoverInstalledManagedClusterVllmEndpoint
+    )({
+      loadApiKey: () => {
+        try {
+          const apiKey = loadApiKey();
+          if (!apiKey) managedClusterAuthFailure = "missing";
+          return apiKey;
+        } catch {
+          managedClusterAuthFailure = "unsafe";
+          return null;
+        }
+      },
+    });
+  } catch (error) {
+    if (managedClusterAuthFailure) {
+      return { kind: "invalid-auth", reason: managedClusterAuthFailure };
+    }
+    throw error;
+  }
+
+  const stationState = getManagedStationVllmProviderState(options, loadApiKey);
+  const hostLocalEndpoint = options.recoverHostLocalManagedVllmEndpointImpl
+    ? options.recoverHostLocalManagedVllmEndpointImpl({ loadApiKey })
+    : options.getManagedBaseUrlImpl
+      ? null
+      : recoverHostLocalManagedVllmEndpoint({ loadApiKey });
+  const presentCount =
+    Number(Boolean(managedClusterEndpoint)) +
+    Number(Boolean(hostLocalEndpoint)) +
+    Number(stationState.kind !== "absent");
+  if (managedClusterEndpoint && stationState.kind !== "absent" && !hostLocalEndpoint) {
+    throw new Error(
+      "Both managed cluster and Station vLLM state are present; refusing to select either endpoint.",
+    );
+  }
+  if (presentCount > 1) {
+    throw new Error("Multiple managed vLLM runtimes are present; refusing to select an endpoint.");
+  }
+  if (hostLocalEndpoint) {
+    return {
+      kind: "ready",
+      baseUrl: `${hostLocalEndpoint.baseUrl.replace(/\/+$/, "")}/v1`,
+      apiKey: hostLocalEndpoint.apiKey,
+    };
+  }
+  if (!managedClusterEndpoint) return stationState;
+  return {
+    kind: "ready",
+    baseUrl: `${managedClusterEndpoint.baseUrl.replace(/\/+$/, "")}/v1`,
+    apiKey: managedClusterEndpoint.apiKey,
+  };
+}
+
+export function getManagedVllmProviderBinding(
+  options: ManagedVllmProviderBindingOptions = {},
+): ManagedVllmProviderBinding | null {
+  const state = getManagedVllmProviderState(options);
+  if (state.kind === "absent") return null;
+  if (state.kind === "invalid-auth") {
+    if (state.reason !== "missing") {
+      throw new Error("Managed vLLM authentication is unsafe or mismatched.");
+    }
+    throw new Error("Managed vLLM authentication is missing.");
+  }
+  return { baseUrl: state.baseUrl, apiKey: state.apiKey };
 }
 
 export function getLocalProviderBaseUrl(
   provider: string,
   options: { hostUrl?: string | null } = {},
 ): string | null {
-  const hostUrl =
-    normalizeLocalInferenceHostUrl(options.hostUrl) || getLocalInferenceSandboxHostUrl();
+  const configuredHostUrl = configuredLocalInferenceHostUrl(options.hostUrl);
+  const hostUrl = configuredHostUrl || HOST_GATEWAY_URL;
   switch (provider) {
-    case "vllm-local":
+    case "vllm-local": {
+      if (!configuredHostUrl) {
+        const managed = recoveredManagedVllmBaseUrl();
+        if (managed.kind === "unavailable") return null;
+        if (managed.baseUrl) return `${managed.baseUrl}/v1`;
+      }
       return `${hostUrl}:${VLLM_PORT}/v1`;
+    }
     case "ollama-local":
       // Containers reach Ollama through the auth proxy, not directly.
       return `${hostUrl}:${getOllamaContainerPort()}/v1`;
@@ -332,8 +629,11 @@ export function getLocalProviderBaseUrl(
 
 export function getLocalProviderValidationBaseUrl(provider: string): string | null {
   switch (provider) {
-    case "vllm-local":
-      return `http://127.0.0.1:${VLLM_PORT}/v1`;
+    case "vllm-local": {
+      const managed = recoveredManagedVllmBaseUrl();
+      if (managed.kind === "unavailable") return null;
+      return managed.baseUrl ? `${managed.baseUrl}/v1` : `http://127.0.0.1:${VLLM_PORT}/v1`;
+    }
     case "ollama-local":
       return `http://${getResolvedOllamaHost()}:${OLLAMA_PORT}/v1`;
     default:
@@ -343,8 +643,13 @@ export function getLocalProviderValidationBaseUrl(provider: string): string | nu
 
 export function getLocalProviderHealthEndpoint(provider: string): string | null {
   switch (provider) {
-    case "vllm-local":
-      return `http://127.0.0.1:${VLLM_PORT}/v1/models`;
+    case "vllm-local": {
+      const managed = recoveredManagedVllmBaseUrl();
+      if (managed.kind === "unavailable") return null;
+      return managed.baseUrl
+        ? `${managed.baseUrl}/v1/models`
+        : `http://127.0.0.1:${VLLM_PORT}/v1/models`;
+    }
     case "ollama-local":
       return `http://${getResolvedOllamaHost()}:${OLLAMA_PORT}/api/tags`;
     default:
@@ -352,8 +657,40 @@ export function getLocalProviderHealthEndpoint(provider: string): string | null 
   }
 }
 
+/** Lightweight endpoint used only to prove that the local service is reachable. */
+export function getLocalProviderAvailabilityEndpoint(provider: string): string | null {
+  if (provider === "vllm-local") {
+    const managed = recoveredManagedVllmBaseUrl();
+    if (managed.kind === "unavailable") return null;
+    if (managed.baseUrl) return `${managed.baseUrl}/health`;
+    return `http://127.0.0.1:${VLLM_PORT}/v1/models`;
+  }
+  return getLocalProviderHealthEndpoint(provider);
+}
+
+export function isLocalProviderProbeOutputHealthy(endpoint: string, output: string): boolean {
+  const normalized = output.trim();
+  if (!normalized || normalized === "000") return false;
+  return endpoint.endsWith("/health") ? normalized === "200" : true;
+}
+
 export function getLocalProviderHealthCheck(provider: string): string[] | null {
-  const endpoint = getLocalProviderHealthEndpoint(provider);
+  const endpoint = getLocalProviderAvailabilityEndpoint(provider);
+  if (provider === "vllm-local" && endpoint?.endsWith("/health")) {
+    return [
+      "curl",
+      "-sf",
+      "--connect-timeout",
+      "3",
+      "--max-time",
+      "5",
+      "--noproxy",
+      "*",
+      "--write-out",
+      "%{http_code}",
+      endpoint,
+    ];
+  }
   return endpoint ? ["curl", ...buildValidatedCurlCommandArgs(["-sf", endpoint])] : null;
 }
 
@@ -374,7 +711,10 @@ export function isLocalProviderHostHealthy(
   const command = getLocalProviderHealthCheck(provider);
   if (!command) return false;
   const capture = runCaptureImpl ?? runCapture;
-  return Boolean(capture(command, { ignoreError: true }));
+  return isLocalProviderProbeOutputHealthy(
+    command.at(-1) ?? "",
+    capture(command, { ignoreError: true }),
+  );
 }
 
 export function getLocalProviderLabel(provider: string): string | null {
@@ -511,14 +851,57 @@ export function probeLocalProviderHealth(
   provider: string,
   options: LocalProviderHealthProbeOptions = {},
 ): LocalProviderHealthStatus | null {
-  const endpoint = getLocalProviderHealthEndpoint(provider);
   const providerLabel = getLocalProviderLabel(provider);
-  if (!endpoint || !providerLabel) {
-    return null;
+  if (!providerLabel) return null;
+
+  let managedState: ManagedVllmProviderState = { kind: "absent" };
+  if (provider === "vllm-local") {
+    try {
+      managedState = getManagedVllmProviderState({
+        getManagedBaseUrlImpl: options.getManagedVllmBaseUrlImpl,
+        loadApiKeyImpl: options.loadVllmApiKeyImpl,
+        recoverManagedClusterVllmEndpointImpl: options.recoverManagedClusterVllmEndpointImpl,
+      });
+    } catch {
+      return {
+        ok: false,
+        providerLabel,
+        endpoint: "managed vLLM",
+        failureLabel: "unhealthy",
+        probeLabel: "vllm backend",
+        detail:
+          "Managed vLLM state could not be inspected safely. Re-run `nemoclaw onboard` to repair the provider.",
+      };
+    }
   }
+  if (managedState.kind === "invalid-auth") {
+    const missingAuth = managedState.reason === "missing";
+    return {
+      ok: false,
+      providerLabel,
+      endpoint: "managed vLLM",
+      failureLabel: missingAuth ? "unauthorized" : "unhealthy",
+      probeLabel: "vllm backend",
+      detail: missingAuth
+        ? "Managed vLLM requires its bearer credential, but no private key is available. Re-run `nemoclaw onboard` to repair the provider."
+        : "Managed vLLM authentication state is unsafe or does not match the service. Re-run `nemoclaw onboard` to repair the provider.",
+    };
+  }
+  const managedBinding = managedState.kind === "ready" ? managedState : null;
+  const endpoint = managedBinding
+    ? `${managedBinding.baseUrl}/models`
+    : provider === "vllm-local"
+      ? `http://127.0.0.1:${VLLM_PORT}/v1/models`
+      : getLocalProviderHealthEndpoint(provider);
+  if (!endpoint) return null;
 
   const runCurlProbeImpl = options.runCurlProbeImpl ?? runLocalCurlProbe;
-  const result = runCurlProbeImpl(["-sS", "--connect-timeout", "3", "--max-time", "5", endpoint]);
+  let result: CurlProbeResult;
+  if (managedBinding) {
+    result = probeVllmModels(managedBinding.baseUrl, managedBinding.apiKey, { runCurlProbeImpl });
+  } else {
+    result = runCurlProbeImpl(["-sS", "--connect-timeout", "3", "--max-time", "5", endpoint]);
+  }
 
   // Per #3265 the status line is renamed `Inference (<backend>):` for local
   // providers so the upcoming `Inference (auth proxy):` subprobe lines render
@@ -558,6 +941,44 @@ export function probeLocalProviderHealth(
         ...attachSubprobes,
       };
     }
+    const configuredModel = options.model?.trim();
+    if (configuredModel) {
+      const configuredModelDisplay = sanitizeModelNameForDisplay(configuredModel) || "<invalid>";
+      const inventory = modelInventory(provider, result.body);
+      if (!inventory) {
+        return {
+          ok: false,
+          providerLabel,
+          endpoint,
+          failureLabel: "unhealthy",
+          detail:
+            `${providerLabel} responded on ${endpoint}, but its model inventory was invalid; ` +
+            `could not verify configured model '${configuredModelDisplay}'.`,
+          ...attachProbeLabel,
+          ...attachSubprobes,
+        };
+      }
+      if (!inventoryContainsModel(provider, inventory, configuredModel)) {
+        const available =
+          inventory.length > 0
+            ? inventory
+                .slice(0, 5)
+                .map((model) => sanitizeModelNameForDisplay(model) || "<invalid>")
+                .join(", ")
+            : "none";
+        return {
+          ok: false,
+          providerLabel,
+          endpoint,
+          failureLabel: "unhealthy",
+          detail:
+            `${providerLabel} is reachable on ${endpoint}, but configured model ` +
+            `'${configuredModelDisplay}' is unavailable (reported models: ${available}).`,
+          ...attachProbeLabel,
+          ...attachSubprobes,
+        };
+      }
+    }
     return {
       ok: true,
       providerLabel,
@@ -580,9 +1001,12 @@ export function probeLocalProviderHealth(
 
 export function getLocalProviderContainerReachabilityCheck(provider: string): string[] | null {
   switch (provider) {
-    case "vllm-local":
+    case "vllm-local": {
+      const managed = recoveredManagedVllmBaseUrl();
+      if (managed.kind === "unavailable") return null;
+      const managedBaseUrl = managed.baseUrl;
       return [
-        "docker",
+        ...(managedBaseUrl ? ["docker", "--context", "default"] : ["docker"]),
         "run",
         "--rm",
         "--add-host",
@@ -592,9 +1016,14 @@ export function getLocalProviderContainerReachabilityCheck(provider: string): st
         "5",
         "--max-time",
         "10",
+        ...(managedBaseUrl ? ["--noproxy", "*"] : []),
         "-sf",
-        `http://host.openshell.internal:${VLLM_PORT}/v1/models`,
+        ...(managedBaseUrl ? ["-w", "%{http_code}"] : []),
+        managedBaseUrl
+          ? `${managedBaseUrl}/health`
+          : `http://host.openshell.internal:${VLLM_PORT}/v1/models`,
       ];
+    }
     case "ollama-local":
       // Check the auth proxy port, not Ollama directly. The proxy listens
       // on 0.0.0.0 and is reachable from containers; Ollama is on 127.0.0.1.
@@ -645,16 +1074,23 @@ export function validateLocalProvider(
   const sleep = sleepFn ?? sleepSeconds;
   const command = getLocalProviderHealthCheck(provider);
   if (!command) {
+    if (provider === "vllm-local") {
+      return {
+        ok: false,
+        message:
+          "Managed vLLM state could not be inspected safely. Re-run `nemoclaw onboard` to repair the provider.",
+      };
+    }
     return { ok: true };
   }
 
   const output = capture(command, { ignoreError: true });
-  if (!output) {
+  if (!isLocalProviderProbeOutputHealthy(command.at(-1) ?? "", output)) {
     switch (provider) {
       case "vllm-local":
         return {
           ok: false,
-          message: `Local vLLM was selected, but nothing is responding on http://127.0.0.1:${VLLM_PORT}.`,
+          message: `Local vLLM was selected, but nothing is responding on ${getLocalProviderHealthEndpoint(provider) ?? "the configured endpoint"}.`,
         };
       case "ollama-local":
         return {
@@ -668,13 +1104,20 @@ export function validateLocalProvider(
 
   const containerCommand = getLocalProviderContainerReachabilityCheck(provider);
   if (!containerCommand) {
+    if (provider === "vllm-local") {
+      return {
+        ok: false,
+        message:
+          "Managed vLLM state could not be inspected safely. Re-run `nemoclaw onboard` to repair the provider.",
+      };
+    }
     return { ok: true };
   }
 
   // Retry container reachability check with backoff
   for (let attempt = 1; attempt <= CONTAINER_CHECK_MAX_ATTEMPTS; attempt++) {
     const containerOutput = capture(containerCommand, { ignoreError: true });
-    if (containerOutput) {
+    if (isLocalProviderProbeOutputHealthy(containerCommand.at(-1) ?? "", containerOutput)) {
       return { ok: true };
     }
     if (attempt < CONTAINER_CHECK_MAX_ATTEMPTS) {
@@ -689,7 +1132,7 @@ export function validateLocalProvider(
     case "vllm-local":
       return {
         ok: false,
-        message: `Local vLLM is responding on 127.0.0.1, but the Docker container reachability check failed for http://host.openshell.internal:${VLLM_PORT}. This may be a Docker networking issue — the sandbox uses a different network path and may still work.`,
+        message: `Local vLLM is responding on the host, but the Docker container reachability check failed for ${getContainerCheckUrl(provider)}. This may be a Docker networking issue — the sandbox uses a different network path and may still work.`,
         diagnostic,
       };
     case "ollama-local":
@@ -707,10 +1150,15 @@ export function validateLocalProvider(
   }
 }
 
-function getContainerCheckUrl(provider: string): string {
+function getContainerCheckUrl(provider: string): string | null {
   switch (provider) {
-    case "vllm-local":
-      return `http://host.openshell.internal:${VLLM_PORT}/v1/models`;
+    case "vllm-local": {
+      const managed = recoveredManagedVllmBaseUrl();
+      if (managed.kind === "unavailable") return null;
+      return managed.baseUrl
+        ? `${managed.baseUrl}/health`
+        : `http://host.openshell.internal:${VLLM_PORT}/v1/models`;
+    }
     case "ollama-local":
       return `http://host.openshell.internal:${getOllamaContainerPort()}/api/tags`;
     default:
@@ -720,11 +1168,16 @@ function getContainerCheckUrl(provider: string): string {
 
 function collectContainerDiagnostic(provider: string, capture: RunCaptureFn): string {
   const url = getContainerCheckUrl(provider);
+  if (!url) return "Managed vLLM state could not be inspected safely.";
+  const dockerCommand =
+    provider === "vllm-local" && url.endsWith("/health")
+      ? ["docker", "--context", "default"]
+      : ["docker"];
   try {
     // Get HTTP status code
     const httpStatus = capture(
       [
-        "docker",
+        ...dockerCommand,
         "run",
         "--rm",
         "--add-host",
@@ -747,7 +1200,7 @@ function collectContainerDiagnostic(provider: string, capture: RunCaptureFn): st
     // Get /etc/hosts to see host-gateway resolution
     const hostsOutput = capture(
       [
-        "docker",
+        ...dockerCommand,
         "run",
         "--rm",
         "--add-host",
@@ -805,7 +1258,12 @@ export function parseOllamaTags(output: string | null | undefined): string[] {
   }
 }
 
-export { MAX_AUTODETECTED_OLLAMA_CONTEXT_WINDOW, parsePositiveInteger };
+export {
+  getOllamaContextWindowFloorForAgent,
+  MAX_AUTODETECTED_OLLAMA_CONTEXT_WINDOW,
+  MIN_HERMES_OLLAMA_CONTEXT_WINDOW,
+  parsePositiveInteger,
+};
 
 export function probeOllamaRuntimeModelStatus(
   model: string,
@@ -829,8 +1287,12 @@ export function resolveOllamaRuntimeContextWindow(
 
 export { resetOllamaRuntimeContextWindowAutoState };
 
-export function applyOllamaRuntimeContextWindow(selectedModel: string): void {
-  applyOllamaRuntimeContextWindowWithHost(selectedModel, getResolvedOllamaHost);
+/** Apply Ollama runtime context-window adoption using the resolved local host. */
+export function applyOllamaRuntimeContextWindow(
+  selectedModel: string,
+  options: Pick<ApplyOllamaRuntimeContextWindowOptions, "contextWindowFloor"> = {},
+): ApplyOllamaRuntimeContextWindowResult {
+  return applyOllamaRuntimeContextWindowWithHost(selectedModel, getResolvedOllamaHost, options);
 }
 
 export function applyVllmRuntimeContextWindow(
@@ -1125,11 +1587,14 @@ export function buildOllamaProbeOptions(allowToolsIncompatible: boolean): {
   skipResponsesProbe: true;
   requireChatCompletionsToolCalling: boolean;
   allowHostDockerInternal: boolean;
+  probeFromDocker: { expectedPort: number } | null;
 } {
+  const windowsHostOllama = getResolvedOllamaHost() === OLLAMA_HOST_DOCKER_INTERNAL;
   return {
     skipResponsesProbe: true,
     requireChatCompletionsToolCalling: !allowToolsIncompatible,
-    allowHostDockerInternal: getResolvedOllamaHost() === OLLAMA_HOST_DOCKER_INTERNAL,
+    allowHostDockerInternal: windowsHostOllama,
+    probeFromDocker: windowsHostOllama ? { expectedPort: OLLAMA_PORT } : null,
   };
 }
 

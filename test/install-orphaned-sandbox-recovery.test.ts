@@ -51,6 +51,7 @@ function runRecoveryClassification(
     source "${INSTALLER_PAYLOAD}" >/dev/null 2>&1 || true
     info() { :; }
     warn() { :; }
+    sleep() { :; }
     _PREEXISTING_SANDBOX_COUNT=1
     recover_preexisting_sandboxes_before_onboard "${stubBin}" >/dev/null 2>&1 || true
     echo "recovery_ran=\${_PREEXISTING_SANDBOX_RECOVERY_RAN:-unset}"
@@ -85,6 +86,64 @@ function runPrintDone(flags: { recoveryRan: string; orphaned: string }): {
     _PREEXISTING_SANDBOX_ORPHANED=${flags.orphaned}
     _UPGRADE_SANDBOXES_FAILED=false
     print_done 2>&1
+  `;
+
+  const result = spawnSync("bash", ["-c", snippet], {
+    encoding: "utf-8",
+    env: installerTestEnv(tmp),
+  });
+  return {
+    output: `${result.stdout}\n${result.stderr}`,
+    cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }),
+  };
+}
+
+function runStrictBackupRecoveryFlow(): { output: string; cleanup: () => void } {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-install-orphan-flow-"));
+  const cliLog = path.join(tmp, "cli.log");
+  const stubBin = path.join(tmp, "stub-cli");
+  fs.writeFileSync(
+    stubBin,
+    `#!/usr/bin/env bash
+printf 'command=%s require_all=%s\\n' "$*" "\${NEMOCLAW_REQUIRE_ALL_SANDBOX_BACKUPS:-}" >> ${JSON.stringify(cliLog)}
+case "\${1:-}" in
+  backup-all)
+    printf '  Pre-upgrade backup: 0 backed up, 0 failed, 0 skipped\\n'
+    ;;
+  upgrade-sandboxes)
+    printf '%s\\n' ${JSON.stringify(ORPHAN_LINE)}
+    printf '%s\\n' ${JSON.stringify(NO_REBUILD_LINE)}
+    ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+
+  const snippet = `
+    set -e
+    source "${INSTALLER_PAYLOAD}" >/dev/null 2>&1 || true
+    prepare_current_cli_for_preupgrade_backup() { return 0; }
+    resolve_prepared_cli_runner() { printf '%s' "${stubBin}"; }
+    sleep() { :; }
+    needs_shell_reload() { return 1; }
+    _PREEXISTING_SANDBOX_COUNT=1
+    _PREEXISTING_SANDBOX_RECOVERY_RAN=false
+    _PREEXISTING_SANDBOX_ORPHANED=false
+    _UPGRADE_SANDBOXES_FAILED=false
+    _INSTALL_START=0
+    _CLI_DISPLAY="NemoClaw"
+    _CLI_BIN="nemoclaw"
+    ONBOARD_RAN=false
+    backup_status=0
+    run_preupgrade_backup || backup_status=$?
+    recovery_status=0
+    recover_preexisting_sandboxes_before_onboard "${stubBin}" || recovery_status=$?
+    echo "backup_status=\${backup_status}"
+    echo "recovery_status=\${recovery_status}"
+    echo "recovery_ran=\${_PREEXISTING_SANDBOX_RECOVERY_RAN}"
+    echo "orphaned=\${_PREEXISTING_SANDBOX_ORPHANED}"
+    print_done 2>&1
+    cat "${cliLog}"
   `;
 
   const result = spawnSync("bash", ["-c", snippet], {
@@ -146,6 +205,26 @@ describe("install.sh recovery outcome classification (#6520)", () => {
     try {
       expect(output).toContain("recovery_ran=false");
       expect(output).toContain("failed=true");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("install.sh strict-backup recovery handoff", () => {
+  it("continues to orphan recovery and reports warnings after strict backup succeeds (#6520)", () => {
+    const { output, cleanup } = runStrictBackupRecoveryFlow();
+    try {
+      expect(output).toContain("backup_status=0");
+      expect(output).toContain("recovery_status=0");
+      expect(output).toContain("recovery_ran=true");
+      expect(output).toContain("orphaned=true");
+      expect(output).toContain("=== Installation completed with warnings ===");
+      expect(output).toContain("command=backup-all require_all=1");
+      expect(output).toContain("command=upgrade-sandboxes --auto require_all=");
+      expect(output.indexOf("command=backup-all")).toBeLessThan(
+        output.indexOf("command=upgrade-sandboxes --auto"),
+      );
     } finally {
       cleanup();
     }

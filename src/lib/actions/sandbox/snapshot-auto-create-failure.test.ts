@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it, vi } from "vitest";
+import { resolveTestAgentBaselinePolicy } from "../../../../test/support/snapshot-policy-test-fixture";
 import type { SnapshotStreamSandboxCreateMock } from "./snapshot-create-stream-test-types";
 
 const captureOpenshellMock = vi.fn(() => ({ status: 0, output: "alpha Ready\n" }));
@@ -27,13 +28,22 @@ const streamSandboxCreateMock = vi.fn<SnapshotStreamSandboxCreateMock>(async () 
   forcedReady: false,
 }));
 
-vi.mock("../../adapters/docker", () => ({ dockerCapture: vi.fn(() => "") }));
+vi.mock("../../adapters/docker", () => ({
+  dockerCapture: vi.fn(() => ""),
+  dockerForceRm: vi.fn(),
+  dockerRunDetached: vi.fn(),
+}));
 vi.mock("../../adapters/openshell/runtime", () => ({
   captureOpenshell: captureOpenshellMock,
   getOpenshellBinary: vi.fn(() => "openshell"),
   runOpenshell: vi.fn(() => ({ status: 0, output: "" })),
 }));
-vi.mock("../../credentials/store", () => ({ prompt: vi.fn() }));
+vi.mock("../../credentials/store", () => ({
+  deleteCredential: vi.fn(),
+  getCredential: vi.fn(() => null),
+  prompt: vi.fn(),
+  saveCredential: vi.fn(),
+}));
 vi.mock("../../domain/sandbox/destroy", () => ({
   getSandboxDeleteOutcome: vi.fn(() => ({ alreadyGone: false, gatewayUnreachable: false })),
 }));
@@ -49,6 +59,11 @@ vi.mock("../../inference/nim", () => ({
   stopNimContainerByName: vi.fn(),
 }));
 vi.mock("../../messaging/channels", () => ({
+  BUILT_IN_CHANNEL_MANIFESTS: [],
+  getMessagingConfigEnvAliases: vi.fn(() => ({})),
+  getMessagingCredentialEnvKeysByChannel: vi.fn(() => ({})),
+  getMessagingProviderSuffixesByChannel: vi.fn(() => ({})),
+  listBuiltInMessagingChannelManifests: vi.fn(() => []),
   listMessagingProviderSuffixes: vi.fn(() => []),
   listMessagingCredentialMetadata: vi.fn(() => []),
 }));
@@ -60,6 +75,7 @@ vi.mock("../../policy", () => ({
   getPresetContentGatewayState: vi.fn(() => "absent"),
   loadPresetForSandbox: vi.fn(() => null),
   removePreset: vi.fn(() => true),
+  resolveAgentBaselinePolicy: resolveTestAgentBaselinePolicy,
 }));
 vi.mock("../../runner", () => ({
   ROOT: "/repo",

@@ -15,7 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { execTimeout } from "./helpers/timeouts";
+import { execTimeout, testTimeout } from "./helpers/timeouts";
 
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 const NODE_BIN = path.dirname(process.execPath);
@@ -38,6 +38,7 @@ function createFixture(opts: {
   savedCredential?: { key: string; value: string };
   hermesAuthMethod?: string | null;
   providerRegistered?: boolean;
+  sandboxDeleteExitCode?: number;
   activeSessionCount?: number | null;
   inferenceProbeHttpStatus?: number | null;
 }) {
@@ -48,6 +49,7 @@ function createFixture(opts: {
     savedCredential,
     hermesAuthMethod = null,
     providerRegistered = true,
+    sandboxDeleteExitCode = 0,
     activeSessionCount = 0,
     inferenceProbeHttpStatus = null,
   } = opts;
@@ -151,7 +153,7 @@ function createFixture(opts: {
   fs.writeFileSync(atomicityMarker, "dcode-atomicity-marker\n");
 
   const sshConfig = [
-    `Host openshell-${sandboxName}`,
+    `Host openshell-${sandboxName}.default`,
     "  HostName 127.0.0.1",
     "  Port 2222",
     "  User sandbox",
@@ -166,10 +168,23 @@ const fs = require("fs");
 const a = process.argv.slice(2);
 const hermesProviderStatePath = ${JSON.stringify(hermesProviderStatePath)};
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (a[0] === "-V" || a[0] === "--version") { process.stdout.write("openshell 0.0.72\\n"); process.exit(0); }
+if (a[0] === "-V" || a[0] === "--version") { process.stdout.write("openshell 0.0.101\\n"); process.exit(0); }
 if (a[0] === "sandbox" && a[1] === "list") { process.stdout.write("${sandboxName} Ready\\n"); process.exit(0); }
 if (a[0] === "sandbox" && a[1] === "ssh-config") { process.stdout.write("${sshConfig}\\n"); process.exit(0); }
-if (a[0] === "sandbox" && a[1] === "delete") { fs.writeFileSync(${JSON.stringify(deleteMarker)}, "deleted\\n"); process.exit(0); }
+if (a[0] === "sandbox" && a[1] === "get") {
+  if (fs.existsSync(${JSON.stringify(deleteMarker)})) {
+    process.stderr.write("sandbox ${sandboxName} not found\\n");
+    process.exit(1);
+  }
+  process.stdout.write("Sandbox: ${sandboxName}\\nPhase: Ready\\n");
+  process.exit(0);
+}
+if (a[0] === "sandbox" && a[1] === "delete") { fs.writeFileSync(${JSON.stringify(deleteMarker)}, "deleted\\n"); process.exit(${sandboxDeleteExitCode}); }
+if (a[0] === "sandbox" && a[1] === "get") {
+  if (fs.existsSync(${JSON.stringify(deleteMarker)})) { process.stderr.write("sandbox ${sandboxName} not found\\n"); process.exit(1); }
+  process.stdout.write("${sandboxName} Ready\\n");
+  process.exit(0);
+}
 if (a[0] === "sandbox" && a[1] === "exec") {
   const command = a.join(" ");
   if (command.includes("rebuild-atomicity-marker.txt")) {
@@ -225,7 +240,7 @@ process.exit(0);
       path.join(tmpDir, component),
       `#!/usr/bin/env node
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.72\\n");
+if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.101\\n");
 process.exit(0);
 `,
       { mode: 0o755 },
@@ -234,7 +249,7 @@ process.exit(0);
 
   const activeSessionLines = Array.from(
     { length: activeSessionCount ?? 0 },
-    (_, index) => `${9000 + index} ssh openshell-${sandboxName}`,
+    (_, index) => `${9000 + index} ssh openshell-${sandboxName}.default`,
   ).join("\n");
   fs.writeFileSync(
     path.join(tmpDir, "ps"),
@@ -249,19 +264,48 @@ process.exit(0);
   fs.writeFileSync(
     path.join(tmpDir, "docker"),
     `#!/usr/bin/env node
+const fs = require("node:fs");
 const a = process.argv.slice(2);
+const { isOpenClawSecurityInventoryProbe } = require(${JSON.stringify(
+      path.join(REPO_ROOT, "test", "helpers", "onboard-script-mocks.cjs"),
+    )});
+const provenancePath = ${JSON.stringify(path.join(tmpDir, "docker-base-provenance"))};
+const readProvenance = () => fs.existsSync(provenancePath) ? JSON.parse(fs.readFileSync(provenancePath, "utf8")) : {};
 if (a[0] === "info") { process.stdout.write(JSON.stringify({ServerVersion:"27.0.0", OperatingSystem:"Docker Engine", NCPU:8, MemTotal:17179869184}) + "\\n"); process.exit(0); }
-if (a[0] === "build") process.exit(0);
+if (a[0] === "build") {
+  const labelIndex = a.indexOf("--label");
+  const tagIndex = a.indexOf("-t");
+  if (labelIndex >= 0 && tagIndex >= 0) {
+    const label = a[labelIndex + 1] || "";
+    const provenance = readProvenance();
+    const value = label.slice(label.indexOf("=") + 1);
+    provenance[a[tagIndex + 1]] = value;
+    provenance["sha256:${"a".repeat(64)}"] = value;
+    fs.writeFileSync(provenancePath, JSON.stringify(provenance));
+  }
+  process.exit(0);
+}
+if (a[0] === "tag") {
+  const provenance = readProvenance();
+  if (provenance[a[1]]) provenance[a[2]] = provenance[a[1]];
+  fs.writeFileSync(provenancePath, JSON.stringify(provenance));
+  process.exit(0);
+}
 if (a[0] === "image" && a[1] === "inspect") {
   const formatIndex = a.indexOf("--format");
   const format = formatIndex >= 0 ? a[formatIndex + 1] : "";
   if (format === "{{.Id}}") process.stdout.write("sha256:${"a".repeat(64)}\\n");
   if (format === "{{json .RepoDigests}}") process.stdout.write("[]\\n");
+  if (format === "{{json .}}") {
+    const provenance = readProvenance()[a[formatIndex + 2]] || "";
+    process.stdout.write(JSON.stringify({Id:"sha256:${"a".repeat(64)}", RepoDigests:[], Os:"linux", Architecture:"amd64", Config:{Labels:provenance ? {"com.nvidia.nemoclaw.base-build-provenance":provenance} : {}}}) + "\\n");
+  }
   process.exit(0);
 }
-if (a[0] === "tag" || a[0] === "rmi") process.exit(0);
+if (a[0] === "rmi") process.exit(0);
 if (a[0] === "run") {
   if (a.includes("nslookup")) process.stdout.write("Server: 127.0.0.11\\n** server can't find nemoclaw.invalid: NXDOMAIN\\n");
+  else if (isOpenClawSecurityInventoryProbe(a)) process.stdout.write("nemoclaw-security-inventory-ok\\n");
   else if (a.includes("/usr/bin/ldd")) process.stdout.write("ldd (GNU libc) 2.41\\n");
   else process.stdout.write("nemoclaw-hermes-mcp-runtime-ok\\n");
   process.exit(0);
@@ -280,6 +324,7 @@ process.exit(1);
 const { spawnSync } = require("child_process");
 const cmd = process.argv[process.argv.length - 1] || "";
 if (cmd.includes("[ -d")) { process.stdout.write("workspace\\n"); process.exit(0); }
+if (cmd.startsWith("src=")) { process.exit(2); }
 if (cmd.includes("tar")) {
   const result = spawnSync("tar", ["-cf", "-", "-C", ${JSON.stringify(fakeRoot)}, "workspace"], { stdio: ["ignore", "pipe", "pipe"] });
   if (result.stdout) process.stdout.write(result.stdout);
@@ -348,7 +393,9 @@ describe("atomic rebuild process contracts (#2273)", () => {
     expect(registryHasSandbox(fixture)).toBe(true);
   });
 
-  it("accepts trimmed case-insensitive yes input before continuing into backup", () => {
+  it("accepts trimmed case-insensitive yes input before continuing into backup", {
+    timeout: testTimeout(60_000),
+  }, () => {
     const fixture = createFixture({
       savedCredential: {
         key: "NVIDIA_INFERENCE_API_KEY",
@@ -419,13 +466,16 @@ describe("atomic rebuild process contracts (#2273)", () => {
     expect(marker.stdout).toContain("dcode-atomicity-marker");
   });
 
-  it("registers an exported Hermes API key without exposing its name or value", () => {
+  it("registers an exported Hermes API key without exposing its name or value", {
+    timeout: testTimeout(60_000),
+  }, () => {
     const fixture = createFixture({
       agent: "hermes",
       provider: "hermes-provider",
       credentialEnv: "NOUS_API_KEY",
       hermesAuthMethod: "api_key",
       providerRegistered: false,
+      sandboxDeleteExitCode: 1,
     });
 
     const result = runRebuild(fixture, { NOUS_API_KEY: "nous-key-from-env" });

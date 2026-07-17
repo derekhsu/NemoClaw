@@ -3,6 +3,11 @@
 
 import { CLI_NAME } from "../../cli/branding";
 import { type ProviderHealthStatus, probeProviderHealth } from "../../inference/health";
+import { inspectManagedLlamaCppStatus } from "../../inference/llama-cpp/managed-status";
+import {
+  type EffectiveReasoningEffort,
+  getEffectiveReasoningEffort,
+} from "../../inference/selection";
 import { classifyInferenceRouteFailureLabel } from "./connect-inference-route-probe";
 import type { DoctorCheck } from "./doctor-report";
 import { probeSandboxInferenceGatewayHealth } from "./inference-route-health";
@@ -10,12 +15,64 @@ import { probeSandboxInferenceGatewayHealth } from "./inference-route-health";
 export type DoctorInferenceRoute = {
   model: string;
   provider: string;
+  effectiveReasoningEffort?: EffectiveReasoningEffort | null;
 };
+
+type ManagedLlamaCppDoctorDeps = {
+  inspectManagedLlamaCppStatusImpl?: typeof inspectManagedLlamaCppStatus;
+};
+
+export function collectManagedLlamaCppDoctorChecks(
+  sandboxName: string,
+  gatewayPort?: number | null,
+  deps: ManagedLlamaCppDoctorDeps = {},
+): DoctorCheck[] {
+  const managed = (deps.inspectManagedLlamaCppStatusImpl ?? inspectManagedLlamaCppStatus)(
+    sandboxName,
+    {
+      ...(typeof gatewayPort === "number" ? { gatewayPort } : {}),
+    },
+  );
+  if (!managed) return [];
+  const runtimeStatus =
+    managed.state === "running"
+      ? "ok"
+      : managed.state === "stopped" || managed.state === "preparing"
+        ? "warn"
+        : "fail";
+  return [
+    {
+      group: "Local services",
+      label: "Managed llama.cpp identity",
+      status: "info",
+      detail: `recipe ${managed.recipeId}; model ${managed.modelDigest ?? "not published"}; image ${managed.imageReference ?? "not published"}`,
+    },
+    {
+      group: "Local services",
+      label: "Managed llama.cpp runtime",
+      status: runtimeStatus,
+      detail: `${managed.state}: ${managed.detail}; endpoint ${managed.endpoint}`,
+      ...(runtimeStatus === "ok"
+        ? {}
+        : {
+            hint: `re-run \`${CLI_NAME} onboard\` for '${sandboxName}' to recover the exact runtime`,
+          }),
+    },
+  ];
+}
 
 type DoctorInferenceDeps = {
   probeProviderHealthImpl?: typeof probeProviderHealth;
   probeSandboxInferenceGatewayHealthImpl?: typeof probeSandboxInferenceGatewayHealth;
+  /** False for terminal agents that do not have a long-running gateway serving process. */
+  includeServingProcessCheck?: boolean;
 };
+
+export function resolveDoctorReasoningEffort(
+  input: Parameters<typeof getEffectiveReasoningEffort>[0],
+): EffectiveReasoningEffort | null {
+  return getEffectiveReasoningEffort(input);
+}
 
 function pushInferenceHealthCheck(
   checks: DoctorCheck[],
@@ -47,6 +104,17 @@ function inferenceRouteCheck(sandboxName: string, route: DoctorInferenceRoute): 
     hint: known
       ? undefined
       : `run \`${CLI_NAME} ${sandboxName} status\` after the gateway is healthy`,
+  };
+}
+
+function reasoningEffortCheck(route: DoctorInferenceRoute): DoctorCheck | null {
+  const effort = route.effectiveReasoningEffort;
+  if (!effort) return null;
+  return {
+    group: "Inference",
+    label: "Reasoning effort",
+    status: "info",
+    detail: effort,
   };
 }
 
@@ -115,13 +183,14 @@ function unavailableProviderHealthDiagnostic(detail: string): ProviderHealthStat
 
 function collectProviderHealthDiagnostics(
   provider: string,
+  model: string,
   probe: typeof probeProviderHealth,
 ): ProviderHealthStatus[] {
   if (provider === "unknown") {
     return [unavailableProviderHealthDiagnostic("provider route is unknown")];
   }
   try {
-    const health = probe(provider);
+    const health = probe(provider, { model });
     if (!health) {
       return [
         unavailableProviderHealthDiagnostic(`no direct health probe registered for ${provider}`),
@@ -142,6 +211,8 @@ export async function collectInferenceChecks(
   deps: DoctorInferenceDeps = {},
 ): Promise<DoctorCheck[]> {
   const checks = [inferenceRouteCheck(sandboxName, route)];
+  const effortCheck = reasoningEffortCheck(route);
+  if (effortCheck) checks.push(effortCheck);
   const gatewayProbe = await collectInferenceRouteProbe(
     sandboxName,
     sandboxReachable,
@@ -150,9 +221,22 @@ export async function collectInferenceChecks(
   pushInferenceHealthCheck(checks, gatewayProbe, { label: "Inference route (gateway)" });
   for (const diagnostic of collectProviderHealthDiagnostics(
     route.provider,
+    route.model,
     deps.probeProviderHealthImpl ?? probeProviderHealth,
   )) {
     pushInferenceHealthCheck(checks, diagnostic, { authoritative: false });
+  }
+  // Serving-process leg: the above probes run in a fresh exec with OpenShell's
+  // injected env, so they cannot attest what the long-running gateway process
+  // can reach. Until NemoClaw defines and implements a process-owned probe
+  // contract, keep this honest result explicit (#7003).
+  if (deps.includeServingProcessCheck !== false) {
+    checks.push({
+      group: "Inference",
+      label: "Serving process",
+      status: "info",
+      detail: "not checked — serving-process probing is not implemented",
+    });
   }
   return checks;
 }

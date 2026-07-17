@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { BaselineExclusionEntry } from "../state/registry";
 import type { DockerGpuRoutePlan } from "./docker-gpu-route";
+import type { InitialSandboxPolicy } from "./initial-policy";
 import type { MessagingTokenDef } from "./messaging-prep";
 import type { MessagingChannel } from "./messaging-state";
 import type { SandboxGpuCreateConfig } from "./sandbox-gpu-create";
@@ -22,15 +24,17 @@ export type SandboxCreatePolicyRequest = {
   readonly activeMessagingChannels: readonly string[];
   readonly options: {
     readonly directGpu: boolean;
+    readonly hostGpuAvailable?: boolean;
     readonly additionalPresets: readonly string[];
     readonly agentName?: string | null;
     readonly policyTier: string | null;
+    readonly baselineExclusions: readonly BaselineExclusionEntry[];
   };
 };
 
 /**
  * Serializable intent for the create-time sandbox contributions. When built
- * through `prepareSandboxCreatePlan`, messaging credential values are
+ * through `materializeSandboxCreatePlan`, messaging credential values are
  * represented only by their logical environment-key bindings and presence.
  *
  * This is deliberately separate from the execution plan, which contains
@@ -40,6 +44,7 @@ export type SandboxCreatePolicyRequest = {
  */
 export type SandboxCreateIntent = {
   readonly sandboxName: string;
+  readonly inferenceProvider: string | null;
   readonly activeMessagingChannels: readonly string[];
   readonly messagingProviderRequests: readonly SandboxCreateMessagingProviderRequest[];
   readonly reusableMessagingProviders: readonly string[];
@@ -58,6 +63,7 @@ export type SandboxCreateIntent = {
 export type ResolveSandboxCreateIntentInput = {
   basePolicyPath: string;
   sandboxName: string;
+  inferenceProvider?: string | null;
   channels: readonly MessagingChannel[];
   enabledChannels: string[] | null;
   disabledChannelNames: ReadonlySet<string>;
@@ -76,11 +82,12 @@ export type ResolveSandboxCreateIntentInput = {
   extraPlaceholderKeys?: readonly string[];
   agentName?: string | null;
   policyTier: string | null;
+  baselineExclusions?: readonly BaselineExclusionEntry[];
 };
 
 export type MaterializeSandboxCreatePlanInput = {
   intent: SandboxCreateIntent;
-  buildCtx: string;
+  fromRef: string;
   messagingTokenDefs: MessagingTokenDef[];
   runProviderPreDeleteCleanup(): void;
   upsertMessagingProviders(
@@ -88,5 +95,6 @@ export type MaterializeSandboxCreatePlanInput = {
     options: { replaceExisting: true },
   ): string[];
   getHermesToolGatewayProviderName(sandboxName: string): string;
+  discloseInitialSandboxPolicy?(policy: InitialSandboxPolicy): void;
   prepareInitialSandboxCreatePolicy?: PrepareInitialSandboxCreatePolicy;
 };

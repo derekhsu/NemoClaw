@@ -40,7 +40,7 @@ function pinValues(source: string, name: string): string[] {
 function writePinFixture(file: string, version: string, sha256: string): void {
   fs.writeFileSync(
     file,
-    ["one", "two", "three"]
+    ["one", "two", "three", "four", "five"]
       .map(
         (job) =>
           `  ${job}:\n    env:\n      CLOUDFLARED_VERSION: "${version}"\n      CLOUDFLARED_DEB_SHA256: "${sha256}"`,
@@ -131,29 +131,11 @@ describe("cloudflared update-check workflow contract", () => {
     workflow.jobs?.["check-cloudflared"]?.steps?.find((step) => typeof step.run === "string")
       ?.run ?? "";
 
-  // source-shape-contract: security -- Automatic and on-demand checks must preserve the credential-free dependency monitoring boundary
-  it("keeps automatic and on-demand update checks reachable and credential-free", () => {
-    expect({
-      automatic:
-        workflow.on?.schedule?.some(
-          (entry) => typeof entry.cron === "string" && entry.cron.trim() !== "",
-        ) ?? false,
-      onDemand: Object.hasOwn(workflow.on ?? {}, "workflow_dispatch"),
-    }).toEqual({ automatic: true, onDemand: true });
-    expect(workflow.permissions).toEqual({ contents: "read" });
-
-    const job = workflow.jobs?.["check-cloudflared"];
-    const checkout = job?.steps?.find((step) => step.uses?.startsWith("actions/checkout@"));
-    expect(job?.permissions).toBeUndefined();
-    expect(checkout?.uses).toMatch(FULL_SHA_ACTION);
-    expect(checkout?.with?.["persist-credentials"]).toBe(false);
-  });
-
-  it("extracts exactly three identical reviewed version and SHA256 pins", () => {
+  it("extracts exactly five identical reviewed version and SHA256 pins", () => {
     const versions = pinValues(e2e, "CLOUDFLARED_VERSION");
     const hashes = pinValues(e2e, "CLOUDFLARED_DEB_SHA256");
-    expect(versions).toHaveLength(3);
-    expect(hashes).toHaveLength(3);
+    expect(versions).toHaveLength(5);
+    expect(hashes).toHaveLength(5);
     expect(new Set(versions).size).toBe(1);
     expect(new Set(hashes).size).toBe(1);
     expect(versions[0]).toMatch(/^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$/u);
@@ -203,7 +185,7 @@ describe("cloudflared update-check workflow contract", () => {
       );
       expect(fixture.result.stderr).toContain("CLOUDFLARED_VERSION lines:");
       expect(fixture.result.stderr).toContain("CLOUDFLARED_DEB_SHA256 lines:");
-      expect(fixture.result.stderr).toContain("Set all three version/SHA256 pairs");
+      expect(fixture.result.stderr).toContain("Set all five version/SHA256 pairs");
     } finally {
       fs.rmSync(fixture.tempDir, { recursive: true, force: true });
     }

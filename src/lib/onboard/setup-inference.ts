@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { canonicalEndpoint } from "../core/url-utils";
 import { isBedrockRuntimeEndpoint } from "../inference/bedrock-runtime";
 import {
   assertEndpointResolvesPublic,
   type EndpointDnsLookupFn,
+  parseTrustedPrivateInferenceHostsFromEnv,
 } from "../inference/endpoint-ssrf-preflight";
 import {
   type CurrentGatewayRouteCompatibilityCheck,
@@ -13,6 +15,7 @@ import {
   isAdvisoryGatewayRouteConflict,
 } from "../inference/gateway-route-compatibility";
 import { withGatewayRouteMutationLock } from "../inference/gateway-route-mutation-lock";
+import { getManagedVllmProviderBinding } from "../inference/local";
 import {
   assertNoExplicitOpenShellGatewayEndpoint,
   assertNoOpenShellGatewayEndpointOverride,
@@ -23,6 +26,18 @@ import { withSandboxMutationLock } from "../state/mcp-lifecycle-lock";
 export { assertNoOpenShellGatewayEndpointOverride };
 
 import type { HermesAuthMethod } from "./hermes-auth";
+
+function matchesOnboardEndpoint(
+  provider: string,
+  endpointUrl: string | null,
+  onboardEndpointUrl: string | undefined,
+): boolean {
+  if (!endpointUrl || !onboardEndpointUrl) return false;
+  const flavor = provider === "compatible-anthropic-endpoint" ? "anthropic" : "openai";
+  const selected = canonicalEndpoint(endpointUrl, flavor);
+  return selected !== null && selected === canonicalEndpoint(onboardEndpointUrl, flavor);
+}
+
 import type {
   CommonDeps,
   HermesDeps,
@@ -82,6 +97,8 @@ type ProviderBranchDeps = Pick<
 export type SetupInferenceDeps = ProviderBranchDeps & {
   /** Injectable resolver for resumed custom-endpoint SSRF preflight tests. */
   resolveEndpointHost?: EndpointDnsLookupFn;
+  /** Exact private endpoint hosts trusted by the operator (tests may inject this). */
+  trustedPrivateEndpointHosts?: readonly string[];
   checkGatewayRouteCompatibility: CurrentGatewayRouteCompatibilityCheck;
   withGatewayRouteMutationLock: typeof withGatewayRouteMutationLock;
   withSandboxMutationLock: typeof withSandboxMutationLock;
@@ -102,6 +119,7 @@ export type SetupInferenceDeps = ProviderBranchDeps & {
   updateSandbox: typeof import("../state/registry").reserveSandboxInferenceRoute;
   localInferenceTimeoutSecs: number;
   vllmLocalCredentialEnv: string;
+  getManagedVllmProviderBinding?: () => { baseUrl: string; apiKey: string } | null;
   ollamaProxyCredentialEnv: string;
   isRoutedInferenceProvider: (provider: string) => boolean;
   applyLocalInferenceRoute?: VllmDeps["applyLocalInferenceRoute"];
@@ -228,6 +246,8 @@ export function createSetupInference(
     options: ProviderInferenceSetupOptions = {},
   ): Promise<SetupInferenceResult> {
     const gatewayName = options.gatewayName ?? deps.getGatewayName();
+    const endpointSource =
+      options.endpointSource === undefined ? "onboard" : options.endpointSource;
     const mutateGatewayRoute = (): Promise<SetupInferenceResult> =>
       deps.withGatewayRouteMutationLock(gatewayName, async () => {
         if (
@@ -259,21 +279,33 @@ export function createSetupInference(
         }
         deps.step(4, 8, "Setting up inference provider");
         let endpointPinnedAddresses = options.endpointPinnedAddresses;
+        let endpointTrustedPrivateCapability = options.endpointTrustedPrivateCapability;
         // Strictly classified AWS Bedrock Runtime hostnames use the dedicated
         // SigV4/bearer adapter rather than the generic curl probe path. Their
         // hostname is constrained to AWS-owned suffixes by the classifier, so
         // do not apply the custom-origin curl pinning contract here.
         const usesBedrockRuntimeAdapter =
           provider === "compatible-anthropic-endpoint" && isBedrockRuntimeEndpoint(endpointUrl);
+        const usesOnboardEndpoint = matchesOnboardEndpoint(
+          provider,
+          endpointUrl,
+          options.onboardEndpointUrl,
+        );
         if (
           (provider === "compatible-endpoint" || provider === "compatible-anthropic-endpoint") &&
           endpointUrl &&
           !usesBedrockRuntimeAdapter &&
+          !usesOnboardEndpoint &&
           !endpointPinnedAddresses
         ) {
           const preflight = await assertEndpointResolvesPublic(
             endpointUrl,
             deps.resolveEndpointHost,
+            {
+              trustedPrivateHosts:
+                deps.trustedPrivateEndpointHosts ??
+                parseTrustedPrivateInferenceHostsFromEnv(process.env),
+            },
           );
           if (!preflight.ok) {
             deps.error(
@@ -283,6 +315,7 @@ export function createSetupInference(
             return { retry: "selection" };
           }
           endpointPinnedAddresses = preflight.addresses;
+          endpointTrustedPrivateCapability = preflight.trustedPrivateCapability;
         }
         const runGatewayOpenshell = createGatewayScopedOpenshellRunner(
           deps.runOpenshell,
@@ -295,6 +328,7 @@ export function createSetupInference(
             provider: selectedProvider,
             model: selectedModel,
             endpointUrl,
+            endpointSource,
             credentialEnv,
             preferredInferenceApi: options.preferredInferenceApi ?? null,
             gatewayName,
@@ -317,6 +351,7 @@ export function createSetupInference(
             deps.verifyOnboardInferenceSmoke({
               ...input,
               pinnedAddresses: endpointPinnedAddresses,
+              trustedPrivateCapability: endpointTrustedPrivateCapability,
               capabilityCache: options.inferenceCapabilityCache,
             }),
           isNonInteractive: deps.isNonInteractive,
@@ -371,6 +406,7 @@ export function createSetupInference(
               skipHostInferenceSmoke: options.skipHostInferenceSmoke === true,
               preferredInferenceApi: options.preferredInferenceApi ?? null,
               pinnedAddresses: endpointPinnedAddresses,
+              trustedPrivateCapability: endpointTrustedPrivateCapability,
               capabilityCache: options.inferenceCapabilityCache,
             },
             {
@@ -404,6 +440,8 @@ export function createSetupInference(
               ),
               run: deps.run,
               VLLM_LOCAL_CREDENTIAL_ENV: deps.vllmLocalCredentialEnv,
+              getManagedVllmProviderBinding:
+                deps.getManagedVllmProviderBinding ?? getManagedVllmProviderBinding,
             },
           );
           if (outcome.done) return outcome.result;
@@ -457,6 +495,7 @@ export function createSetupInference(
             endpointUrl,
             credentialEnv,
             pinnedAddresses: endpointPinnedAddresses,
+            trustedPrivateCapability: endpointTrustedPrivateCapability,
             capabilityCache: options.inferenceCapabilityCache,
           });
         if (sandboxName) {

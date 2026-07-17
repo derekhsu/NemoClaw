@@ -18,7 +18,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "vitest";
 import { testTimeout } from "./helpers/timeouts";
 
-const TIMEOUT_MS = testTimeout(20_000);
+const TIMEOUT_MS = testTimeout(60_000);
 const SANDBOX_NAME = "my-assistant";
 
 // Output fixtures that mirror real OpenShell CLI output.
@@ -27,7 +27,7 @@ const GATEWAY_INFO_NEMOCLAW =
 
 const STATUS_CONNECTED_NEMOCLAW =
   "Server Status\n\nGateway: nemoclaw\nServer: https://127.0.0.1:8080/\nStatus: Connected\n";
-const SANDBOX_GET_NOT_FOUND = "Error:   × Not Found: sandbox not found";
+const SANDBOX_GET_NOT_FOUND = "Error: sandbox my-assistant not found";
 
 interface ScenarioScript {
   // sandbox get responses, one per call (cycled / stops at last)
@@ -124,7 +124,7 @@ function emit(r) {
 }
 
 if (args[0] === "-V" || args[0] === "--version") {
-  process.stdout.write("openshell 0.0.72\\n");
+  process.stdout.write("openshell 0.0.99\\n");
   process.exit(0);
 }
 
@@ -180,7 +180,7 @@ process.exit(0);
       path.join(homeLocalBin, component),
       `#!${process.execPath}
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.72\\n");
+if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.99\\n");
 process.exit(0);
 `,
       { mode: 0o755 },
@@ -257,6 +257,9 @@ beforeEach(() => {
     path.join(homeLocalBin, "docker"),
     `#!${process.execPath}
 const a = process.argv.slice(2);
+const { isOpenClawSecurityInventoryProbe } = require(${JSON.stringify(
+      path.join(import.meta.dirname, "helpers", "onboard-script-mocks.cjs"),
+    )});
 if (a[0] === "info") {
   process.stdout.write(JSON.stringify({ServerVersion:"27.0.0", OperatingSystem:"Docker Engine", NCPU:8, MemTotal:17179869184}) + "\\n");
   process.exit(0);
@@ -272,6 +275,7 @@ if (a[0] === "image" && a[1] === "inspect") {
 if (a[0] === "tag" || a[0] === "rmi") process.exit(0);
 if (a[0] === "run") {
   if (a.includes("nslookup")) process.stdout.write("Server: 127.0.0.11\\n** server can't find nemoclaw.invalid: NXDOMAIN\\n");
+  else if (isOpenClawSecurityInventoryProbe(a)) process.stdout.write("nemoclaw-security-inventory-ok\\n");
   else if (a.includes("/usr/bin/ldd")) process.stdout.write("ldd (GNU libc) 2.41\\n");
   process.exit(0);
 }

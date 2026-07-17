@@ -9,7 +9,9 @@ import {
   canonicalRetryFallback,
   normalizeReviewResult,
   partialLedgerFailureResult,
+  recordSynthesisValidationFailureOnDraft,
   reviewLedgerConsistencyIssues,
+  terminologyReviewConsistencyIssues,
   withCanonicalReviewLedgerFindings,
 } from "../tools/pr-review-advisor/analyze.mts";
 import {
@@ -18,6 +20,7 @@ import {
   REVIEW_LEDGER_READ_TOOL,
   REVIEW_LEDGER_UPDATE_TOOL,
 } from "../tools/pr-review-advisor/review-ledger.mts";
+import { createTerminologyLedger } from "../tools/pr-review-advisor/terminology.mts";
 
 type CallableTool = ToolDefinition & {
   execute(
@@ -188,6 +191,35 @@ describe("PR review ledger tools", () => {
     expect(canonicalRetryFallback(result, snapshot)).toBeNull();
   });
 
+  it("rejects draft finding drift before applying canonical ledger findings", () => {
+    const ledger = createReviewFindingLedger();
+    ledger.applyBatch([{ operation: "add", finding: finding() }], "correctness-state");
+    const draft = normalizeReviewResult({ findings: [] }, reviewMetadata());
+
+    expect(canonicalRetryFallback(draft, ledger.snapshot())).toBeNull();
+  });
+
+  it("accepts equivalent terminology receipts with reordered object keys", () => {
+    const metadata = reviewMetadata();
+    const findingSnapshot = createReviewFindingLedger().snapshot();
+    const terminologySnapshot = createTerminologyLedger(metadata.headSha).snapshot();
+    const normalized = normalizeReviewResult(
+      { terminologyReview: terminologySnapshot.review },
+      metadata,
+    );
+    const reordered = {
+      ...normalized,
+      terminologyReview: {
+        noChangesReason: terminologySnapshot.review.noChangesReason,
+        decisions: terminologySnapshot.review.decisions,
+        status: terminologySnapshot.review.status,
+      },
+    };
+
+    expect(terminologyReviewConsistencyIssues(reordered, terminologySnapshot)).toEqual([]);
+    expect(canonicalRetryFallback(reordered, findingSnapshot, terminologySnapshot)).not.toBeNull();
+  });
+
   it("preserves canonical findings when a later advisor stage fails", () => {
     const ledger = createReviewFindingLedger();
     ledger.applyBatch([{ operation: "add", finding: finding() }], "correctness-state");
@@ -206,6 +238,97 @@ describe("PR review ledger tools", () => {
     expect(result?.findings[0]?.title).not.toBe("PR review advisor unavailable");
     expect(result?.reviewCompleteness.limitations[0]).toContain(
       "stopped before completing all review stages",
+    );
+  });
+
+  it("maps a completed empty canonical ledger to merge_as_is without waiving human review", () => {
+    const result = normalizeReviewResult(
+      {
+        summary: {
+          recommendation: "info_only",
+          confidence: "high",
+          oneLine: "No actionable findings remain.",
+        },
+        findings: [],
+        reviewCompleteness: {
+          limitations: [],
+          requiresHumanReview: false,
+        },
+      },
+      reviewMetadata(),
+    );
+
+    const canonical = withCanonicalReviewLedgerFindings(
+      result,
+      createReviewFindingLedger().snapshot(),
+    );
+
+    expect(canonical.summary).toMatchObject({
+      confidence: "high",
+      recommendation: "merge_as_is",
+      oneLine: "No actionable findings remain in the canonical review ledger.",
+    });
+    expect(canonical.reviewCompleteness.requiresHumanReview).toBe(true);
+  });
+
+  it("keeps a low-confidence empty canonical ledger fail-closed as info_only (#7521)", () => {
+    const result = normalizeReviewResult(
+      {
+        summary: {
+          recommendation: "merge_as_is",
+          confidence: "low",
+          oneLine: "No actionable findings remain.",
+        },
+        findings: [],
+        reviewCompleteness: {
+          limitations: ["Review confidence remained low."],
+          requiresHumanReview: true,
+        },
+      },
+      reviewMetadata(),
+    );
+
+    const canonical = withCanonicalReviewLedgerFindings(
+      result,
+      createReviewFindingLedger().snapshot(),
+    );
+
+    expect(canonical.summary).toMatchObject({
+      confidence: "low",
+      recommendation: "info_only",
+    });
+    expect(canonical.reviewCompleteness.requiresHumanReview).toBe(true);
+  });
+
+  it("marks a canonical draft incomplete when synthesis validation fails (#7521)", () => {
+    const result = normalizeReviewResult(
+      {
+        summary: {
+          recommendation: "merge_as_is",
+          confidence: "high",
+          oneLine: "No actionable findings remain.",
+        },
+        findings: [],
+        reviewCompleteness: {
+          limitations: [],
+          requiresHumanReview: false,
+        },
+      },
+      reviewMetadata(),
+    );
+    const canonical = canonicalRetryFallback(result, createReviewFindingLedger().snapshot());
+
+    expect(canonical).not.toBeNull();
+    const fallback = recordSynthesisValidationFailureOnDraft(canonical!, "validation turn failed");
+
+    expect(fallback.summary).toMatchObject({
+      confidence: "low",
+      recommendation: "info_only",
+      oneLine: "Same-session synthesis validation failed; the advisor result is incomplete.",
+    });
+    expect(fallback.reviewCompleteness.requiresHumanReview).toBe(true);
+    expect(fallback.reviewCompleteness.limitations).toContain(
+      "Same-session synthesis validation failed; using canonical draft: validation turn failed",
     );
   });
 
@@ -689,7 +812,7 @@ describe("PR review ledger tools", () => {
       withCanonicalReviewLedgerFindings(drifted, ledger.snapshot()).findings[0]?.severity,
     ).toBe("warning");
     expect(withCanonicalReviewLedgerFindings(drifted, ledger.snapshot()).summary).toMatchObject({
-      recommendation: "info_only",
+      recommendation: "merge_after_fixes",
       topItem: "Refusal status is masked",
     });
   });

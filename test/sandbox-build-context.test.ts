@@ -1,17 +1,69 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
+import { dockerSpawnSync } from "../src/lib/adapters/docker/exec";
+import { createAgentSandbox } from "../src/lib/agent/base-image";
+import type { AgentDefinition } from "../src/lib/agent/defs";
+import { isWsl } from "../src/lib/platform";
 import {
   collectBuildContextStats,
   normalizeReadModesForDockerCopy,
   stageLegacySandboxBuildContext,
   stageOptimizedSandboxBuildContext,
 } from "../src/lib/sandbox/build-context";
+
+interface BuildxCommand {
+  command: string;
+  args: string[];
+}
+
+function resolveBuildxCommand(): BuildxCommand | null {
+  return (
+    [
+      { command: "docker", args: ["buildx"] },
+      { command: "docker-buildx", args: [] },
+    ].find((candidate) => {
+      const args = [...candidate.args, "version"];
+      const result =
+        candidate.command === "docker"
+          ? dockerSpawnSync(args, { encoding: "utf8" })
+          : spawnSync(candidate.command, args, { encoding: "utf8" });
+      return result.status === 0;
+    }) ?? null
+  );
+}
+
+const SUPPORTED_BUILDX_HOST = process.platform === "linux" && !isWsl();
+const BUILDX_COMMAND = SUPPORTED_BUILDX_HOST ? resolveBuildxCommand() : null;
+const DOCKER_CAPABLE_LINUX_CI = process.env.CI === "true" && SUPPORTED_BUILDX_HOST;
+
+function buildTarget(
+  buildx: BuildxCommand,
+  stagedDockerfile: string,
+  buildCtx: string,
+  target: string,
+  outputDir: string,
+) {
+  const args = [
+    ...buildx.args,
+    "build",
+    "--progress=plain",
+    `--target=${target}`,
+    `--output=type=local,dest=${outputDir}`,
+    "--file",
+    stagedDockerfile,
+    buildCtx,
+  ];
+  const options = { encoding: "utf8" as const, maxBuffer: 20 * 1024 * 1024 };
+  return buildx.command === "docker"
+    ? dockerSpawnSync(args, options)
+    : spawnSync(buildx.command, args, options);
+}
 
 describe("sandbox build context staging", () => {
   function runtimeManifestFixture(runtimeName: string, fileName: string) {
@@ -35,7 +87,17 @@ describe("sandbox build context staging", () => {
 
     writeFixture("Dockerfile");
     writeFixture("tsconfig.runtime-preloads.json", "{}\n");
-    for (const runtimeName of ["mcporter-runtime", "wechat-runtime"]) {
+    writeFixture(path.join("agents", "openclaw", "state-lock-plan.json"), "{}\n");
+    writeFixture(
+      path.join("ci", "npm-audit-exceptions.json"),
+      `${JSON.stringify({ schemaVersion: 1, exceptions: [] })}\n`,
+    );
+    for (const runtimeName of [
+      "managed-image-messaging-runtime",
+      "mcporter-runtime",
+      "openclaw-runtime",
+      "wechat-runtime",
+    ]) {
       for (const fileName of ["package.json", "package-lock.json"]) {
         writeFixture(
           path.join("agents", "openclaw", runtimeName, fileName),
@@ -43,6 +105,54 @@ describe("sandbox build context staging", () => {
         );
       }
     }
+    writeFixture(
+      path.join(
+        "agents",
+        "openclaw",
+        "managed-image-messaging-runtime",
+        "npm-cache-seed",
+        ".gitkeep",
+      ),
+    );
+    for (const fileName of [
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json",
+      "install-reviewed-runtime.sh",
+      "npm-ci-locked.sh",
+      "build-runtime.ts",
+      "mcp-tool-discovery.ts",
+      "streamable-http-client.test.ts",
+      "tool-discovery-core.ts",
+    ]) {
+      writeFixture(
+        path.join("tools", "mcp-tool-discovery-runtime", fileName),
+        "fixture\n",
+        ["install-reviewed-runtime.sh", "npm-ci-locked.sh"].includes(fileName) ? 0o755 : 0o644,
+      );
+    }
+    for (const seedDirectory of ["mcp-runtime-npm-cache-seed", "npm-cache-seed"]) {
+      writeFixture(path.join("tools", "mcp-tool-discovery-runtime", seedDirectory, ".gitkeep"));
+    }
+    for (const relativePath of [
+      "managed-startup-image-runtime.bundle",
+      path.join("mcp-tool-discovery", "BUNDLED_PACKAGES.json"),
+      path.join("mcp-tool-discovery", "THIRD_PARTY_LICENSES.txt"),
+      path.join("mcp-tool-discovery", "mcp-tool-discovery.bundle"),
+    ]) {
+      writeFixture(
+        path.join("tools", "mcp-tool-discovery-runtime", "reviewed-runtime-bundle", relativePath),
+        `reviewed fixture: ${relativePath}\n`,
+      );
+    }
+    writeFixture(
+      path.join(
+        "tools",
+        "mcp-tool-discovery-runtime",
+        "reviewed-runtime-bundle",
+        "unreviewed-runtime.bundle",
+      ),
+    );
     for (const fileName of [
       "package.json",
       "package-lock.json",
@@ -84,6 +194,9 @@ describe("sandbox build context staging", () => {
     fs.chmodSync(path.join(sourceRoot, "nemoclaw-blueprint", "model-specific-setup"), 0o700);
     fs.chmodSync(blueprintManifestDir, 0o700);
     writeFixture(path.join("scripts", "nemoclaw-start.sh"));
+    writeFixture(path.join("scripts", "managed-startup-hold.sh"));
+    writeFixture(path.join("scripts", "managed-bootstrap-entrypoint.c"));
+    writeFixture(path.join("scripts", "managed-bootstrap-trampoline.sh"));
     writeFixture(path.join("scripts", "gateway-control.sh"));
     writeFixture(path.join("scripts", "managed-gateway-control.py"));
     writeFixture(path.join("scripts", "state-dir-guard.py"));
@@ -94,7 +207,9 @@ describe("sandbox build context staging", () => {
     writeFixture(
       path.join("scripts", "checks", "verify-openshell-policy-boundary-dependencies.mts"),
     );
+    writeFixture(path.join("scripts", "checks", "materialize-locked-npm-cache-seed.mts"));
     writeFixture(path.join("scripts", "lib", "sandbox-init.sh"));
+    writeFixture(path.join("scripts", "lib", "entrypoint-env-wrapper.sh"));
     writeFixture(path.join("scripts", "lib", "gateway-supervisor.sh"));
     writeFixture(path.join("scripts", "lib", "sandbox-rlimits.sh"));
     writeFixture(path.join("scripts", "lib", "openclaw_device_approval_policy.py"));
@@ -107,13 +222,53 @@ describe("sandbox build context staging", () => {
       path.join("src", "lib", "messaging", "channels", "fixture", "hooks", "example.ts"),
     );
     writeFixture(path.join("src", "lib", "tool-disclosure.ts"));
-    writeFixture(path.join("scripts", "patch-openclaw-tool-catalog.js"));
-    writeFixture(path.join("scripts", "patch-openclaw-chat-send.js"));
+    for (const relativePath of [
+      path.join("core", "json-types.ts"),
+      path.join("core", "ports.ts"),
+      path.join("onboard", "managed-bootstrap", "envelope.ts"),
+      path.join("onboard", "managed-bootstrap", "image-runtime.ts"),
+      path.join("onboard", "managed-startup", "image-runtime.ts"),
+      path.join("security", "credential-hash.ts"),
+      path.join("state", "paths.ts"),
+      path.join("state", "state-root.ts"),
+    ]) {
+      writeFixture(path.join("src", "lib", relativePath));
+    }
+    writeFixture(path.join("scripts", "patch-openclaw-tool-catalog.mts"));
+    writeFixture(path.join("scripts", "patch-openclaw-chat-send.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-mcp-npx.mts"));
-    writeFixture(path.join("scripts", "patch-openclaw-issue-4434-diagnostics.ts"));
-    writeFixture(path.join("scripts", "patch-openclaw-device-self-approval.ts"));
+    writeFixture(path.join("scripts", "patch-openclaw-mcp-reliability.mts"));
+    writeFixture(path.join("scripts", "patch-openclaw-mcp-tools-list-timeout.mts"));
+    writeFixture(path.join("scripts", "patch-openclaw-issue-4434-diagnostics.mts"));
+    writeFixture(path.join("scripts", "patch-openclaw-managed-transport-diagnostics.mts"));
+    writeFixture(path.join("scripts", "patch-openclaw-device-self-approval.mts"));
+    writeFixture(path.join("scripts", "openclaw", "patch-gateway-daemon-dialback.mts"));
+    writeFixture(path.join("scripts", "extract-semver.sh"));
+    writeFixture(path.join("scripts", "patch-openclaw-shared-state-permissions.mts"));
+    writeFixture(path.join("scripts", "patch-bundled-npm-brace-expansion.mts"));
+    writeFixture(path.join("scripts", "lib", "patch-bundled-npm-ip-address.mts"));
+    writeFixture(path.join("scripts", "patch-bundled-npm-tar.mts"));
+    writeFixture(path.join("scripts", "upgrade-bundled-npm.mts"));
     writeFixture(path.join("scripts", "verify-wechat-runtime-lock.mts"));
-    writeFixture(path.join("scripts", "lib", "reviewed-npm-archive.mts"));
+    writeFixture(path.join("scripts", "lib", "reviewed-npm-archive.mts"), "fixture\n", 0o700);
+    writeFixture(path.join("scripts", "lib", "seed-reviewed-npm-cache.mts"), "fixture\n", 0o700);
+    writeFixture(path.join("scripts", "lib", "reviewed-npm-audit.mts"), "fixture\n", 0o700);
+    writeFixture(path.join("scripts", "lib", "openclaw-npm-remediation.mts"), "fixture\n", 0o700);
+    fs.chmodSync(path.join(sourceRoot, "scripts"), 0o700);
+    fs.chmodSync(path.join(sourceRoot, "scripts", "lib"), 0o700);
+  }
+
+  function makeBuildContextFixtureGroupWritable(sourceRoot: string) {
+    for (const relativePath of [
+      "scripts",
+      path.join("scripts", "lib"),
+      "src",
+      path.join("src", "lib"),
+    ]) {
+      fs.chmodSync(path.join(sourceRoot, relativePath), 0o775);
+    }
+    fs.chmodSync(path.join(sourceRoot, "scripts", "patch-bundled-npm-tar.mts"), 0o775);
+    fs.chmodSync(path.join(sourceRoot, "src", "lib", "tool-disclosure.ts"), 0o664);
   }
 
   function expectDockerfileScriptCopiesExist(buildCtx: string, stagedDockerfile: string) {
@@ -124,7 +279,7 @@ describe("sandbox build context staging", () => {
     expect(copiedScripts).not.toHaveLength(0);
 
     for (const relativePath of copiedScripts) {
-      expect(fs.existsSync(path.join(buildCtx, "scripts", relativePath))).toBe(true);
+      expect(fs.existsSync(path.join(buildCtx, "scripts", relativePath)), relativePath).toBe(true);
     }
   }
 
@@ -163,7 +318,7 @@ describe("sandbox build context staging", () => {
   }
 
   function expectStagedOpenClawRuntimeGraphs(buildCtx: string, sourceRoot: string) {
-    for (const runtimeName of ["mcporter-runtime", "wechat-runtime"]) {
+    for (const runtimeName of ["mcporter-runtime", "openclaw-runtime", "wechat-runtime"]) {
       const runtimeDir = path.join(buildCtx, "agents", "openclaw", runtimeName);
       expect(fs.readdirSync(runtimeDir).sort()).toEqual(["package-lock.json", "package.json"]);
       for (const fileName of ["package.json", "package-lock.json"]) {
@@ -181,31 +336,204 @@ describe("sandbox build context staging", () => {
         (fs.statSync(path.join(runtimeDir, "package-lock.json")).mode & 0o777).toString(8),
       ).toBe("644");
     }
+
+    const managedRuntimeDir = path.join(
+      buildCtx,
+      "agents",
+      "openclaw",
+      "managed-image-messaging-runtime",
+    );
+    expect(fs.readdirSync(managedRuntimeDir).sort()).toEqual([
+      "npm-cache-seed",
+      "package-lock.json",
+      "package.json",
+    ]);
+    for (const fileName of ["package.json", "package-lock.json"]) {
+      expect(fs.readFileSync(path.join(managedRuntimeDir, fileName), "utf8")).toBe(
+        fs.readFileSync(
+          path.join(sourceRoot, "agents", "openclaw", "managed-image-messaging-runtime", fileName),
+          "utf8",
+        ),
+      );
+    }
+    expect(
+      fs.readFileSync(path.join(managedRuntimeDir, "npm-cache-seed", ".gitkeep"), "utf8"),
+    ).toBe(
+      fs.readFileSync(
+        path.join(
+          sourceRoot,
+          "agents",
+          "openclaw",
+          "managed-image-messaging-runtime",
+          "npm-cache-seed",
+          ".gitkeep",
+        ),
+        "utf8",
+      ),
+    );
+  }
+
+  function expectStagedMcpToolDiscoveryRuntime(buildCtx: string, sourceRoot: string) {
+    const runtimeDir = path.join(buildCtx, "tools", "mcp-tool-discovery-runtime");
+    expect(fs.readdirSync(runtimeDir).sort()).toEqual([
+      "build-runtime.ts",
+      "install-reviewed-runtime.sh",
+      "mcp-runtime-npm-cache-seed",
+      "mcp-tool-discovery.ts",
+      "npm-cache-seed",
+      "npm-ci-locked.sh",
+      "package-lock.json",
+      "package.json",
+      "reviewed-runtime-bundle",
+      "streamable-http-client.test.ts",
+      "tool-discovery-core.ts",
+      "tsconfig.json",
+    ]);
+    for (const fileName of [
+      "build-runtime.ts",
+      "install-reviewed-runtime.sh",
+      "mcp-tool-discovery.ts",
+      "npm-ci-locked.sh",
+      "package-lock.json",
+      "package.json",
+      "streamable-http-client.test.ts",
+      "tool-discovery-core.ts",
+      "tsconfig.json",
+    ]) {
+      expect(fs.readFileSync(path.join(runtimeDir, fileName), "utf8")).toBe(
+        fs.readFileSync(
+          path.join(sourceRoot, "tools", "mcp-tool-discovery-runtime", fileName),
+          "utf8",
+        ),
+      );
+      expect((fs.statSync(path.join(runtimeDir, fileName)).mode & 0o777).toString(8)).toBe(
+        ["install-reviewed-runtime.sh", "npm-ci-locked.sh"].includes(fileName) ? "755" : "644",
+      );
+    }
+    for (const seedDirectory of ["mcp-runtime-npm-cache-seed", "npm-cache-seed"]) {
+      const sourceSeedDirectory = path.join(
+        sourceRoot,
+        "tools",
+        "mcp-tool-discovery-runtime",
+        seedDirectory,
+      );
+      const stagedSeedDirectory = path.join(runtimeDir, seedDirectory);
+      const sourceEntries = fs.readdirSync(sourceSeedDirectory).sort();
+      expect(sourceEntries.length).toBeGreaterThan(0);
+      expect(fs.readdirSync(stagedSeedDirectory).sort()).toEqual(sourceEntries);
+      expect(fs.readFileSync(path.join(stagedSeedDirectory, sourceEntries[0]))).toEqual(
+        fs.readFileSync(path.join(sourceSeedDirectory, sourceEntries[0])),
+      );
+    }
+
+    const reviewedRuntimeDir = path.join(runtimeDir, "reviewed-runtime-bundle");
+    expect(fs.readdirSync(reviewedRuntimeDir).sort()).toEqual([
+      "managed-startup-image-runtime.bundle",
+      "mcp-tool-discovery",
+    ]);
+    const reviewedRuntimeFiles = [
+      "managed-startup-image-runtime.bundle",
+      path.join("mcp-tool-discovery", "BUNDLED_PACKAGES.json"),
+      path.join("mcp-tool-discovery", "THIRD_PARTY_LICENSES.txt"),
+      path.join("mcp-tool-discovery", "mcp-tool-discovery.bundle"),
+    ];
+    expect(fs.readdirSync(path.join(reviewedRuntimeDir, "mcp-tool-discovery")).sort()).toEqual([
+      "BUNDLED_PACKAGES.json",
+      "THIRD_PARTY_LICENSES.txt",
+      "mcp-tool-discovery.bundle",
+    ]);
+    for (const relativePath of reviewedRuntimeFiles) {
+      const stagedPath = path.join(reviewedRuntimeDir, relativePath);
+      const sourcePath = path.join(
+        sourceRoot,
+        "tools",
+        "mcp-tool-discovery-runtime",
+        "reviewed-runtime-bundle",
+        relativePath,
+      );
+      expect(fs.lstatSync(stagedPath).isFile(), relativePath).toBe(true);
+      expect(fs.readFileSync(stagedPath), relativePath).toEqual(fs.readFileSync(sourcePath));
+      expect((fs.statSync(stagedPath).mode & 0o777).toString(8), relativePath).toBe("644");
+    }
   }
 
   function expectStagedToolDisclosureContract(buildCtx: string) {
     expect(fs.existsSync(path.join(buildCtx, "src", "lib", "tool-disclosure.ts"))).toBe(true);
   }
 
-  it("normalizes copied blueprint modes with chmod a+rX semantics", () => {
+  function expectStagedManagedStartupRuntimeSources(buildCtx: string, sourceRoot: string) {
+    for (const relativePath of [
+      path.join("src", "lib", "core", "json-types.ts"),
+      path.join("src", "lib", "core", "ports.ts"),
+      path.join("src", "lib", "onboard", "managed-bootstrap", "envelope.ts"),
+      path.join("src", "lib", "onboard", "managed-bootstrap", "image-runtime.ts"),
+      path.join("src", "lib", "onboard", "managed-startup", "image-runtime.ts"),
+      path.join("src", "lib", "security", "credential-hash.ts"),
+      path.join("src", "lib", "state", "paths.ts"),
+      path.join("src", "lib", "state", "state-root.ts"),
+    ]) {
+      const stagedPath = path.join(buildCtx, relativePath);
+      expect(fs.readFileSync(stagedPath, "utf8"), relativePath).toBe(
+        fs.readFileSync(path.join(sourceRoot, relativePath), "utf8"),
+      );
+      expect((fs.statSync(stagedPath).mode & 0o777).toString(8), relativePath).toBe("644");
+    }
+  }
+
+  function expectStagedScriptModes(buildCtx: string) {
+    const stagedScripts = path.join(buildCtx, "scripts");
+    const stagedLib = path.join(stagedScripts, "lib");
+    const stagedHelper = path.join(stagedLib, "reviewed-npm-archive.mts");
+    const stagedSeed = path.join(stagedLib, "seed-reviewed-npm-cache.mts");
+
+    expect((fs.statSync(stagedScripts).mode & 0o777).toString(8)).toBe("755");
+    expect((fs.statSync(stagedLib).mode & 0o777).toString(8)).toBe("755");
+    expect((fs.statSync(stagedHelper).mode & 0o777).toString(8)).toBe("755");
+    expect((fs.statSync(stagedSeed).mode & 0o777).toString(8)).toBe("755");
+  }
+
+  function expectStagedGroupWritablePayloadModes(buildCtx: string) {
+    expect((fs.statSync(path.join(buildCtx, "scripts")).mode & 0o777).toString(8)).toBe("755");
+    expect(
+      (
+        fs.statSync(path.join(buildCtx, "scripts", "patch-bundled-npm-tar.mts")).mode & 0o777
+      ).toString(8),
+    ).toBe("755");
+    expect(
+      (fs.statSync(path.join(buildCtx, "src", "lib", "tool-disclosure.ts")).mode & 0o777).toString(
+        8,
+      ),
+    ).toBe("644");
+  }
+
+  it("normalizes restrictive and group-writable modes for Docker COPY", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-unit-"));
     const blueprintDir = path.join(tmpDir, "nemoclaw-blueprint");
     const manifestDir = path.join(blueprintDir, "model-specific-setup", "openclaw");
     const manifestPath = path.join(manifestDir, "kimi-k2.6-managed-inference.json");
     const executablePath = path.join(blueprintDir, "scripts", "helper.sh");
+    const groupWritableDir = path.join(blueprintDir, "group-writable");
+    const groupWritableFile = path.join(groupWritableDir, "manifest.json");
+    const groupWritableExecutable = path.join(groupWritableDir, "helper.sh");
     const symlinkPath = path.join(blueprintDir, "manifest-link.json");
 
     try {
       fs.mkdirSync(manifestDir, { recursive: true });
       fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+      fs.mkdirSync(groupWritableDir, { mode: 0o775 });
       fs.writeFileSync(manifestPath, "{}\n", { mode: 0o600 });
       fs.writeFileSync(executablePath, "#!/bin/sh\n", { mode: 0o700 });
+      fs.writeFileSync(groupWritableFile, "{}\n", { mode: 0o664 });
+      fs.writeFileSync(groupWritableExecutable, "#!/bin/sh\n", { mode: 0o775 });
       fs.symlinkSync(manifestPath, symlinkPath);
       fs.chmodSync(blueprintDir, 0o700);
       fs.chmodSync(path.join(blueprintDir, "model-specific-setup"), 0o700);
       fs.chmodSync(manifestDir, 0o700);
       fs.chmodSync(manifestPath, 0o600);
       fs.chmodSync(executablePath, 0o700);
+      fs.chmodSync(groupWritableDir, 0o775);
+      fs.chmodSync(groupWritableFile, 0o664);
+      fs.chmodSync(groupWritableExecutable, 0o775);
 
       normalizeReadModesForDockerCopy(blueprintDir);
 
@@ -213,6 +541,9 @@ describe("sandbox build context staging", () => {
       expect((fs.statSync(manifestDir).mode & 0o777).toString(8)).toBe("755");
       expect((fs.statSync(manifestPath).mode & 0o777).toString(8)).toBe("644");
       expect((fs.statSync(executablePath).mode & 0o777).toString(8)).toBe("755");
+      expect((fs.statSync(groupWritableDir).mode & 0o777).toString(8)).toBe("755");
+      expect((fs.statSync(groupWritableFile).mode & 0o777).toString(8)).toBe("644");
+      expect((fs.statSync(groupWritableExecutable).mode & 0o777).toString(8)).toBe("755");
       expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -228,6 +559,7 @@ describe("sandbox build context staging", () => {
       const { buildCtx } = stageOptimizedSandboxBuildContext(sourceRoot, tmpDir);
       expectStagedBlueprintModes(buildCtx);
       expectStagedOpenClawRuntimeGraphs(buildCtx, sourceRoot);
+      expectStagedMcpToolDiscoveryRuntime(buildCtx, sourceRoot);
       expectStagedToolDisclosureContract(buildCtx);
     } finally {
       fs.rmSync(sourceRoot, { recursive: true, force: true });
@@ -258,6 +590,7 @@ describe("sandbox build context staging", () => {
       const { buildCtx } = stageLegacySandboxBuildContext(sourceRoot, tmpDir);
       expectStagedBlueprintModes(buildCtx);
       expectStagedOpenClawRuntimeGraphs(buildCtx, sourceRoot);
+      expectStagedMcpToolDiscoveryRuntime(buildCtx, sourceRoot);
       expectStagedToolDisclosureContract(buildCtx);
     } finally {
       fs.rmSync(sourceRoot, { recursive: true, force: true });
@@ -281,6 +614,139 @@ describe("sandbox build context staging", () => {
     }
   });
 
+  it("legacy staging supplies the managed-startup runtime Dockerfile sources", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "nemoclaw-build-context-legacy-managed-startup-"),
+    );
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      const { buildCtx } = stageLegacySandboxBuildContext(sourceRoot, tmpDir);
+      expectStagedManagedStartupRuntimeSources(buildCtx, sourceRoot);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("optimized staging makes copied scripts readable under a restrictive umask (#7071)", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-script-mode-"));
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      const previousUmask = process.umask(0o077);
+      try {
+        const { buildCtx } = stageOptimizedSandboxBuildContext(sourceRoot, tmpDir);
+        expectStagedScriptModes(buildCtx);
+      } finally {
+        process.umask(previousUmask);
+      }
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("legacy staging makes copied scripts readable under a restrictive umask (#7071)", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "nemoclaw-build-context-legacy-script-mode-"),
+    );
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      const previousUmask = process.umask(0o077);
+      try {
+        const { buildCtx } = stageLegacySandboxBuildContext(sourceRoot, tmpDir);
+        expectStagedScriptModes(buildCtx);
+      } finally {
+        process.umask(previousUmask);
+      }
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("optimized staging strips group and other write bits from copied payloads", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-group-write-"));
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      makeBuildContextFixtureGroupWritable(sourceRoot);
+      const { buildCtx } = stageOptimizedSandboxBuildContext(sourceRoot, tmpDir);
+      expectStagedGroupWritablePayloadModes(buildCtx);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("legacy staging strips group and other write bits from copied payloads", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "nemoclaw-build-context-legacy-group-write-"),
+    );
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      makeBuildContextFixtureGroupWritable(sourceRoot);
+      const { buildCtx } = stageLegacySandboxBuildContext(sourceRoot, tmpDir);
+      expectStagedGroupWritablePayloadModes(buildCtx);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlinked reviewed runtime artifact", () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-source-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-symlink-"));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-reviewed-runtime-outside-"));
+
+    try {
+      writeBuildContextFixture(sourceRoot);
+      const outsideTarget = path.join(outsideDir, "outside-license.txt");
+      const outsideContents = "outside target must remain unchanged\n";
+      fs.writeFileSync(outsideTarget, outsideContents);
+      const reviewedArtifact = path.join(
+        sourceRoot,
+        "tools",
+        "mcp-tool-discovery-runtime",
+        "reviewed-runtime-bundle",
+        "mcp-tool-discovery",
+        "THIRD_PARTY_LICENSES.txt",
+      );
+      fs.rmSync(reviewedArtifact);
+      fs.symlinkSync(outsideTarget, reviewedArtifact);
+
+      expect(() => stageOptimizedSandboxBuildContext(sourceRoot, tmpDir)).toThrow();
+      expect(fs.readFileSync(outsideTarget, "utf8")).toBe(outsideContents);
+      const stagedDirectories = fs.readdirSync(tmpDir);
+      expect(stagedDirectories).toHaveLength(1);
+      expect(
+        fs.existsSync(
+          path.join(
+            tmpDir,
+            stagedDirectories[0],
+            "tools",
+            "mcp-tool-discovery-runtime",
+            "reviewed-runtime-bundle",
+            "mcp-tool-discovery",
+            "THIRD_PARTY_LICENSES.txt",
+          ),
+        ),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(sourceRoot, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("optimized staging excludes blueprint .venv and extra scripts while preserving required files", () => {
     const repoRoot = path.join(import.meta.dirname, "..");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-opt-"));
@@ -288,8 +754,24 @@ describe("sandbox build context staging", () => {
     try {
       const { buildCtx, stagedDockerfile } = stageOptimizedSandboxBuildContext(repoRoot, tmpDir);
       expectDockerfileScriptCopiesExist(buildCtx, stagedDockerfile);
+      for (const relativePath of [
+        path.join("src", "lib", "core", "json-types.ts"),
+        path.join("src", "lib", "core", "ports.ts"),
+        path.join("src", "lib", "onboard", "managed-bootstrap", "envelope.ts"),
+        path.join("src", "lib", "onboard", "managed-bootstrap", "image-runtime.ts"),
+        path.join("src", "lib", "onboard", "managed-startup", "image-runtime.ts"),
+        path.join("src", "lib", "security", "credential-hash.ts"),
+        path.join("src", "lib", "state", "paths.ts"),
+        path.join("src", "lib", "state", "state-root.ts"),
+      ]) {
+        expect(fs.existsSync(path.join(buildCtx, relativePath)), relativePath).toBe(true);
+      }
       expect(fs.existsSync(path.join(buildCtx, "tsconfig.runtime-preloads.json"))).toBe(true);
+      expect(fs.readFileSync(path.join(buildCtx, "ci", "npm-audit-exceptions.json"), "utf8")).toBe(
+        fs.readFileSync(path.join(repoRoot, "ci", "npm-audit-exceptions.json"), "utf8"),
+      );
       expectStagedOpenClawRuntimeGraphs(buildCtx, repoRoot);
+      expectStagedMcpToolDiscoveryRuntime(buildCtx, repoRoot);
       expect(fs.existsSync(path.join(buildCtx, "nemoclaw-blueprint", ".venv"))).toBe(false);
       expect(fs.existsSync(path.join(buildCtx, "nemoclaw-blueprint", "blueprint.yaml"))).toBe(true);
       expect(
@@ -323,11 +805,20 @@ describe("sandbox build context staging", () => {
         ),
       ).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "nemoclaw-start.sh"))).toBe(true);
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "managed-bootstrap-entrypoint.c"))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "managed-bootstrap-trampoline.sh"))).toBe(
+        true,
+      );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "gateway-control.sh"))).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "managed-gateway-control.py"))).toBe(
         true,
       );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "state-dir-guard.py"))).toBe(true);
+      expect(fs.existsSync(path.join(buildCtx, "agents", "openclaw", "state-lock-plan.json"))).toBe(
+        true,
+      );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "openclaw-config-guard.py"))).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "codex-acp-wrapper.sh"))).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "generate-openclaw-config.mts"))).toBe(
@@ -363,21 +854,56 @@ describe("sandbox build context staging", () => {
       expect(
         fs.existsSync(path.join(buildCtx, "scripts", "lib", "normalize_mutable_config_perms.py")),
       ).toBe(true);
-      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-tool-catalog.js"))).toBe(
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-tool-catalog.mts"))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-chat-send.mts"))).toBe(
         true,
       );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-chat-send.js"))).toBe(
-        true,
+        false,
       );
       expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-mcp-npx.mts"))).toBe(
         true,
       );
       expect(
-        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-issue-4434-diagnostics.ts")),
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-mcp-reliability.mts")),
       ).toBe(true);
       expect(
-        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-device-self-approval.ts")),
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-mcp-tools-list-timeout.mts")),
       ).toBe(true);
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-issue-4434-diagnostics.mts")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(buildCtx, "scripts", "patch-openclaw-managed-transport-diagnostics.mts"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-device-self-approval.mts")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(buildCtx, "scripts", "openclaw", "patch-gateway-daemon-dialback.mts"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(buildCtx, "scripts", "patch-openclaw-shared-state-permissions.mts"),
+        ),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-bundled-npm-tar.mts"))).toBe(true);
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-bundled-npm-brace-expansion.mts")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "lib", "patch-bundled-npm-ip-address.mts")),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(buildCtx, "scripts", "upgrade-bundled-npm.mts"))).toBe(true);
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-device-self-approval.ts")),
+      ).toBe(false);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "lib", "sandbox-init.sh"))).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "lib", "gateway-supervisor.sh"))).toBe(
         true,
@@ -388,6 +914,112 @@ describe("sandbox build context staging", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it.runIf(DOCKER_CAPABLE_LINUX_CI)("provides Buildx on Docker-capable Linux CI", () => {
+    expect(BUILDX_COMMAND).not.toBeNull();
+  });
+
+  it.skipIf(!SUPPORTED_BUILDX_HOST || BUILDX_COMMAND === null)(
+    "generated build contexts import reviewed runtime artifacts through BuildKit",
+    {
+      timeout: 120_000,
+    },
+    () => {
+      const buildx = BUILDX_COMMAND as BuildxCommand;
+      const repoRoot = path.join(import.meta.dirname, "..");
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-reviewed-runtime-build-"));
+      const reviewedRuntimeSource = path.join(
+        repoRoot,
+        "tools",
+        "mcp-tool-discovery-runtime",
+        "reviewed-runtime-bundle",
+      );
+      const hermesAgent = {
+        name: "hermes",
+        displayName: "Hermes",
+        dockerfileBasePath: null,
+        dockerfilePath: path.join(repoRoot, "agents", "hermes", "Dockerfile"),
+      } as AgentDefinition;
+      const hermesBuild = createAgentSandbox(hermesAgent, { rootDir: repoRoot });
+
+      try {
+        for (const [name, staged] of [
+          ["openclaw", stageOptimizedSandboxBuildContext(repoRoot, tmpDir)],
+          ["hermes", hermesBuild],
+        ] as const) {
+          const { buildCtx, stagedDockerfile } = staged;
+          const mcpOutput = path.join(tmpDir, `${name}-mcp-output`);
+          const mcpBuild = buildTarget(
+            buildx,
+            stagedDockerfile,
+            buildCtx,
+            "mcp-tool-discovery-runtime",
+            mcpOutput,
+          );
+          expect(mcpBuild.status, `${mcpBuild.stdout}\n${mcpBuild.stderr}`).toBe(0);
+
+          for (const [sourceRelativePath, outputRelativePath] of [
+            [
+              path.join("mcp-tool-discovery", "BUNDLED_PACKAGES.json"),
+              path.join("opt", "mcp-tool-discovery-runtime", "dist", "BUNDLED_PACKAGES.json"),
+            ],
+            [
+              path.join("mcp-tool-discovery", "THIRD_PARTY_LICENSES.txt"),
+              path.join("opt", "mcp-tool-discovery-runtime", "dist", "THIRD_PARTY_LICENSES.txt"),
+            ],
+            [
+              path.join("mcp-tool-discovery", "mcp-tool-discovery.bundle"),
+              path.join("opt", "mcp-tool-discovery-runtime", "dist", "mcp-tool-discovery.mjs"),
+            ],
+          ] as const) {
+            expect(fs.readFileSync(path.join(mcpOutput, outputRelativePath))).toEqual(
+              fs.readFileSync(path.join(reviewedRuntimeSource, sourceRelativePath)),
+            );
+          }
+
+          const startupOutput = path.join(tmpDir, `${name}-startup-output`);
+          const startupBuild = buildTarget(
+            buildx,
+            stagedDockerfile,
+            buildCtx,
+            "managed-startup-runtime-builder",
+            startupOutput,
+          );
+          expect(startupBuild.status, `${startupBuild.stdout}\n${startupBuild.stderr}`).toBe(0);
+          expect(
+            fs.readFileSync(path.join(startupOutput, "out", "managed-startup-image-runtime.cjs")),
+          ).toEqual(
+            fs.readFileSync(
+              path.join(reviewedRuntimeSource, "managed-startup-image-runtime.bundle"),
+            ),
+          );
+        }
+
+        const incomplete = stageOptimizedSandboxBuildContext(repoRoot, tmpDir);
+        fs.rmSync(
+          path.join(
+            incomplete.buildCtx,
+            "tools",
+            "mcp-tool-discovery-runtime",
+            "reviewed-runtime-bundle",
+            "mcp-tool-discovery",
+            "THIRD_PARTY_LICENSES.txt",
+          ),
+        );
+        const incompleteBuild = buildTarget(
+          buildx,
+          incomplete.stagedDockerfile,
+          incomplete.buildCtx,
+          "mcp-tool-discovery-runtime",
+          path.join(tmpDir, "incomplete-output"),
+        );
+        expect(incompleteBuild.status).not.toBe(0);
+      } finally {
+        fs.rmSync(hermesBuild.buildCtx, { recursive: true, force: true });
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("build context stats honor filters without descending into excluded directories", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-build-context-stats-"));

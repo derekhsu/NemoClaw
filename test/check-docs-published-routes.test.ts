@@ -1,21 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 import {
   buildPublishedRouteIndex,
+  extractMarkdownLinks,
+  findBrokenChangelogRoutes,
   findBrokenPublishedInferenceRoutes,
   findBrokenPublishedManageSandboxRoutes,
   findBrokenPublishedRedirects,
   findBrokenPublishedRoutes,
   findMissingDirectLegacyManageSandboxRedirects,
+  findMissingDirectLegacyReleaseNotesRedirects,
+  renderPublishedPageBodies,
   resolvePublishedRoute,
-} from "../scripts/check-docs-published-routes.ts";
+} from "../scripts/check-docs-published-routes.mts";
 
 const navYaml = `
 navigation:
@@ -35,6 +40,9 @@ navigation:
               - page: Declarative Multi-Agent Manifest
                 path: inference/declarative-agents-manifest.mdx
                 slug: declarative-agents-manifest
+          - changelog: ./changelog
+            title: Release Notes
+            slug: release-notes
       - slug: hermes
         layout:
           - section: Reference
@@ -43,7 +51,23 @@ navigation:
               - page: Commands
                 path: _build/agent-variants/reference/commands.hermes.generated.mdx
                 slug: commands
+          - changelog: ./changelog
+            title: Release Notes
+            slug: release-notes
+      - slug: deepagents
+        layout:
+          - changelog: ./changelog
+            title: Release Notes
+            slug: release-notes
 `;
+
+const repoRoot = path.join(import.meta.dirname, "..");
+const fernYaml = readFileSync(path.join(repoRoot, "fern", "docs.yml"), "utf8");
+const fernRedirects = (
+  parse(fernYaml) as {
+    redirects?: Array<{ source: string; destination: string }>;
+  }
+).redirects;
 
 function withDocsSource(source: string, run: (docsDir: string) => void): void {
   const docsDir = mkdtempSync(path.join(tmpdir(), "nemoclaw-doc-routes-"));
@@ -51,6 +75,18 @@ function withDocsSource(source: string, run: (docsDir: string) => void): void {
     const referenceDir = path.join(docsDir, "reference");
     mkdirSync(referenceDir, { recursive: true });
     writeFileSync(path.join(referenceDir, "commands.mdx"), source);
+    run(docsDir);
+  } finally {
+    rmSync(docsDir, { recursive: true, force: true });
+  }
+}
+
+function withChangelogSource(source: string, run: (docsDir: string) => void): void {
+  const docsDir = mkdtempSync(path.join(tmpdir(), "nemoclaw-changelog-routes-"));
+  try {
+    const changelogDir = path.join(docsDir, "changelog");
+    mkdirSync(changelogDir, { recursive: true });
+    writeFileSync(path.join(changelogDir, "2026-07-14.mdx"), source);
     run(docsDir);
   } finally {
     rmSync(docsDir, { recursive: true, force: true });
@@ -65,13 +101,38 @@ description: "Commands."
 description-agent: "Commands."
 keywords: ["commands"]
 ---
-import { AgentOnly } from "../_components/AgentGuide";
-
 ${body}
 `;
 }
 
 describe("published docs route checking", () => {
+  it("indexes the native changelog route for every agent variant", () => {
+    const index = buildPublishedRouteIndex(navYaml);
+
+    for (const variant of ["openclaw", "hermes", "deepagents"]) {
+      expect(index.routes.has(`/user-guide/${variant}/release-notes`)).toBe(true);
+      expect(index.routes.has(`/user-guide/${variant}/release-notes/2026/7/14`)).toBe(true);
+    }
+  });
+
+  it("requires the shared changelog in every agent variant", () => {
+    const incompleteNav = navYaml.replace(
+      `      - slug: deepagents
+        layout:
+          - changelog: ./changelog
+            title: Release Notes
+            slug: release-notes
+`,
+      `      - slug: deepagents
+        layout: []
+`,
+    );
+
+    expect(() => findBrokenChangelogRoutes(buildPublishedRouteIndex(incompleteNav))).toThrow(
+      "/user-guide/deepagents/release-notes",
+    );
+  });
+
   it("checks shared docs links after rendering AgentOnly blocks for each variant", () => {
     const index = buildPublishedRouteIndex(navYaml);
     const source = commandsSource(`
@@ -102,6 +163,44 @@ See [Hermes Commands](/user-guide/hermes/reference/commands).
           fromRoute: "/user-guide/hermes/reference/commands",
           resolved: "/user-guide/hermes/reference/missing",
           target: "/user-guide/hermes/reference/missing",
+        }),
+      ]);
+    });
+  });
+
+  it("validates every changelog link against published routes", () => {
+    const index = buildPublishedRouteIndex(navYaml);
+    const source = `## v0.0.83
+
+See [Commands](/user-guide/openclaw/reference/commands).
+See [July 14 release](/user-guide/openclaw/release-notes/2026/7/14).
+`;
+
+    withChangelogSource(source, (docsDir) => {
+      expect(findBrokenChangelogRoutes(index, docsDir)).toEqual([]);
+    });
+  });
+
+  it("rejects relative links from dated changelog permalinks", () => {
+    const index = buildPublishedRouteIndex(navYaml);
+    const source = `## v0.0.83
+
+See [Commands](../reference/commands).
+`;
+
+    withChangelogSource(source, (docsDir) => {
+      expect(findBrokenChangelogRoutes(index, docsDir)).toEqual([
+        expect.objectContaining({
+          fromRoute: "/user-guide/openclaw/release-notes/2026/7/14",
+          resolved: "/user-guide/openclaw/release-notes/2026/reference/commands",
+        }),
+        expect.objectContaining({
+          fromRoute: "/user-guide/hermes/release-notes/2026/7/14",
+          resolved: "/user-guide/hermes/release-notes/2026/reference/commands",
+        }),
+        expect.objectContaining({
+          fromRoute: "/user-guide/deepagents/release-notes/2026/7/14",
+          resolved: "/user-guide/deepagents/release-notes/2026/reference/commands",
         }),
       ]);
     });
@@ -166,6 +265,24 @@ redirects:
     ]);
   });
 
+  it("rejects an Additional Setup redirect to an unpublished destination", () => {
+    const index = buildPublishedRouteIndex(navYaml);
+    const fernYaml = `
+redirects:
+  - source: /nemoclaw/get-started/prerequisites/station
+    destination: /nemoclaw/user-guide/openclaw/get-started/additional-setup/missing
+`;
+
+    expect(findBrokenPublishedRedirects(index, fernYaml)).toEqual([
+      {
+        source: "/nemoclaw/get-started/prerequisites/station",
+        destination: "/nemoclaw/user-guide/openclaw/get-started/additional-setup/missing",
+        resolved: "/user-guide/openclaw/get-started/additional-setup/missing",
+        variant: null,
+      },
+    ]);
+  });
+
   it("rejects Manage Sandboxes HTML redirects that would require a second hop", () => {
     const fernYaml = `
 redirects:
@@ -191,6 +308,43 @@ redirects:
           "/nemoclaw/latest/user-guide/openclaw/manage-sandboxes/operate-sandboxes/view-sandbox-status",
       },
     ]);
+  });
+
+  it("requires direct redirects for every retired Release Notes URL form", () => {
+    const fernYaml = `
+redirects:
+  - source: /nemoclaw/latest/user-guide/:variant/about/release-notes
+    destination: /nemoclaw/latest/user-guide/:variant/release-notes
+`;
+
+    expect(findMissingDirectLegacyReleaseNotesRedirects(fernYaml)).toHaveLength(19);
+    expect(findMissingDirectLegacyReleaseNotesRedirects(fernYaml)).toContainEqual({
+      source: "/nemoclaw/about/release-notes.html",
+      destination: null,
+      expected: "/nemoclaw/user-guide/openclaw/release-notes",
+    });
+    expect(findMissingDirectLegacyReleaseNotesRedirects(fernYaml)).toContainEqual({
+      source: "/nemoclaw/about/release-notes.md",
+      destination: null,
+      expected: "/nemoclaw/user-guide/openclaw/release-notes.md",
+    });
+  });
+
+  it("requires direct Release Notes HTML redirects before generic HTML rules", () => {
+    const fernYaml = `
+redirects:
+  - source: /nemoclaw/:path*.html
+    destination: /nemoclaw/:path*
+  - source: /nemoclaw/latest/user-guide/:variant/about/release-notes.html
+    destination: /nemoclaw/latest/user-guide/:variant/release-notes
+`;
+
+    expect(findMissingDirectLegacyReleaseNotesRedirects(fernYaml)).toContainEqual({
+      source: "/nemoclaw/latest/user-guide/:variant/about/release-notes.html",
+      destination: "/nemoclaw/latest/user-guide/:variant/release-notes",
+      expected: "/nemoclaw/latest/user-guide/:variant/release-notes",
+      mustPrecede: "/nemoclaw/:path*.html",
+    });
   });
 
   it("can guard inference links without expanding checks to unrelated links", () => {
@@ -306,5 +460,148 @@ describe("Manage Sandboxes extension routes", () => {
     expect(
       index.routes.has("/user-guide/deepagents/manage-sandboxes/install-openclaw-plugins"),
     ).toBe(false);
+  });
+
+  it("publishes the Deep Agents runtime guide only in the Deep Agents guide", () => {
+    const source = "manage-sandboxes/run-deep-agents-code.mdx";
+    const quickstartSource = "get-started/quickstart-langchain-deepagents-code.mdx";
+    const quickstartRoute = "/user-guide/deepagents/get-started/quickstart";
+    const runtimeRoute =
+      "/user-guide/deepagents/manage-sandboxes/operate-sandboxes/run-deep-agents-code";
+    const [quickstartPage] = renderPublishedPageBodies(quickstartSource, index);
+
+    expect(index.sourceToRoutes.get(source)?.map(({ route }) => route)).toEqual([runtimeRoute]);
+    expect(findBrokenPublishedRoutes(source, index)).toEqual([]);
+    expect(findBrokenPublishedRoutes(quickstartSource, index)).toEqual([]);
+    expect(quickstartPage.route).toBe(quickstartRoute);
+    expect(
+      extractMarkdownLinks(quickstartPage.body).map(({ target }) =>
+        resolvePublishedRoute(quickstartRoute, target),
+      ),
+    ).toContain(runtimeRoute);
+    expect(
+      index.routes.has(
+        "/user-guide/openclaw/manage-sandboxes/operate-sandboxes/run-deep-agents-code",
+      ),
+    ).toBe(false);
+    expect(
+      index.routes.has(
+        "/user-guide/hermes/manage-sandboxes/operate-sandboxes/run-deep-agents-code",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves the legacy Deep Agents harness anchor", () => {
+    const [quickstartPage] = renderPublishedPageBodies(
+      "get-started/quickstart-langchain-deepagents-code.mdx",
+      index,
+    );
+
+    expect(quickstartPage.body.match(/<a\s+id=["']use-the-harness["']\s*><\/a>/g)).toHaveLength(1);
+  });
+});
+
+describe("Documentation Engineering routes", () => {
+  const index = buildPublishedRouteIndex();
+
+  it("publishes the agentic documentation guide for every agent variant", () => {
+    const source = "resources/engineer-agentic-documentation.mdx";
+
+    expect(index.sourceToRoutes.get(source)?.map(({ route }) => route)).toEqual([
+      "/user-guide/openclaw/resources/engineer-agentic-documentation",
+      "/user-guide/deepagents/resources/engineer-agentic-documentation",
+      "/user-guide/hermes/resources/engineer-agentic-documentation",
+    ]);
+    expect(findBrokenPublishedRoutes(source, index)).toEqual([]);
+  });
+});
+
+describe("headless server deployment routes", () => {
+  const index = buildPublishedRouteIndex();
+
+  it("publishes the guide for every agent variant (#7180)", () => {
+    for (const variant of ["openclaw", "hermes", "deepagents"]) {
+      expect(index.routes.has(`/user-guide/${variant}/deployment/deploy-to-headless-server`)).toBe(
+        true,
+      );
+    }
+  });
+
+  it("resolves every guide link against generated published routes (#7180)", () => {
+    expect(findBrokenPublishedRoutes("deployment/deploy-to-headless-server.mdx", index)).toEqual(
+      [],
+    );
+  });
+
+  it("retires Brev-specific deployment pages in favor of the shared guide (#7180)", () => {
+    expect(index.routes.has("/user-guide/openclaw/deployment/deploy-to-remote-gpu")).toBe(false);
+    expect(index.routes.has("/user-guide/openclaw/deployment/brev-web-ui")).toBe(false);
+  });
+
+  it("redirects every retired Brev deployment route directly to the shared guide (#7180)", () => {
+    const redirects = fernRedirects ?? [];
+    const destinations = new Map(redirects.map(({ source, destination }) => [source, destination]));
+    const redirectIndexes = new Map(redirects.map(({ source }, index) => [source, index]));
+
+    for (const retiredSlug of ["deploy-to-remote-gpu", "brev-web-ui"]) {
+      for (const [sourceBase, destinationBase] of [
+        [
+          `/nemoclaw/latest/user-guide/openclaw/deployment/${retiredSlug}`,
+          "/nemoclaw/latest/user-guide/openclaw/deployment/deploy-to-headless-server",
+        ],
+        [
+          `/nemoclaw/user-guide/openclaw/deployment/${retiredSlug}`,
+          "/nemoclaw/user-guide/openclaw/deployment/deploy-to-headless-server",
+        ],
+        [
+          `/nemoclaw/latest/deployment/${retiredSlug}`,
+          "/nemoclaw/latest/user-guide/openclaw/deployment/deploy-to-headless-server",
+        ],
+        [
+          `/nemoclaw/deployment/${retiredSlug}`,
+          "/nemoclaw/user-guide/openclaw/deployment/deploy-to-headless-server",
+        ],
+      ]) {
+        expect(destinations.get(sourceBase)).toBe(destinationBase);
+        expect(destinations.get(`${sourceBase}.html`)).toBe(destinationBase);
+        expect(destinations.get(`${sourceBase}/index.html`)).toBe(destinationBase);
+        expect(destinations.get(`${sourceBase}.md`)).toBe(`${destinationBase}.md`);
+        expect(destinations.get(`${sourceBase}.mdx`)).toBe(`${destinationBase}.mdx`);
+
+        expect(redirectIndexes.get(`${sourceBase}.html`)).toBeLessThan(
+          redirectIndexes.get("/nemoclaw/:path*.html") ?? -1,
+        );
+        const genericIndexSource = sourceBase.startsWith("/nemoclaw/latest/")
+          ? "/nemoclaw/latest/:path*/index.html"
+          : "/nemoclaw/:path*/index.html";
+        expect(redirectIndexes.get(`${sourceBase}/index.html`)).toBeLessThan(
+          redirectIndexes.get(genericIndexSource) ?? -1,
+        );
+      }
+    }
+  });
+});
+
+describe("gateway lifecycle authority routes", () => {
+  const index = buildPublishedRouteIndex();
+
+  it("publishes the OpenShell gateway guide for every guide variant (#6576)", () => {
+    for (const variant of ["openclaw", "hermes", "deepagents"]) {
+      expect(
+        index.routes.has(`/user-guide/${variant}/deployment/gateway-lifecycle-authority`),
+      ).toBe(true);
+    }
+  });
+
+  it("resolves every OpenShell gateway guide link for each guide variant (#6576)", () => {
+    expect(findBrokenPublishedRoutes("deployment/gateway-lifecycle-authority.mdx", index)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("native changelog legacy routes", () => {
+  it("redirects every retired Release Notes route directly to the changelog", () => {
+    expect(findMissingDirectLegacyReleaseNotesRedirects()).toEqual([]);
   });
 });

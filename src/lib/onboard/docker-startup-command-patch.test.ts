@@ -6,6 +6,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { DockerContainerInspect } from "./docker-gpu-patch";
 import { recreateOpenShellDockerSandboxWithStartupCommand } from "./docker-startup-command-patch";
 
+function recreateStartupCommandForTest(
+  options: Parameters<typeof recreateOpenShellDockerSandboxWithStartupCommand>[0],
+  deps: Parameters<typeof recreateOpenShellDockerSandboxWithStartupCommand>[1] = {},
+): ReturnType<typeof recreateOpenShellDockerSandboxWithStartupCommand> {
+  return recreateOpenShellDockerSandboxWithStartupCommand(options, {
+    detectSandboxFallbackDns: () => null,
+    ...deps,
+  });
+}
+
 function inspectFixture(): DockerContainerInspect {
   return {
     Id: "old-container-id",
@@ -19,7 +29,7 @@ function inspectFixture(): DockerContainerInspect {
         "openshell.ai/sandbox-name": "alpha",
       },
       Entrypoint: ["/opt/openshell/bin/openshell-sandbox"],
-      Cmd: [],
+      Cmd: ["--workdir", "/sandbox"],
       User: "0",
       WorkingDir: "/workspace",
     },
@@ -46,7 +56,7 @@ describe("Docker startup-command patch", () => {
       stdout: "new-container-id\n",
     }));
 
-    const result = recreateOpenShellDockerSandboxWithStartupCommand(
+    const result = recreateStartupCommandForTest(
       {
         sandboxName: "alpha",
         timeoutSecs: 1,
@@ -80,6 +90,11 @@ describe("Docker startup-command patch", () => {
     );
     expect(cloneArgs).toContain(`sha256:${"c".repeat(64)}`);
     expect(cloneArgs).not.toContain("openshell/sandbox:abc");
+    expect(cloneArgs.slice(cloneArgs.indexOf(`sha256:${"c".repeat(64)}`))).toEqual([
+      `sha256:${"c".repeat(64)}`,
+      "--workdir",
+      "/sandbox",
+    ]);
     expect(dockerCapture).toHaveBeenCalledWith(
       expect.arrayContaining(["ps", "-a", "--no-trunc"]),
       expect.objectContaining({ ignoreError: true }),
@@ -99,7 +114,7 @@ describe("Docker startup-command patch", () => {
       stdout: "new-container-id\n",
     }));
 
-    recreateOpenShellDockerSandboxWithStartupCommand(
+    recreateStartupCommandForTest(
       {
         sandboxName: "alpha",
         timeoutSecs: 1,
@@ -129,7 +144,7 @@ describe("Docker startup-command patch", () => {
 
   it("rejects an empty restart-persistence command before Docker mutation", () => {
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand({
+      recreateStartupCommandForTest({
         sandboxName: "alpha",
         openshellSandboxCommand: [],
       }),
@@ -142,7 +157,7 @@ describe("Docker startup-command patch", () => {
     const dockerRunDetached = vi.fn(() => ({ status: 0, stdout: "new-container-id\n" }));
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "VALUE=$(id)", "nemoclaw-start"],
@@ -173,7 +188,7 @@ describe("Docker startup-command patch", () => {
     delete inspect.Image;
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "nemoclaw-start"],
@@ -205,7 +220,7 @@ describe("Docker startup-command patch", () => {
     const dockerRunDetached = vi.fn(() => ({ status: 0, stdout: "new-container-id\n" }));
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "nemoclaw-start"],
@@ -236,7 +251,7 @@ describe("Docker startup-command patch", () => {
     const dockerStart = vi.fn(() => ({ status: 0 }));
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "nemoclaw-start"],
@@ -280,7 +295,7 @@ describe("Docker startup-command patch", () => {
       .mockReturnValueOnce(JSON.stringify([inspectFixture()]));
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "nemoclaw-start"],
@@ -321,7 +336,7 @@ describe("Docker startup-command patch", () => {
       .mockReturnValueOnce(JSON.stringify([{ ...inspectFixture(), Id: oldContainerId }]))
       .mockReturnValueOnce(`${oldContainerId}\n${newContainerId}\n`);
 
-    const result = recreateOpenShellDockerSandboxWithStartupCommand(
+    const result = recreateStartupCommandForTest(
       {
         sandboxName: "alpha",
         timeoutSecs: 1,
@@ -346,7 +361,7 @@ describe("Docker startup-command patch", () => {
     const dockerRunDetached = vi.fn(() => ({ status: 1, stderr: "boom" }));
 
     expect(() =>
-      recreateOpenShellDockerSandboxWithStartupCommand(
+      recreateStartupCommandForTest(
         {
           sandboxName: "alpha",
           openshellSandboxCommand: ["env", "nemoclaw-start"],
@@ -374,11 +389,16 @@ describe("Docker startup-command patch", () => {
     const dockerRename = vi.fn(() => ({ status: 0 }));
     const dockerRm = vi.fn(() => ({ status: 0 }));
     const dockerStart = vi.fn(() => ({ status: 0 }));
-    const now = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(2_000);
+    let nowMs = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => {
+      const current = nowMs;
+      nowMs += 2_000;
+      return current;
+    });
 
     try {
       expect(() =>
-        recreateOpenShellDockerSandboxWithStartupCommand(
+        recreateStartupCommandForTest(
           {
             sandboxName: "alpha",
             timeoutSecs: 1,

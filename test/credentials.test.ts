@@ -39,12 +39,16 @@ function clearTrackedEnv() {
   }
 }
 
-async function importCredentialsModule(home: string): Promise<CredentialsModule> {
+async function importCredentialsModule(
+  home: string,
+  gatewayPort?: number,
+): Promise<CredentialsModule> {
   vi.resetModules();
   vi.doUnmock("fs");
   vi.doUnmock("child_process");
   vi.doUnmock("readline");
   vi.stubEnv("HOME", home);
+  vi.stubEnv("NEMOCLAW_GATEWAY_PORT", gatewayPort === undefined ? "" : String(gatewayPort));
   const module = await import("../src/lib/credentials/store.js");
   const loaded = "default" in module ? module.default : module;
   const moduleObject = typeof loaded === "object" && loaded !== null ? loaded : null;
@@ -179,6 +183,29 @@ describe("host-side credential staging", () => {
 });
 
 describe("legacy credentials.json migration (two-phase: stage then remove)", () => {
+  it("stages credentials only from the selected nondefault gateway root", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-creds-port-"));
+    const defaultDir = path.join(home, ".nemoclaw");
+    const selectedDir = path.join(defaultDir, "gateways", "9123");
+    fs.mkdirSync(selectedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(defaultDir, "credentials.json"),
+      JSON.stringify({ NVIDIA_INFERENCE_API_KEY: "nvapi-default-root" }),
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(selectedDir, "credentials.json"),
+      JSON.stringify({ NVIDIA_INFERENCE_API_KEY: "nvapi-selected-port" }),
+      { mode: 0o600 },
+    );
+
+    const credentials = await importCredentialsModule(home, 9123);
+
+    expect(credentials.stageLegacyCredentialsToEnv()).toEqual(["NVIDIA_INFERENCE_API_KEY"]);
+    expect(process.env.NVIDIA_INFERENCE_API_KEY).toBe("nvapi-selected-port");
+    expect(fs.existsSync(path.join(defaultDir, "credentials.json"))).toBe(true);
+  });
+
   it("stages allowlisted keys into env without touching the file", async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-creds-"));
     const credsDir = path.join(home, ".nemoclaw");
@@ -925,6 +952,9 @@ ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptFile)} < "$pipe"
     expect(result.status).toBe(0);
     expect(`${result.stdout}${result.stderr}`).toContain(
       "Invalid NVIDIA API key. Must start with nvapi-",
+    );
+    expect(`${result.stdout}${result.stderr}`).not.toMatch(
+      /(^|\s)(TypeError|ReferenceError|SyntaxError):|^\s+at /m,
     );
     expect(result.stdout).toContain("STAGED=nvapi-good-key");
   });

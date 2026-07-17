@@ -5,9 +5,10 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  allowRestartFixturePeerTraversal,
   createRestartFixture,
   mode,
   overwriteThroughOldFd,
@@ -20,14 +21,44 @@ import {
 } from "./helpers/hermes-restart-config-seal-fixture";
 
 describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal", () => {
+  it("restores parent traversal permissions when peer setup fails", () => {
+    const fixture = createRestartFixture();
+    const isolatedParent = fs.mkdtempSync(path.join(path.dirname(fixture.root), "peer-setup-"));
+    const isolatedRoot = path.join(isolatedParent, "fixture");
+    fs.mkdirSync(isolatedRoot, { mode: 0o700 });
+    fs.chmodSync(isolatedParent, 0o700);
+    const isolatedFixture = { ...fixture, root: isolatedRoot };
+    const realChmodSync = fs.chmodSync.bind(fs);
+    const chmod = vi
+      .spyOn(fs, "chmodSync")
+      .mockImplementationOnce(realChmodSync)
+      .mockImplementationOnce(() => {
+        throw new Error("fixture chmod failed");
+      })
+      .mockImplementation(realChmodSync);
+
+    try {
+      expect(() => allowRestartFixturePeerTraversal(isolatedFixture)).toThrow(
+        "fixture chmod failed",
+      );
+      expect(mode(isolatedParent)).toBe(0o700);
+    } finally {
+      chmod.mockRestore();
+      fs.rmSync(isolatedParent, { recursive: true, force: true });
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(
     process.platform === "linux" &&
       process.getuid?.() === 0 &&
       spawnSync("setpriv", ["--version"], { encoding: "utf-8" }).status === 0,
   )("keeps the locked Hermes entry sticky-protected while allowing ordinary home writes", () => {
     const fixture = createRestartFixture();
+    let restoreTempRootMode: (() => void) | undefined;
 
     try {
+      restoreTempRootMode = allowRestartFixturePeerTraversal(fixture);
       const locked = runShieldsTransition(fixture, "locked");
       expect(locked.status, locked.stderr).toBe(0);
       const parent = fs.statSync(fixture.sandboxDir);
@@ -55,7 +86,16 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
       expect(fs.existsSync(fixture.hermesDir)).toBe(true);
       expect(fs.existsSync(path.join(fixture.sandboxDir, ".hermes-moved"))).toBe(false);
     } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
+      try {
+        const mutable = runShieldsTransition(fixture, "mutable");
+        expect(mutable.status, mutable.stderr).toBe(0);
+      } finally {
+        try {
+          fs.rmSync(fixture.root, { recursive: true, force: true });
+        } finally {
+          restoreTempRootMode?.();
+        }
+      }
     }
   });
 
@@ -175,7 +215,7 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
 
       expect(readTextFileSnapshot(fixture.configPath)).toBe(fixture.trustedConfig);
       expect(mode(fixture.sandboxDir)).toBe(0o1775);
-      expect(mode(fixture.hermesDir)).toBe(0o755);
+      expect(mode(fixture.hermesDir)).toBe(0o3770);
       expect(mode(fixture.configPath)).toBe(0o444);
       expect(strictHashIsValid(fixture)).toBe(true);
       expect(fs.existsSync(fixture.statePath)).toBe(false);
@@ -278,6 +318,9 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
 
   it("preserves an already trusted shields-up directory posture across seal and unseal", () => {
     const fixture = createRestartFixture();
+    // 0755 is the pre-#7865 locked root. Sandboxes locked by an older CLI keep
+    // it until the next `shields up` repairs them, so seal/unseal must still
+    // classify and restore it rather than refusing the tree.
     fs.chmodSync(fixture.sandboxDir, 0o755);
     fs.chmodSync(fixture.hermesDir, 0o755);
     fs.chmodSync(fixture.configPath, 0o444);
@@ -316,18 +359,50 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
       spawnSync("setpriv", ["--version"], { encoding: "utf-8" }).status === 0,
   )("lets a sandbox-group peer create state but not unlink sealed config names", () => {
     const fixture = createRestartFixture();
+    let restoreTempRootMode: (() => void) | undefined;
 
     try {
+      const sandboxUidResult = spawnSync("id", ["-u", "sandbox"], {
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+      const sandboxGidResult = spawnSync("id", ["-g", "sandbox"], {
+        encoding: "utf-8",
+        timeout: 5000,
+      });
+      expect(sandboxUidResult.status, sandboxUidResult.stderr).toBe(0);
+      expect(sandboxGidResult.status, sandboxGidResult.stderr).toBe(0);
+      const sandboxUid = Number(sandboxUidResult.stdout.trim());
+      const sandboxGid = Number(sandboxGidResult.stdout.trim());
+      expect(Number.isSafeInteger(sandboxUid)).toBe(true);
+      expect(Number.isSafeInteger(sandboxGid)).toBe(true);
+
+      for (const pathname of [
+        fixture.sandboxDir,
+        fixture.hermesDir,
+        fixture.configPath,
+        fixture.envPath,
+        fixture.compatHashPath,
+      ]) {
+        fs.chownSync(pathname, sandboxUid, sandboxGid);
+      }
+      // chown clears setgid, so restore the canonical mutable Hermes mode.
+      fs.chmodSync(fixture.hermesDir, 0o3770);
+
+      restoreTempRootMode = allowRestartFixturePeerTraversal(fixture);
       const sealed = runGuard("seal-restart", fixture);
       expect(sealed.status, sealed.stderr).toBe(0);
 
-      const hermesGid = fs.statSync(fixture.hermesDir).gid;
+      const sealedHermes = fs.statSync(fixture.hermesDir);
+      expect(sealedHermes.uid).toBe(0);
+      expect(sealedHermes.gid).toBe(sandboxGid);
+      expect(mode(fixture.hermesDir)).toBe(0o3770);
       const peer = spawnSync(
         "setpriv",
         [
           "--reuid=65534",
           "--regid=65534",
-          `--groups=${hermesGid}`,
+          `--groups=${sandboxGid}`,
           "sh",
           "-c",
           'touch "$1/peer-runtime-state" || exit 10; rm "$1/config.yaml" 2>/dev/null && exit 20; test -f "$1/config.yaml"',
@@ -343,8 +418,23 @@ describe.skipIf(process.platform === "win32")("Hermes mutable restart input seal
 
       const unsealed = runGuard("unseal-restart", fixture);
       expect(unsealed.status, unsealed.stderr).toBe(0);
+      for (const pathname of [
+        fixture.sandboxDir,
+        fixture.hermesDir,
+        fixture.configPath,
+        fixture.envPath,
+        fixture.compatHashPath,
+      ]) {
+        const restored = fs.statSync(pathname);
+        expect(restored.uid).toBe(sandboxUid);
+        expect(restored.gid).toBe(sandboxGid);
+      }
     } finally {
-      fs.rmSync(fixture.root, { recursive: true, force: true });
+      try {
+        fs.rmSync(fixture.root, { recursive: true, force: true });
+      } finally {
+        restoreTempRootMode?.();
+      }
     }
   });
 });

@@ -11,6 +11,7 @@ import { buildAvailabilityProbeEnv } from "../fixtures/availability-env.ts";
 import { ProviderClient, trustedProviderEndpoint } from "../fixtures/clients/provider.ts";
 import { startFakeOpenAiCompatibleServer } from "../fixtures/fake-openai-compatible.ts";
 import { requireHostedInferenceConfig } from "../fixtures/hosted-inference.ts";
+import { startTestProgress } from "../fixtures/progress.ts";
 import type {
   ShellProbeResult,
   ShellProbeRunOptions,
@@ -194,6 +195,7 @@ describe("hosted inference E2E config", () => {
     const env = buildAvailabilityProbeEnv({
       HOME: "/tmp/home",
       PATH: "/usr/bin",
+      BUILDX_BUILDER: "external-builder",
       NEMOCLAW_E2E_USE_HOSTED_INFERENCE: "1",
       NEMOCLAW_OPENSHELL_CHANNEL: "dev",
       NVIDIA_INFERENCE_API_KEY: "repo-hosted-key",
@@ -204,20 +206,7 @@ describe("hosted inference E2E config", () => {
     expect(env.NEMOCLAW_OPENSHELL_CHANNEL).toBe("dev");
     expect(env).not.toHaveProperty("NVIDIA_INFERENCE_API_KEY");
     expect(env).not.toHaveProperty("RANDOM_NON_SECRET");
-  });
-
-  it("preserves a selected Buildx builder without widening the fixture environment", () => {
-    const env = buildAvailabilityProbeEnv({
-      HOME: "/tmp/home",
-      PATH: "/usr/bin",
-      BUILDX_BUILDER: "e2e-cache-builder",
-      GITHUB_TOKEN: "must-not-reach-child",
-      RANDOM_NON_SECRET: "not-allowlisted",
-    });
-
-    expect(env.BUILDX_BUILDER).toBe("e2e-cache-builder");
-    expect(env).not.toHaveProperty("GITHUB_TOKEN");
-    expect(env).not.toHaveProperty("RANDOM_NON_SECRET");
+    expect(env).not.toHaveProperty("BUILDX_BUILDER");
   });
 
   it("builds provider reachability probes only from trusted endpoints", async () => {
@@ -384,11 +373,18 @@ describe("hosted inference E2E config", () => {
   });
 
   it("serves fake OpenAI-compatible chat and responses contracts", async () => {
+    const progressLines: string[] = [];
+    const progress = startTestProgress(
+      "fake compatible server support",
+      ["serve compatible API", "verify compatible API"],
+      { logLine: (line) => progressLines.push(line) },
+    );
     const fake = await startFakeOpenAiCompatibleServer({
       apiKey: "fake-compatible-key",
       chatContent: "CHAT_OK",
       forbiddenMarkers: ["FORBIDDEN_REQUEST_MARKER"],
       model: "nvidia/nvidia/fake-model",
+      progress,
       requireAuth: true,
       responseText: "RESP_OK",
     });
@@ -466,5 +462,11 @@ describe("hosted inference E2E config", () => {
     } finally {
       await fake.close();
     }
+    expect(progressLines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("event: fake OpenAI-compatible server started"),
+        expect.stringContaining("event: fake OpenAI-compatible server stopped"),
+      ]),
+    );
   });
 });

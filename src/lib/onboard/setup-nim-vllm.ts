@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+  assertEndpointResolvesPublic,
+  isTrustedPrivateEndpointCapability,
+  type TrustedPrivateEndpointCapability,
+} from "../inference/endpoint-ssrf-preflight";
+import { VLLM_MODELS } from "../inference/vllm-models";
+import { isLoopbackHostname } from "../private-networks";
+import { cliName } from "./branding";
 import type { SetupNimSelectionResult, SetupNimSelectionState } from "./setup-nim-flow";
 
 type VllmModelEntry = {
@@ -24,6 +32,8 @@ export interface SetupNimVllmDeps {
   runCapture(args: string[], options: { ignoreError: boolean }): string;
   getLocalProviderBaseUrl(provider: string): string | null;
   getLocalProviderValidationBaseUrl(provider: string): string | null;
+  getManagedVllmProviderBinding(): { baseUrl: string; apiKey: string } | null;
+  queryVllmModels(baseUrl: string, apiKey: string): string;
   isSafeModelId(model: string): boolean;
   requireValue<T>(value: T | null | undefined, message: string): T;
   validateOpenAiLikeSelection(
@@ -31,10 +41,27 @@ export interface SetupNimVllmDeps {
     endpointUrl: string,
     model: string,
     credentialEnv: string | null,
+    retryMessage?: string,
+    helpUrl?: string | null,
+    options?: {
+      apiKey?: string | null;
+      pinnedAddresses?: readonly string[];
+      trustedPrivateCapability?: TrustedPrivateEndpointCapability;
+    },
   ): Promise<{ ok: boolean; retry?: string; api?: string | null }>;
   applyVllmRuntimeContextWindow(models: VllmModels, model: string): void;
   isDgxSparkHost?: () => boolean;
   isNemoClawManagedVllmRunning?: () => boolean;
+  persistConfiguredManagedVllmRuntimeReceipt(): Promise<
+    | {
+        ok: true;
+        persisted: boolean;
+      }
+    | {
+        ok: false;
+        reason: string;
+      }
+  >;
   exitProcess(code: number): never;
 }
 
@@ -46,6 +73,27 @@ const SAFE_REPORTED_MODEL_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/;
 const NO_QUANTIZATION_VALUES = new Set(["", "false", "none", "null", "unquantized"]);
 
 type ModelSizeClass = "large" | "small" | "unknown";
+
+async function managedVllmValidationOptions(baseUrl: string, apiKey: string) {
+  const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
+  const preflight = await assertEndpointResolvesPublic(baseUrl, undefined, {
+    trustedPrivateHosts: [hostname],
+  });
+  if (!preflight.ok) {
+    throw new Error("Managed vLLM endpoint authorization failed.");
+  }
+  if (
+    !isLoopbackHostname(hostname) &&
+    !isTrustedPrivateEndpointCapability(preflight.trustedPrivateCapability)
+  ) {
+    throw new Error("Managed vLLM endpoint authorization failed.");
+  }
+  return {
+    apiKey,
+    pinnedAddresses: preflight.addresses ?? [],
+    trustedPrivateCapability: preflight.trustedPrivateCapability,
+  };
+}
 
 /** Parse positive integer metadata reported by vLLM model endpoints. */
 function parsePositiveInteger(value: unknown): number | null {
@@ -80,6 +128,43 @@ function classifyModelSize(model: string): ModelSizeClass {
 function reportedModelRoot(entry: VllmModelEntry | null): string | null {
   const root = typeof entry?.root === "string" ? entry.root.trim() : "";
   return root && SAFE_REPORTED_MODEL_ID_PATTERN.test(root) ? root : null;
+}
+
+/** Match an arbitrary served alias to the requested model through vLLM's reported root. */
+function reportedModelMatchesRequest(
+  models: VllmModels,
+  detectedModel: string,
+  requestedModel: string,
+): boolean {
+  if (detectedModel === requestedModel) return true;
+  const root = reportedModelRoot(findVllmModelEntry(models, detectedModel));
+  if (!root) return false;
+  const normalizedRequest = requestedModel.toLowerCase();
+  const registeredModel = VLLM_MODELS.find(
+    (model) =>
+      model.id.toLowerCase() === normalizedRequest ||
+      model.servedModelId?.toLowerCase() === normalizedRequest,
+  );
+  return root.toLowerCase() === (registeredModel?.id ?? requestedModel).toLowerCase();
+}
+
+/** Preserve the checkpoint identity proven by the vLLM model response. */
+function validatedVllmModelIdentity(
+  models: VllmModels,
+  detectedModel: string,
+  requestedModel: string | null,
+): string | null {
+  const root = reportedModelRoot(findVllmModelEntry(models, detectedModel));
+  if (root) return root;
+  if (!requestedModel || detectedModel !== requestedModel) return null;
+  const normalizedRequest = requestedModel.toLowerCase();
+  const registeredModel = VLLM_MODELS.find(
+    (model) =>
+      model.envValue.toLowerCase() === normalizedRequest ||
+      model.id.toLowerCase() === normalizedRequest ||
+      model.servedModelId?.toLowerCase() === normalizedRequest,
+  );
+  return registeredModel?.id ?? requestedModel;
 }
 
 /** Read a string property from optional nested vLLM model metadata. */
@@ -154,10 +239,16 @@ export function createSetupNimVllmHandler(
     state: SetupNimSelectionState,
     options: SetupNimVllmSelectionOptions = {},
   ): Promise<SetupNimSelectionResult> {
-    console.log(`  ✓ Using existing vLLM on localhost:${deps.VLLM_PORT}`);
     state.provider = "vllm-local";
     state.credentialEnv = null;
-    state.endpointUrl = deps.getLocalProviderBaseUrl(state.provider);
+    let managedBinding: ReturnType<SetupNimVllmDeps["getManagedVllmProviderBinding"]>;
+    try {
+      managedBinding = deps.getManagedVllmProviderBinding();
+    } catch {
+      console.error("  Managed vLLM authentication state is unsafe or unreadable.");
+      deps.exitProcess(1);
+    }
+    state.endpointUrl = managedBinding?.baseUrl ?? deps.getLocalProviderBaseUrl(state.provider);
     if (!state.endpointUrl) {
       console.error("  Local vLLM base URL could not be determined.");
       deps.exitProcess(1);
@@ -166,15 +257,43 @@ export function createSetupNimVllmHandler(
     state.assertRouteCompatible?.();
     const requiredModel = typeof state.model === "string" ? state.model : null;
 
-    const raw = deps.runCapture(["curl", "-sf", `http://127.0.0.1:${deps.VLLM_PORT}/v1/models`], {
-      ignoreError: true,
-    });
+    const validationBaseUrl =
+      managedBinding?.baseUrl ?? deps.getLocalProviderValidationBaseUrl(state.provider);
+    if (!validationBaseUrl) {
+      console.error("  Local vLLM validation URL could not be determined.");
+      deps.exitProcess(1);
+    }
+
+    const apiKey = managedBinding?.apiKey ?? null;
+    const managedEndpoint = managedBinding != null;
+    console.log(
+      managedEndpoint
+        ? "  ✓ Using managed vLLM endpoint"
+        : `  ✓ Using existing vLLM on localhost:${deps.VLLM_PORT}`,
+    );
+    let managedValidationOptions: Awaited<ReturnType<typeof managedVllmValidationOptions>> | null =
+      null;
+    if (apiKey) {
+      try {
+        managedValidationOptions = await managedVllmValidationOptions(validationBaseUrl, apiKey);
+      } catch {
+        console.error("  Managed vLLM endpoint authorization could not be verified.");
+        deps.exitProcess(1);
+      }
+    }
+    const raw = apiKey
+      ? deps.queryVllmModels(validationBaseUrl, apiKey)
+      : deps.runCapture(["curl", "-sf", `${validationBaseUrl}/models`], {
+          ignoreError: true,
+        });
     let models: VllmModels;
     try {
       models = JSON.parse(raw);
     } catch {
       console.error(
-        `  Could not query vLLM models endpoint. Is vLLM running on localhost:${deps.VLLM_PORT}?`,
+        managedEndpoint
+          ? "  Could not query the managed vLLM models endpoint. Is the deployment running and reachable?"
+          : `  Could not query vLLM models endpoint. Is vLLM running on localhost:${deps.VLLM_PORT}?`,
       );
       deps.exitProcess(1);
     }
@@ -190,12 +309,28 @@ export function createSetupNimVllmHandler(
       console.error("  Detected vLLM model ID contains invalid characters.");
       deps.exitProcess(1);
     }
-    if (requiredModel && detectedModel !== requiredModel) {
+    if (
+      requiredModel &&
+      detectedModel !== requiredModel &&
+      (options.managedInstall === true ||
+        managedEndpoint ||
+        !reportedModelMatchesRequest(models, detectedModel, requiredModel))
+    ) {
       console.error(
         `  Detected vLLM model '${detectedModel}' does not match the shared gateway route '${requiredModel}'.`,
       );
+      console.error(
+        managedEndpoint
+          ? `  To install '${requiredModel}', stop the managed vLLM deployment, then rerun the original install/onboard command.`
+          : `  To install '${requiredModel}', stop the existing vLLM server on localhost:${deps.VLLM_PORT}, then rerun the original install/onboard command.`,
+      );
+      console.error(`  To keep '${detectedModel}' instead, start detailed setup:`);
+      console.error("    unset NEMOCLAW_PROVIDER NEMOCLAW_MODEL NEMOCLAW_VLLM_MODEL");
+      console.error(`    ${cliName()} onboard --fresh`);
+      console.error("  Then select Local vLLM when prompted.");
       deps.exitProcess(1);
     }
+    const modelIdentity = validatedVllmModelIdentity(models, detectedModel, requiredModel);
     state.model = detectedModel;
     state.assertRouteCompatible?.();
     console.log(`  Detected model: ${state.model}`);
@@ -212,21 +347,40 @@ export function createSetupNimVllmHandler(
       }
     }
 
-    const validationBaseUrl = deps.getLocalProviderValidationBaseUrl(state.provider);
-    if (!validationBaseUrl) {
-      console.error("  Local vLLM validation URL could not be determined.");
-      deps.exitProcess(1);
-    }
-    const validation = await deps.validateOpenAiLikeSelection(
-      "Local vLLM",
-      validationBaseUrl,
-      deps.requireValue(state.model, "Expected a detected vLLM model"),
-      null,
-    );
+    const validationModel = deps.requireValue(state.model, "Expected a detected vLLM model");
+    const validation = apiKey
+      ? await deps.validateOpenAiLikeSelection(
+          "Local vLLM",
+          validationBaseUrl,
+          validationModel,
+          null,
+          undefined,
+          undefined,
+          deps.requireValue(
+            managedValidationOptions,
+            "Expected managed vLLM validation authorization",
+          ),
+        )
+      : await deps.validateOpenAiLikeSelection(
+          "Local vLLM",
+          validationBaseUrl,
+          validationModel,
+          null,
+        );
     if (validation.retry === "selection" || validation.retry === "model" || !validation.ok) {
       return "retry-selection";
     }
 
+    if (managedEndpoint) {
+      const receipt = await deps.persistConfiguredManagedVllmRuntimeReceipt();
+      if (!receipt.ok || !receipt.persisted) {
+        const reason = receipt.ok ? "the managed cleanup receipt was not written" : receipt.reason;
+        console.error(`  Managed vLLM cleanup ownership could not be persisted: ${reason}`);
+        deps.exitProcess(1);
+      }
+    }
+
+    if (modelIdentity) state.vllmModelIdentity = modelIdentity;
     deps.applyVllmRuntimeContextWindow(models, state.model);
     if (validation.api !== "openai-completions") {
       console.log(

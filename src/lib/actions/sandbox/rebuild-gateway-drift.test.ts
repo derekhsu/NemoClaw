@@ -8,6 +8,7 @@ import * as openshellRuntime from "../../adapters/openshell/runtime";
 import * as gatewayRuntime from "../../gateway-runtime-action";
 import * as dockerDriverRecovery from "../../onboard/docker-driver-sandbox-recovery";
 import * as registry from "../../state/registry";
+import * as registryPersistence from "../../state/registry/persistence";
 import { type RebuildSandboxEntry, resolveRebuildLiveState } from "./rebuild-flow-helpers";
 import {
   checkRebuildGatewaySchemaPreflight,
@@ -84,7 +85,7 @@ describe("rebuild gateway drift preflight", () => {
       .spyOn(dockerDriverRecovery, "recoverDockerDriverSandbox")
       .mockReturnValue({ recovered: false, via: null });
     vi.spyOn(registry, "getSandbox").mockReturnValue(makeSandboxEntry() as never);
-    vi.spyOn(registry, "load").mockReturnValue({
+    vi.spyOn(registryPersistence, "load").mockReturnValue({
       sandboxes: { alpha: makeSandboxEntry() },
     } as never);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -119,6 +120,22 @@ describe("rebuild gateway drift preflight", () => {
     expect(recoverNamedGatewayRuntimeSpy).not.toHaveBeenCalled();
   });
 
+  it("prints the safe-abort diagnostic before bailing on gateway schema drift (#7794)", () => {
+    vi.mocked(gatewayDrift.detectOpenShellStateRpcPreflightIssue).mockReturnValue(driftIssue);
+    const nonThrowingBail = vi.fn();
+
+    expect(
+      checkRebuildGatewaySchemaPreflight("alpha", makeSandboxEntry(), nonThrowingBail as never),
+    ).toBe(false);
+
+    const diagnostics = errorSpy.mock.calls.flat().join("\n");
+    expect(diagnostics).toContain("Rebuild preflight failed:");
+    expect(diagnostics).toContain("OpenShell gateway schema is incompatible with this rebuild.");
+    expect(diagnostics).toContain("Follow the gateway recovery guidance above");
+    expect(diagnostics).toContain("Aborting rebuild — sandbox is untouched, no data was lost.");
+    expect(nonThrowingBail).toHaveBeenCalledWith("OpenShell gateway schema mismatch.");
+  });
+
   it.each([
     {
       recordedGateway: "nemoclaw",
@@ -130,16 +147,17 @@ describe("rebuild gateway drift preflight", () => {
       recordedPort: 9000,
       activeGateway: "nemoclaw",
     },
-  ])("refuses stale recovery when $activeGateway is active instead of recorded gateway $recordedGateway (#4497)", async ({
+  ])("recovers $recordedGateway as stale even while $activeGateway is ambiently active, since the sandbox RPC is gateway-pinned (#4497)", async ({
     recordedGateway,
     recordedPort,
     activeGateway,
   }) => {
     const entry = makeSandboxEntry(recordedGateway, recordedPort);
+    const registrySnapshot = { sandboxes: { alpha: entry } };
     vi.mocked(registry.getSandbox).mockReturnValue(entry as never);
+    vi.mocked(registryPersistence.load).mockReturnValue(registrySnapshot as never);
     captureOpenshellSpy
       .mockReturnValueOnce({ status: 0, output: "" })
-      .mockReturnValueOnce({ status: 1, output: "Error:   × Not Found: sandbox not found" })
       .mockReturnValueOnce({ status: 1, output: "Error:   × Not Found: sandbox not found" });
     getNamedGatewayLifecycleStateSpy.mockReturnValue({
       state: "connected_other",
@@ -148,23 +166,25 @@ describe("rebuild gateway drift preflight", () => {
     } as never);
     const behaviorLog = vi.fn();
 
-    await expect(resolveRebuildLiveState("alpha", entry, behaviorLog, bail)).rejects.toThrow(
-      "Could not confirm live state",
-    );
+    const result = await resolveRebuildLiveState("alpha", entry, behaviorLog, bail);
 
-    expect(getNamedGatewayLifecycleStateSpy).toHaveBeenCalledWith(recordedGateway);
+    expect(result).toEqual({ staleRecovery: true, staleRegistrySnapshot: registrySnapshot });
+    expect(result?.staleRegistrySnapshot).not.toBe(registrySnapshot);
+    expect(getNamedGatewayLifecycleStateSpy).not.toHaveBeenCalled();
     expect(runOpenshellSpy).toHaveBeenCalledWith(
       ["gateway", "select", recordedGateway],
       expect.objectContaining({ ignoreError: true }),
     );
-    const output = errorSpy.mock.calls.flat().join("\n");
-    expect(output).toContain("NOT been removed");
-    expect(output).toContain(`openshell gateway select ${recordedGateway}`);
-    expect(registry.load).not.toHaveBeenCalled();
-    expect(recoverDockerDriverSandboxSpy).not.toHaveBeenCalled();
-    expect([...logSpy.mock.calls, ...behaviorLog.mock.calls].flat().join("\n")).not.toContain(
-      "No live workspace state to back up",
+    expect(captureOpenshellSpy).toHaveBeenNthCalledWith(1, ["sandbox", "list"]);
+    expect(captureOpenshellSpy).toHaveBeenNthCalledWith(
+      2,
+      ["sandbox", "get", "-g", recordedGateway, "alpha"],
+      expect.anything(),
     );
+    expect(recoverDockerDriverSandboxSpy).toHaveBeenCalledWith("alpha");
+    expect(registryPersistence.load).toHaveBeenCalledOnce();
+    expect(logSpy.mock.calls.flat().join("\n")).toContain("absent from the live OpenShell gateway");
+    expect(behaviorLog.mock.calls.flat().join("\n")).toContain("Stale-sandbox recovery");
   });
 
   it.each([
@@ -177,7 +197,7 @@ describe("rebuild gateway drift preflight", () => {
     const entry = makeSandboxEntry(gatewayName, gatewayPort);
     const registrySnapshot = { sandboxes: { alpha: entry } };
     vi.mocked(registry.getSandbox).mockReturnValue(entry as never);
-    vi.mocked(registry.load).mockReturnValue(registrySnapshot as never);
+    vi.mocked(registryPersistence.load).mockReturnValue(registrySnapshot as never);
     captureOpenshellSpy
       .mockReturnValueOnce({
         status: 1,
@@ -212,12 +232,12 @@ describe("rebuild gateway drift preflight", () => {
     expect(captureOpenshellSpy).toHaveBeenNthCalledWith(2, ["sandbox", "list"]);
     expect(captureOpenshellSpy).toHaveBeenNthCalledWith(
       3,
-      ["sandbox", "get", "alpha"],
+      ["sandbox", "get", "-g", gatewayName, "alpha"],
       expect.anything(),
     );
-    expect(getNamedGatewayLifecycleStateSpy).toHaveBeenCalledWith(gatewayName);
+    expect(getNamedGatewayLifecycleStateSpy).not.toHaveBeenCalled();
     expect(recoverDockerDriverSandboxSpy).toHaveBeenCalledWith("alpha");
-    expect(registry.load).toHaveBeenCalledOnce();
+    expect(registryPersistence.load).toHaveBeenCalledOnce();
     expect(logSpy.mock.calls.flat().join("\n")).toContain("absent from the live OpenShell gateway");
     expect(behaviorLog.mock.calls.flat().join("\n")).toContain("Stale-sandbox recovery");
   });
@@ -242,7 +262,7 @@ describe("rebuild gateway drift preflight", () => {
     expect(captureOpenshellSpy).toHaveBeenCalledWith(["sandbox", "list"]);
     expect(getNamedGatewayLifecycleStateSpy).not.toHaveBeenCalled();
     expect(recoverDockerDriverSandboxSpy).not.toHaveBeenCalled();
-    expect(registry.load).not.toHaveBeenCalled();
+    expect(registryPersistence.load).not.toHaveBeenCalled();
     expect(errorSpy.mock.calls.flat().join("\n")).toContain("Failed to query running sandboxes");
   });
 });

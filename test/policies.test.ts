@@ -6,11 +6,9 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import type { Interface as ReadlineInterface } from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requireForTest = createRequire(import.meta.url);
-const readline = requireForTest("node:readline") as typeof import("node:readline");
 const YAML = requireForTest("yaml");
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 const policies = requireForTest(
@@ -22,77 +20,6 @@ const resolveOpenshellModule = requireForTest(
 const POLICIES_PATH = JSON.stringify(path.join(REPO_ROOT, "src", "lib", "policy", "index.ts"));
 const REGISTRY_PATH = JSON.stringify(path.join(REPO_ROOT, "src", "lib", "state", "registry.ts"));
 const SOURCE_NODE_ARGS = ["--import", "tsx"];
-const SELECT_FROM_LIST_ITEMS = [
-  { name: "npm", description: "npm and Yarn registry access", file: "npm.yaml" },
-  { name: "pypi", description: "Python Package Index (PyPI) access", file: "pypi.yaml" },
-];
-type AppliedOptions = {
-  applied?: string[];
-};
-
-type SelectionFunction = "selectFromList" | "selectForRemoval";
-
-async function runSelectionPrompt(
-  functionName: SelectionFunction,
-  input: string,
-  { applied = [] }: AppliedOptions = {},
-) {
-  const stderr: string[] = [];
-  const counts = { ref: 0, pause: 0, unref: 0 };
-  const stdin = process.stdin as typeof process.stdin & {
-    ref: () => typeof process.stdin;
-    pause: () => typeof process.stdin;
-    unref: () => typeof process.stdin;
-  };
-  const original = {
-    ref: stdin.ref,
-    pause: stdin.pause,
-    unref: stdin.unref,
-  };
-  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-    stderr.push(String(chunk));
-    return true;
-  }) as typeof process.stderr.write);
-  const close = vi.fn();
-  const createInterface = vi.spyOn(readline, "createInterface").mockImplementation((options) => {
-    expect(options).toEqual({ input: process.stdin, output: process.stderr });
-    return {
-      question: (question: string, callback: (answer: string) => void) => {
-        process.stderr.write(question);
-        callback(input);
-      },
-      close,
-    } as unknown as ReadlineInterface;
-  });
-  stdin.ref = () => {
-    counts.ref += 1;
-    return process.stdin;
-  };
-  stdin.pause = () => {
-    counts.pause += 1;
-    return process.stdin;
-  };
-  stdin.unref = () => {
-    counts.unref += 1;
-    return process.stdin;
-  };
-
-  try {
-    const selected = await policies[functionName](SELECT_FROM_LIST_ITEMS, { applied });
-    return {
-      selected,
-      stderr: stderr.join(""),
-      counts,
-      close,
-    };
-  } finally {
-    stdin.ref = original.ref;
-    stdin.pause = original.pause;
-    stdin.unref = original.unref;
-    createInterface.mockRestore();
-    stderrWrite.mockRestore();
-  }
-}
 
 function requirePresetContent(content: string | null): string {
   expect(content).toBeTruthy();
@@ -120,7 +47,9 @@ describe("policies", () => {
 
     it("does not include the WhatsApp preset YAML body in the description", () => {
       const whatsapp = policies.listPresets().find((p) => p.name === "whatsapp");
-      expect(whatsapp?.description).toBe("WhatsApp Web WebSocket and media access");
+      expect(whatsapp?.description).toBe(
+        "WhatsApp Web WebSocket, media access, and a narrowly scoped Baileys protocol-version fetch from raw.githubusercontent.com",
+      );
       expect(whatsapp?.description).not.toContain("network_policies:");
     });
   });
@@ -433,6 +362,9 @@ exit 1
   });
 
   describe("applyPreset disclosure logging", () => {
+    const hasScopeHeader = (m: unknown): m is string =>
+      typeof m === "string" && m.includes("Effective egress that would be opened");
+
     it("logs egress endpoints before applying", () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-policy-disclosure-"));
       const fakeOpenshell = path.join(tmpDir, "openshell");
@@ -453,9 +385,7 @@ exit 1
         const messages = logSpy.mock.calls.map((call) =>
           typeof call[0] === "string" ? call[0] : undefined,
         );
-        expect(
-          messages.some((m) => typeof m === "string" && m.includes("Widening sandbox egress")),
-        ).toBe(true);
+        expect(messages.some(hasScopeHeader)).toBe(true);
       } finally {
         logSpy.mockRestore();
         errSpy.mockRestore();
@@ -473,16 +403,14 @@ exit 1
         const messages = logSpy.mock.calls.map((call) =>
           typeof call[0] === "string" ? call[0] : undefined,
         );
-        expect(
-          messages.some((m) => typeof m === "string" && m.includes("Widening sandbox egress")),
-        ).toBe(false);
+        expect(messages.some(hasScopeHeader)).toBe(false);
       } finally {
         logSpy.mockRestore();
         errSpy.mockRestore();
       }
     });
 
-    it("does not log when preset exists but has no host entries", () => {
+    it("does not log when preset does not exist under any sandbox load path", () => {
       const noHostPreset =
         "preset:\n  name: empty\n\nnetwork_policies:\n  empty_rule:\n    name: empty_rule\n    endpoints: []\n";
       const loadSpy = vi.spyOn(policies, "loadPreset").mockReturnValue(noHostPreset);
@@ -501,9 +429,7 @@ exit 1
         const messages = logSpy.mock.calls.map((call) =>
           typeof call[0] === "string" ? call[0] : undefined,
         );
-        expect(
-          messages.some((m) => typeof m === "string" && m.includes("Widening sandbox egress")),
-        ).toBe(false);
+        expect(messages.some(hasScopeHeader)).toBe(false);
       } finally {
         loadSpy.mockRestore();
         logSpy.mockRestore();
@@ -542,16 +468,14 @@ exit 1
       expect(waitIdx < nameIdx).toBeTruthy();
     });
 
-    it("uses the resolved openshell binary when provided by the installer path", () => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-openshell-bin-"));
-      const override = path.join(tmpDir, "openshell");
-      fs.writeFileSync(override, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      const prev = process.env.NEMOCLAW_OPENSHELL_BIN;
-      process.env.NEMOCLAW_OPENSHELL_BIN = override;
+    it("uses the resolved openshell binary for every policy command", () => {
+      const resolved = "/opt/nvidia/bin/openshell";
+      const resolveSpy = vi
+        .spyOn(resolveOpenshellModule, "resolveOpenshell")
+        .mockReturnValue(resolved);
       try {
-        const cmd = policies.buildPolicySetCommand("/tmp/policy.yaml", "my-assistant");
-        expect(cmd).toEqual([
-          override,
+        expect(policies.buildPolicySetCommand("/tmp/policy.yaml", "my-assistant")).toEqual([
+          resolved,
           "policy",
           "set",
           "--policy",
@@ -559,10 +483,22 @@ exit 1
           "--wait",
           "my-assistant",
         ]);
+        expect(policies.buildPolicyGetCommand("my-assistant")).toEqual([
+          resolved,
+          "policy",
+          "get",
+          "--base",
+          "my-assistant",
+        ]);
+        expect(policies.buildPolicyGetFullCommand("my-assistant")).toEqual([
+          resolved,
+          "policy",
+          "get",
+          "--full",
+          "my-assistant",
+        ]);
       } finally {
-        if (prev === undefined) delete process.env.NEMOCLAW_OPENSHELL_BIN;
-        else process.env.NEMOCLAW_OPENSHELL_BIN = prev;
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        resolveSpy.mockRestore();
       }
     });
   });
@@ -867,7 +803,7 @@ exit 1
         const combined = errors.join("\n");
         expect(combined).toContain("my-assistant");
         expect(combined).toMatch(/could not be\s+recorded locally/);
-        expect(combined).toMatch(/policy-list or status/);
+        expect(combined).toMatch(/policy list or status/);
       } finally {
         errSpy.mockRestore();
         logSpy.mockRestore();
@@ -1166,61 +1102,6 @@ exit 1
     });
   });
 
-  describe("selectFromList", () => {
-    it("returns preset name by number from stdin input", async () => {
-      const result = await runSelectionPrompt("selectFromList", "1\n");
-
-      expect(result.selected).toBe("npm");
-      expect(result.stderr).toContain("Choose preset [1]:");
-    });
-
-    it("uses the first preset as the default when input is empty", async () => {
-      const result = await runSelectionPrompt("selectFromList", "\n");
-
-      expect(result.stderr).toContain("Choose preset [1]:");
-      expect(result.selected).toBe("npm");
-    });
-
-    it("defaults to the first not-applied preset", async () => {
-      const result = await runSelectionPrompt("selectFromList", "\n", { applied: ["npm"] });
-
-      expect(result.stderr).toContain("Choose preset [2]:");
-      expect(result.selected).toBe("pypi");
-    });
-
-    it("rejects selecting an already-applied preset", async () => {
-      const result = await runSelectionPrompt("selectFromList", "1\n", { applied: ["npm"] });
-
-      expect(result.stderr).toContain("Preset 'npm' is already applied.");
-      expect(result.selected).toBeNull();
-    });
-
-    it("rejects out-of-range preset number", async () => {
-      const result = await runSelectionPrompt("selectFromList", "99\n");
-
-      expect(result.stderr).toContain("Invalid preset number.");
-      expect(result.selected).toBeNull();
-    });
-
-    it("rejects non-numeric preset input", async () => {
-      const result = await runSelectionPrompt("selectFromList", "npm\n");
-
-      expect(result.stderr).toContain("Invalid preset number.");
-      expect(result.selected).toBeNull();
-    });
-
-    it("prints numbered list with applied markers, legend, and default prompt", async () => {
-      const result = await runSelectionPrompt("selectFromList", "2\n", { applied: ["npm"] });
-
-      expect(result.stderr).toMatch(/Available presets:/);
-      expect(result.stderr).toMatch(/1\) ● npm — npm and Yarn registry access/);
-      expect(result.stderr).toMatch(/2\) ○ pypi — Python Package Index \(PyPI\) access/);
-      expect(result.stderr).toMatch(/● applied, ○ not applied/);
-      expect(result.stderr).toMatch(/Choose preset \[2\]:/);
-      expect(result.selected).toBe("pypi");
-    });
-  });
-
   describe("removePresetFromPolicy", () => {
     const pypiEntries =
       "  pypi:\n" +
@@ -1293,50 +1174,6 @@ exit 1
       expect(() => policies.removePresetFromPolicy(current, pypiEntries)).toThrow(
         /current policy is not a valid YAML mapping/i,
       );
-    });
-  });
-
-  describe("selectForRemoval", () => {
-    it("returns null when no presets are applied", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "1\n", { applied: [] });
-      expect(result.stderr).toContain("No presets are currently applied");
-      expect(result.selected).toBeNull();
-    });
-
-    it("shows only applied presets and returns selected name", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "1\n", { applied: ["npm"] });
-      expect(result.stderr).toContain("Applied presets:");
-      expect(result.stderr).toContain("1) npm");
-      expect(result.stderr).not.toContain("pypi");
-      expect(result.selected).toBe("npm");
-    });
-
-    it("returns null for empty input", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "\n", { applied: ["npm"] });
-      expect(result.selected).toBeNull();
-    });
-
-    it("rejects non-numeric input", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "npm\n", {
-        applied: ["npm"],
-      });
-      expect(result.stderr).toContain("Invalid preset number");
-      expect(result.selected).toBeNull();
-    });
-
-    it("rejects out-of-range number", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "99\n", { applied: ["npm"] });
-      expect(result.stderr).toContain("Invalid preset number");
-      expect(result.selected).toBeNull();
-    });
-
-    it("selects second preset when both are applied", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "2\n", {
-        applied: ["npm", "pypi"],
-      });
-      expect(result.stderr).toContain("1) npm");
-      expect(result.stderr).toContain("2) pypi");
-      expect(result.selected).toBe("pypi");
     });
   });
 
@@ -1506,26 +1343,6 @@ exit 1
       } finally {
         errSpy.mockRestore();
       }
-    });
-  });
-
-  describe("interactive prompt cleanup", () => {
-    it("releases and re-refs stdin around policy-add preset prompts", async () => {
-      const result = await runSelectionPrompt("selectFromList", "1\n");
-      expect(result.selected).toBe("npm");
-      expect(result.counts.ref).toBeGreaterThanOrEqual(1);
-      expect(result.counts.pause).toBeGreaterThanOrEqual(1);
-      expect(result.counts.unref).toBeGreaterThanOrEqual(1);
-      expect(result.close).toHaveBeenCalledOnce();
-    });
-
-    it("releases and re-refs stdin around policy-remove preset prompts", async () => {
-      const result = await runSelectionPrompt("selectForRemoval", "1\n", { applied: ["npm"] });
-      expect(result.selected).toBe("npm");
-      expect(result.counts.ref).toBeGreaterThanOrEqual(1);
-      expect(result.counts.pause).toBeGreaterThanOrEqual(1);
-      expect(result.counts.unref).toBeGreaterThanOrEqual(1);
-      expect(result.close).toHaveBeenCalledOnce();
     });
   });
 });

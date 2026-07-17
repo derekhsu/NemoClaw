@@ -3,6 +3,13 @@
 //
 // Ollama auth-proxy lifecycle: token persistence, PID management,
 // proxy start/stop, model pull and validation.
+//
+// @ts-nocheck is pre-existing. Removing it surfaces ~14 implicit-any
+// parameter errors scattered through the 992-line file (sleep, model, err,
+// code, bytes, pct, line, tag, ...). Typing each callback is a separate
+// refactor tracked as a follow-up on #6014. This PR only touches the
+// status-file IPC seam and the spawn env; it does not extend the
+// @ts-nocheck-suppressed area with new implicit-any surface.
 
 import type { GpuInfo } from "../local";
 import type { PulledModelDiscoveryDeps } from "./model-discovery";
@@ -10,6 +17,9 @@ import type { PulledModelDiscoveryDeps } from "./model-discovery";
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 const { ROOT, SCRIPTS, redact, run, runCapture, shellQuote } = require("../../runner");
+const {
+  redirectInheritedChildStdoutToStderr,
+}: typeof import("../../cli/stdout-guard") = require("../../cli/stdout-guard");
 const { OLLAMA_PORT, OLLAMA_PROXY_PORT } = require("../../core/ports");
 const { isNonInteractiveEnv }: typeof import("../../core/non-interactive") =
   require("../../core/non-interactive");
@@ -27,7 +37,14 @@ const {
   probeOllamaModelCapabilities,
   validateOllamaModel,
 } = require("../local");
-const { anyRegistryModelFits, modelFitsAvailableMemory } = require("../ollama-model-registry");
+const {
+  anyRegistryModelFits,
+  describeOllamaModelCapacity,
+  effectiveGpuMemoryMB,
+  modelFitsAvailableMemory,
+} = require("../ollama-model-registry");
+const { formatBytes } = require("./model-size");
+const { isOllamaAuthProxyCommandLine }: typeof import("./process") = require("./process");
 const { buildSubprocessEnv } = require("../../subprocess-env");
 const { prompt } = require("../../credentials/store");
 const { promptManualModelId } = require("../model-prompts");
@@ -45,12 +62,20 @@ const {
   spawnDetachedNodeAdapter,
   writeLocalAdapterSecretFile,
 } = require("../local-adapter-lifecycle");
+const {
+  clearStaleProxyStatus,
+  defaultProxyStatusPath,
+  printProxyStartupReason,
+  PROXY_STATUS_ENV,
+  readProxyExitStatus,
+} = require("./proxy-status");
 
 // ── State ────────────────────────────────────────────────────────
 
 const PROXY_STATE_DIR = DEFAULT_LOCAL_ADAPTER_STATE_DIR;
 const PROXY_TOKEN_PATH = path.join(PROXY_STATE_DIR, "ollama-proxy-token");
 const PROXY_PID_PATH = path.join(PROXY_STATE_DIR, "ollama-auth-proxy.pid");
+const PROXY_STATUS_PATH = defaultProxyStatusPath(PROXY_STATE_DIR);
 
 let ollamaProxyToken: string | null = null;
 
@@ -60,7 +85,8 @@ function sleep(seconds: number): void {
 
 // ── Token persistence ────────────────────────────────────────────
 
-function persistProxyToken(token: string): void {
+function persistProxyToken(token: string, backendUrl = `http://127.0.0.1:${OLLAMA_PORT}`): void {
+  writeLocalAdapterSecretFile(path.join(PROXY_STATE_DIR, "ollama-backend"), backendUrl);
   writeLocalAdapterSecretFile(PROXY_TOKEN_PATH, token);
 }
 
@@ -135,16 +161,22 @@ function loadPersistedProxyPid(): number | null {
 // ── Process management ───────────────────────────────────────────
 
 function isOllamaProxyProcess(pid: number | null | undefined): boolean {
-  return isLocalAdapterProcess(pid, "ollama-auth-proxy.js", runCapture);
+  return isLocalAdapterProcess(pid, isOllamaAuthProxyCommandLine, runCapture);
 }
 
-function spawnOllamaAuthProxy(token: string): number | null {
+function spawnOllamaAuthProxy(token: string, backendUrl?: string): number | null {
+  // Clear any stale status file so a read after this spawn observes the new
+  // proxy's exit reason (or finds no file when the proxy starts cleanly).
+  clearStaleProxyStatus(PROXY_STATUS_PATH);
+  const url = backendUrl || readLocalAdapterTextFile(path.join(PROXY_STATE_DIR, "ollama-backend"));
   const child = spawnDetachedNodeAdapter({
-    scriptPath: path.join(SCRIPTS, "ollama-auth-proxy.js"),
+    scriptPath: path.join(SCRIPTS, "ollama-auth-proxy.mts"),
     env: {
       OLLAMA_PROXY_TOKEN: token,
       OLLAMA_PROXY_PORT: String(OLLAMA_PROXY_PORT),
       OLLAMA_BACKEND_PORT: String(OLLAMA_PORT),
+      [PROXY_STATUS_ENV]: PROXY_STATUS_PATH,
+      ...(url ? { OLLAMA_BACKEND_URL: url } : {}),
     },
     buildEnv: buildSubprocessEnv,
   });
@@ -156,7 +188,7 @@ function killStaleProxy(): void {
   try {
     killLocalAdapterPid({
       pidPath: PROXY_PID_PATH,
-      processNeedle: "ollama-auth-proxy.js",
+      processMatcher: isOllamaAuthProxyCommandLine,
       run,
       runCapture,
     });
@@ -252,8 +284,12 @@ function printProxyPortConflict(owners: { pids: number[]; descriptions: string[]
 // so poll with backoff instead of the previous single 2s probe (issue #4820).
 const PROXY_START_ATTEMPTS = 12;
 
-function startOllamaAuthProxy(): boolean {
+function generateProxyToken(): string {
   const crypto = require("crypto");
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function startOllamaAuthProxyWithToken(proxyToken: string, backendUrl?: string): boolean {
   killStaleProxy();
 
   // After clearing any stale NemoClaw proxy, a process still holding the port
@@ -268,12 +304,11 @@ function startOllamaAuthProxy(): boolean {
     return false;
   }
 
-  const proxyToken = crypto.randomBytes(24).toString("hex");
   ollamaProxyToken = proxyToken;
-  // Don't persist yet — wait until provider is confirmed in setupInference.
-  // If the user backs out to a different provider, the token stays in memory
-  // only and is discarded.
-  const pid = spawnOllamaAuthProxy(proxyToken);
+  // Don't commit the selected backend yet — wait until setupInference confirms
+  // the provider. A newly generated token remains in memory and is discarded
+  // if the user backs out.
+  const pid = spawnOllamaAuthProxy(proxyToken, backendUrl || `http://127.0.0.1:${OLLAMA_PORT}`);
 
   // Poll for readiness with backoff. Three terminal outcomes:
   //   • proxy alive and listening → success
@@ -291,15 +326,23 @@ function startOllamaAuthProxy(): boolean {
       sleep(1); // alive but not yet bound — give a slow host more time
       continue;
     }
-    // The spawned proxy is gone. If it lost an EADDRINUSE race the blocker may
-    // be an IPv6 dual-stack listener, so use the broad scope to name the owner.
-    const owners = inspectForeignProxyPortOwners("any");
-    if (owners.pids.length > 0) {
-      printProxyPortConflict(owners);
+    // The spawned proxy is gone. Three failure modes, in priority order:
+    //   1. #6014 backend-bind probe failed (or any structured reason the
+    //      proxy wrote to PROXY_STATUS_PATH before exit)
+    //   2. Port conflict (EADDRINUSE race lost after pre-check)
+    //   3. Generic "exited during startup" without a structured reason
+    const status = readProxyExitStatus(PROXY_STATUS_PATH);
+    if (printProxyStartupReason(status, OLLAMA_PORT)) {
+      // Already rendered above.
     } else {
-      console.error(`  Error: Ollama auth proxy exited during startup on :${OLLAMA_PROXY_PORT}.`);
-      console.error("  Containers will not be able to reach Ollama without the proxy.");
-      console.error(`  Check the proxy port owner: lsof -ti :${OLLAMA_PROXY_PORT}`);
+      const owners = inspectForeignProxyPortOwners("any");
+      if (owners.pids.length > 0) {
+        printProxyPortConflict(owners);
+      } else {
+        console.error(`  Error: Ollama auth proxy exited during startup on :${OLLAMA_PROXY_PORT}.`);
+        console.error("  Containers will not be able to reach Ollama without the proxy.");
+        console.error(`  Check the proxy port owner: lsof -ti :${OLLAMA_PROXY_PORT}`);
+      }
     }
     return false;
   }
@@ -310,6 +353,34 @@ function startOllamaAuthProxy(): boolean {
   console.error("  Containers will not be able to reach Ollama without the proxy.");
   console.error(`  Check the proxy port owner: lsof -ti :${OLLAMA_PROXY_PORT}`);
   return false;
+}
+
+function startOllamaAuthProxy(backendUrl?: string): boolean {
+  // Re-onboarding the committed local Ollama route must keep the credential
+  // already mounted in the sandbox. A compatible custom endpoint uses the
+  // explicit fresh-token path below until provider selection commits it.
+  const proxyToken = loadPersistedProxyToken() ?? generateProxyToken();
+  return startOllamaAuthProxyWithToken(proxyToken, backendUrl);
+}
+
+function noAuthProxy(endpointUrl: string) {
+  const endpoint = new URL(endpointUrl);
+  if (!startOllamaAuthProxyWithToken(generateProxyToken(), endpoint.origin)) {
+    restorePersistedOllamaAuthProxy();
+    throw new Error("Could not start the protected loopback route.");
+  }
+  return {
+    baseUrl: `http://host.openshell.internal:${OLLAMA_PROXY_PORT}${endpoint.pathname}`,
+    credentialValue: getOllamaProxyToken()!,
+    persist: () => persistProxyToken(getOllamaProxyToken()!, endpoint.origin),
+    restore: restorePersistedOllamaAuthProxy,
+  };
+}
+
+function restorePersistedOllamaAuthProxy(): void {
+  killStaleProxy();
+  ollamaProxyToken = null;
+  ensureOllamaAuthProxy();
 }
 
 /**
@@ -359,11 +430,25 @@ function proxyOwnsPortWithToken(token: string): boolean {
  * after a failed re-onboard (see issue #2553).
  */
 function ensureOllamaAuthProxy(): void {
+  const pid = loadPersistedProxyPid();
+  // startOllamaAuthProxy replaces the live proxy before setupInference confirms
+  // the selected provider and calls persistProxyToken. It cannot persist sooner:
+  // the user may still back out, leaving the previous route as the committed one.
+  // Preserve this in-memory proxy across recovery during that transition. This
+  // exception can go away when provider selection commits the replacement token
+  // and backend before any recovery path can call ensureOllamaAuthProxy.
+  if (
+    ollamaProxyToken &&
+    isOllamaProxyProcess(pid) &&
+    probeProxyToken(ollamaProxyToken) === "accepted"
+  ) {
+    return;
+  }
+
   // Try to load persisted token first — if none, this isn't an Ollama setup.
   const token = loadPersistedProxyToken();
   if (!token) return;
 
-  const pid = loadPersistedProxyPid();
   if (isOllamaProxyProcess(pid)) {
     const tokenStatus = probeProxyToken(token);
     if (tokenStatus === "accepted") {
@@ -490,6 +575,27 @@ function probeOllamaAuthProxyHealth(): { ok: boolean; endpoint: string; detail: 
   };
 }
 
+function formatOllamaMemoryMB(memoryMB: number): string {
+  return formatBytes(memoryMB * 1024 * 1024);
+}
+
+function annotateOllamaModelOption(tag: string, gpu: GpuInfo | null): string {
+  const facts = describeOllamaModelCapacity(tag, gpu);
+  const hasAvailableMemory =
+    typeof gpu?.availableMemoryMB === "number" && gpu.availableMemoryMB > 0;
+  const parts: string[] = [];
+  if (typeof facts.downloadSizeBytes === "number") {
+    parts.push(`${formatBytes(facts.downloadSizeBytes)} download`);
+  }
+  if (typeof facts.requiredMemoryMB === "number") {
+    parts.push(`~${formatOllamaMemoryMB(facts.requiredMemoryMB)} VRAM`);
+  }
+  if (facts.fits === false) {
+    parts.push(hasAvailableMemory ? "exceeds available memory" : "exceeds total memory");
+  }
+  return parts.length > 0 ? `  (${parts.join(" · ")})` : "";
+}
+
 async function promptOllamaModel(
   gpu: GpuInfo | null = null,
   promptOptions: { defaultModel?: string | null; excludeModels?: ReadonlySet<string> } = {},
@@ -529,8 +635,16 @@ async function promptOllamaModel(
 
   console.log("");
   console.log(usingInstalled ? "  Ollama models:" : "  Ollama starter models:");
+  const effectiveMemoryMB = effectiveGpuMemoryMB(gpu);
+  const hasAvailableMemory =
+    typeof gpu?.availableMemoryMB === "number" && gpu.availableMemoryMB > 0;
+  const capacityLabel = hasAvailableMemory ? "currently available GPU memory" : "total GPU memory";
+  if (typeof effectiveMemoryMB === "number") {
+    const memoryKind = hasAvailableMemory ? "Available" : "Total";
+    console.log(`  ${memoryKind} GPU memory: ${formatOllamaMemoryMB(effectiveMemoryMB)}.`);
+  }
   options.forEach((option: string, index: number) => {
-    console.log(`    ${index + 1}) ${option}`);
+    console.log(`    ${index + 1}) ${option}${annotateOllamaModelOption(option, gpu)}`);
   });
   console.log(`    ${options.length + 1}) Other...`);
   if (!usingInstalled) {
@@ -539,13 +653,15 @@ async function promptOllamaModel(
       console.log("  No local Ollama models are installed yet. Choose one to pull and load now.");
     } else {
       console.log(
-        "  No installed Ollama model fits the host's currently available memory; showing starter models instead.",
+        `  No installed Ollama model fits the host's ${capacityLabel}; showing starter models instead.`,
       );
     }
   }
   if (!usingInstalled && !anyRegistryModelFits(gpu)) {
     console.log(
-      "  ! Even the smallest known bootstrap model may not fit currently available GPU memory; free memory or expect the runner to reject the load.",
+      `  ! Even the smallest known bootstrap model may not fit ${capacityLabel}; ${
+        hasAvailableMemory ? "free memory" : "choose a smaller model"
+      } or expect the runner to reject the load.`,
     );
   }
   console.log("");
@@ -612,7 +728,7 @@ function pullOllamaModelViaCli(model: string): boolean {
   const result = spawnSync("bash", ["-c", `ollama pull ${shellQuote(model)}`], {
     cwd: ROOT,
     encoding: "utf8",
-    stdio: "inherit",
+    stdio: redirectInheritedChildStdoutToStderr("inherit"),
     timeout: timeoutMs,
     env: buildSubprocessEnv(),
   });
@@ -770,9 +886,17 @@ function pullOllamaModelViaHttp(model: string): Promise<boolean> {
   });
 }
 
-// Dispatch to HTTP pull when Ollama was resolved on the Windows host.
+function hasLocalOllamaCli(): boolean {
+  return !!runCapture(["sh", "-c", "command -v ollama"], { ignoreError: true }).trim();
+}
+
+// Dispatch to HTTP pull whenever there is no local `ollama` binary to invoke.
+// Keying on the resolved host alone missed the WSL mirrored networking case,
+// where the Windows-host daemon answers on 127.0.0.1 and no Linux binary
+// exists — the CLI branch then failed with "ollama: command not found" against
+// a daemon that answered `/api/tags` (#7472).
 async function pullOllamaModel(model: string): Promise<boolean> {
-  if (getResolvedOllamaHost() === OLLAMA_HOST_DOCKER_INTERNAL) {
+  if (getResolvedOllamaHost() === OLLAMA_HOST_DOCKER_INTERNAL || !hasLocalOllamaCli()) {
     return pullOllamaModelViaHttp(model);
   }
   return pullOllamaModelViaCli(model);
@@ -970,6 +1094,7 @@ export {
   getOllamaPullTimeoutMs,
   isProxyHealthy,
   killStaleProxy,
+  noAuthProxy,
   persistAndProbeOllamaProxy,
   persistProxyToken,
   prepareOllamaModel,

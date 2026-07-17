@@ -3,34 +3,117 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packReviewedNpmArchive, verifyReviewedNpmMetadata } from "./lib/reviewed-npm-archive.mts";
+import { remediateReviewedOpenClawPluginArchive } from "./lib/openclaw-npm-remediation.mts";
+import {
+  packReviewedNpmArchive,
+  verifyInstalledNpmLock,
+  verifyReviewedNpmLock,
+  verifyReviewedNpmLockPackages,
+} from "./lib/reviewed-npm-archive.mts";
+import {
+  type AuditPolicyResult,
+  assertExceptionGraphs,
+  readAuditExceptionRegistry,
+  runReviewedNpmAudit,
+  type Severity,
+} from "./lib/reviewed-npm-audit.mts";
 
-type Severity = "info" | "low" | "moderate" | "high" | "critical";
 type ReviewedPackage = Readonly<{
   integrity: string;
   label: string;
   packageSpec: string;
   tarballUrl: string;
 }>;
-type LockedGraph = ReviewedPackage & Readonly<{ directory: string }>;
+type LockedGraph = ReviewedPackage &
+  Readonly<{
+    directory: string;
+    id: string;
+    lockSha256: string;
+    replacementLockSha256?: string;
+  }>;
 type AuditConfig = Readonly<{
   archivePackages: readonly ReviewedPackage[];
+  archiveGraphId: string;
   artifactDirectory: string;
+  exceptionFile: string;
   lockedGraphs: readonly LockedGraph[];
   nodeVersion: string;
-  schemaVersion: 1;
+  registryOrigin: string;
+  schemaVersion: 2;
   severityThreshold: Severity;
 }>;
+type ReviewedAuditReport = Readonly<{ label: string; result: AuditPolicyResult }>;
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CONFIG_PATH = path.join(REPO_ROOT, "ci", "reviewed-npm-audit.json");
+const TRUSTED_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const TARGET_REPO_ROOT = fs.realpathSync(
+  path.resolve(process.env.NEMOCLAW_REVIEWED_NPM_AUDIT_TARGET_ROOT ?? TRUSTED_REPO_ROOT),
+);
+const CONFIG_PATH = resolveTrustedAuditConfigPath(TRUSTED_REPO_ROOT);
 const SEVERITIES: readonly Severity[] = ["info", "low", "moderate", "high", "critical"];
+const SOURCE_GRAPH = {
+  id: "nemoclaw-cli",
+  label: "NemoClaw CLI locked production graph",
+} as const;
+const OPENCLAW_DOMEXCEPTION_ALIAS = {
+  actualName: "@nolyfill/domexception",
+  aliasPackagePath: "node_modules/openclaw/node_modules/node-domexception",
+  actualPackagePath: "node_modules/openclaw/node_modules/@nolyfill/domexception",
+  integrity:
+    "sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==",
+  requesterPackagePath: "node_modules/openclaw/node_modules/fetch-blob",
+  requestedRange: "^1.0.0",
+  resolved: "https://registry.npmjs.org/@nolyfill/domexception/-/domexception-1.0.28.tgz",
+  version: "1.0.28",
+} as const;
 
-function run(command: string, args: readonly string[], cwd: string, allowAuditFindings = false) {
+export function resolvePathWithinRoot(root: string, relativePath: string, label: string): string {
+  if (!relativePath || path.isAbsolute(relativePath)) {
+    throw new Error(`${label} must be a nonempty relative path`);
+  }
+  const canonicalRoot = fs.realpathSync(path.resolve(root));
+  const resolved = path.resolve(canonicalRoot, relativePath);
+  if (!resolved.startsWith(`${canonicalRoot}${path.sep}`)) {
+    throw new Error(`${label} escapes its repository root: ${relativePath}`);
+  }
+  let current = canonicalRoot;
+  for (const component of path.relative(canonicalRoot, resolved).split(path.sep)) {
+    current = path.join(current, component);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${label} contains a symbolic-link component: ${relativePath}`);
+    }
+  }
+  return resolved;
+}
+
+export function resolveTrustedAuditConfigPath(trustedRoot: string): string {
+  return resolvePathWithinRoot(
+    trustedRoot,
+    "ci/reviewed-npm-audit.json",
+    "trusted reviewed npm audit configuration",
+  );
+}
+
+function trustedRepositoryPath(relativePath: string, label: string): string {
+  return resolvePathWithinRoot(TRUSTED_REPO_ROOT, relativePath, label);
+}
+
+function targetRepositoryPath(relativePath: string, label: string): string {
+  return resolvePathWithinRoot(TARGET_REPO_ROOT, relativePath, label);
+}
+
+function run(command: string, args: readonly string[], cwd: string) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf-8",
@@ -39,93 +122,46 @@ function run(command: string, args: readonly string[], cwd: string, allowAuditFi
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.error) throw result.error;
-  if (result.status !== 0 && !allowAuditFindings) {
+  if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
   }
   return result;
 }
 
-function readConfig(): AuditConfig {
-  const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8")) as AuditConfig;
+export function parseAuditConfig(contents: string): AuditConfig {
+  const parsed = JSON.parse(contents) as AuditConfig;
   if (
-    parsed.schemaVersion !== 1 ||
+    parsed.schemaVersion !== 2 ||
     !SEVERITIES.includes(parsed.severityThreshold) ||
+    typeof parsed.archiveGraphId !== "string" ||
+    !parsed.archiveGraphId ||
+    typeof parsed.exceptionFile !== "string" ||
+    !parsed.exceptionFile ||
+    typeof parsed.registryOrigin !== "string" ||
+    !parsed.registryOrigin ||
     !Array.isArray(parsed.archivePackages) ||
-    !Array.isArray(parsed.lockedGraphs)
+    !Array.isArray(parsed.lockedGraphs) ||
+    parsed.lockedGraphs.some(
+      (graph) =>
+        typeof graph.id !== "string" ||
+        !graph.id ||
+        typeof graph.directory !== "string" ||
+        !graph.directory ||
+        typeof graph.lockSha256 !== "string" ||
+        !/^[0-9a-f]{64}$/.test(graph.lockSha256) ||
+        (graph.replacementLockSha256 !== undefined &&
+          (typeof graph.replacementLockSha256 !== "string" ||
+            !/^[0-9a-f]{64}$/.test(graph.replacementLockSha256) ||
+            graph.replacementLockSha256 === graph.lockSha256)),
+    )
   ) {
     throw new Error("ci/reviewed-npm-audit.json is invalid");
   }
   return parsed;
 }
 
-function auditGraph(directory: string, reportPath: string): Record<string, unknown> {
-  const result = run("npm", ["audit", "--omit=dev", "--json"], directory, true);
-  fs.writeFileSync(reportPath, result.stdout);
-  return parseAuditReport(result);
-}
-
-export function parseAuditReport(result: {
-  status: number | null;
-  stderr: string;
-  stdout: string;
-}): Record<string, unknown> {
-  if (!result.stdout.trim()) {
-    throw new Error(`npm audit did not produce JSON: ${result.stderr}`);
-  }
-  let report: Record<string, unknown>;
-  try {
-    report = JSON.parse(result.stdout) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`npm audit returned invalid JSON: ${String(error)}`);
-  }
-  let counts: Record<Severity, number>;
-  try {
-    counts = vulnerabilityCounts(report);
-  } catch (error) {
-    const detail = report.error === undefined ? result.stderr : JSON.stringify(report.error);
-    throw new Error(
-      `npm audit failed without a complete vulnerability report: ${error instanceof Error ? error.message : String(error)}${detail ? `; ${detail}` : ""}`,
-    );
-  }
-  const findingCount = SEVERITIES.reduce((total, severity) => total + counts[severity], 0);
-  if (
-    report.error !== undefined ||
-    result.status === null ||
-    result.status > 1 ||
-    (result.status !== 0 && findingCount === 0)
-  ) {
-    const detail = report.error === undefined ? result.stderr : JSON.stringify(report.error);
-    throw new Error(
-      `npm audit failed without vulnerability findings${detail ? `: ${detail}` : ""}`,
-    );
-  }
-  return report;
-}
-
-export function vulnerabilityCounts(report: Record<string, unknown>): Record<Severity, number> {
-  const metadata = report.metadata as Record<string, unknown> | undefined;
-  const vulnerabilities = metadata?.vulnerabilities as Record<string, unknown> | undefined;
-  if (!vulnerabilities || Array.isArray(vulnerabilities)) {
-    throw new Error("npm audit report is missing metadata.vulnerabilities");
-  }
-  const entries = SEVERITIES.map((severity) => {
-    const value = vulnerabilities[severity];
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      throw new Error(`npm audit report has invalid ${severity} vulnerability count`);
-    }
-    return [severity, value] as const;
-  });
-  return Object.fromEntries(entries) as Record<Severity, number>;
-}
-
-export function exceedsAuditThreshold(
-  counts: Readonly<Record<Severity, number>>,
-  threshold: Severity,
-): number {
-  return SEVERITIES.slice(SEVERITIES.indexOf(threshold)).reduce(
-    (total, severity) => total + counts[severity],
-    0,
-  );
+function readConfig(): AuditConfig {
+  return parseAuditConfig(fs.readFileSync(CONFIG_PATH, "utf-8"));
 }
 
 function materializeArchiveGraph(packages: readonly ReviewedPackage[], tempRoot: string): string {
@@ -135,15 +171,20 @@ function materializeArchiveGraph(packages: readonly ReviewedPackage[], tempRoot:
     path.join(graphDirectory, "package.json"),
     `${JSON.stringify({ name: "nemoclaw-reviewed-production-graph", private: true, version: "1.0.0" }, null, 2)}\n`,
   );
-  const archives = packages.map((reviewed) =>
-    packReviewedNpmArchive({
+  const archives = packages.map((reviewed) => {
+    const archive = packReviewedNpmArchive({
       expectedIntegrity: reviewed.integrity,
       label: reviewed.label,
       packageSpec: reviewed.packageSpec,
       tarballUrl: reviewed.tarballUrl,
       tempDirectory: tempRoot,
-    }),
-  );
+    });
+    return remediateReviewedOpenClawPluginArchive({
+      archivePath: archive.archivePath,
+      packageSpec: reviewed.packageSpec,
+      workingDirectory: archive.rootDirectory,
+    });
+  });
   run(
     "npm",
     [
@@ -159,21 +200,300 @@ function materializeArchiveGraph(packages: readonly ReviewedPackage[], tempRoot:
   return graphDirectory;
 }
 
-function materializeLockedGraph(graph: LockedGraph, tempRoot: string): string {
-  verifyReviewedNpmMetadata({
+function materializeLockedGraph(
+  graph: LockedGraph,
+  tempRoot: string,
+  registryOrigin: string,
+): string {
+  const sourcePackage = targetRepositoryPath(
+    path.join(graph.directory, "package.json"),
+    `${graph.label} package manifest`,
+  );
+  const sourceLock = targetRepositoryPath(
+    path.join(graph.directory, "package-lock.json"),
+    `${graph.label} lockfile`,
+  );
+  const expectedLockSha256 = selectReviewedLockSha256(
+    sourceLock,
+    graph.lockSha256,
+    graph.replacementLockSha256,
+    graph.label,
+  );
+  verifyReviewedNpmLock({
     expectedIntegrity: graph.integrity,
+    expectedLockSha256,
     label: graph.label,
+    lockfilePath: sourceLock,
     packageSpec: graph.packageSpec,
+    registryOrigin,
     tarballUrl: graph.tarballUrl,
   });
-  const source = path.join(REPO_ROOT, graph.directory);
   const destination = path.join(tempRoot, `locked-${path.basename(graph.directory)}`);
   fs.mkdirSync(destination);
-  for (const filename of ["package.json", "package-lock.json"]) {
-    fs.copyFileSync(path.join(source, filename), path.join(destination, filename));
-  }
+  fs.copyFileSync(sourcePackage, path.join(destination, "package.json"));
+  fs.copyFileSync(sourceLock, path.join(destination, "package-lock.json"));
   run("npm", ["ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"], destination);
+  verifyMaterializedLockedGraph({ destination, expectedLockSha256, label: graph.label });
   return destination;
+}
+
+export function verifyMaterializedLockedGraph({
+  destination,
+  expectedLockSha256,
+  label,
+}: Readonly<{
+  destination: string;
+  expectedLockSha256: string;
+  label: string;
+}>): readonly string[] {
+  const lockfilePath = path.join(destination, "package-lock.json");
+  return verifyInstalledNpmLock({
+    expectedLockSha256,
+    installRoot: destination,
+    label,
+    lockfilePath,
+    omitDev: true,
+  });
+}
+
+export function selectReviewedLockSha256(
+  lockfilePath: string,
+  lockSha256: string,
+  replacementLockSha256: string | undefined,
+  label: string,
+): string {
+  const actual = createHash("sha256").update(fs.readFileSync(lockfilePath)).digest("hex");
+  const reviewedDigests =
+    replacementLockSha256 === undefined ? [lockSha256] : [lockSha256, replacementLockSha256];
+  if (!reviewedDigests.includes(actual)) {
+    throw new Error(
+      `${label} lock SHA-256 mismatch\nExpected one of: ${reviewedDigests.join(", ")}\nActual:          ${actual}`,
+    );
+  }
+  return actual;
+}
+
+function readJsonObject(file: string, label: string): Record<string, any> {
+  const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as Record<string, any>;
+}
+
+function assertRegularFile(file: string, label: string): void {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`${label} must be a regular file`);
+  }
+}
+
+export function materializeSourceGraph(
+  sourcePackage: string,
+  sourceLock: string,
+  destination: string,
+  registryOrigin: string,
+  installProductionDependencies: (directory: string) => void = (directory) =>
+    void run("npm", ["ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"], directory),
+): string {
+  assertRegularFile(sourcePackage, "NemoClaw CLI package manifest");
+  assertRegularFile(sourceLock, "NemoClaw CLI lockfile");
+  verifyReviewedNpmLockPackages({ lockfilePath: sourceLock, omitDev: true, registryOrigin });
+  const lockSha256 = createHash("sha256").update(fs.readFileSync(sourceLock)).digest("hex");
+  fs.mkdirSync(destination);
+  fs.copyFileSync(sourcePackage, path.join(destination, "package.json"));
+  const installedLock = path.join(destination, "package-lock.json");
+  fs.copyFileSync(sourceLock, installedLock);
+  installProductionDependencies(destination);
+  verifyInstalledNpmLock({
+    expectedLockSha256: lockSha256,
+    installRoot: destination,
+    label: SOURCE_GRAPH.label,
+    lockfilePath: installedLock,
+    omitDev: true,
+  });
+  return destination;
+}
+
+export function normalizeOpenClawSignatureAlias(directory: string): void {
+  const {
+    actualName,
+    actualPackagePath,
+    aliasPackagePath,
+    integrity,
+    requesterPackagePath,
+    requestedRange,
+    resolved,
+    version,
+  } = OPENCLAW_DOMEXCEPTION_ALIAS;
+  const lockfile = path.join(directory, "package-lock.json");
+  const aliasDirectory = path.join(directory, aliasPackagePath);
+  const actualDirectory = path.join(directory, actualPackagePath);
+  const aliasManifestFile = path.join(aliasDirectory, "package.json");
+  const requesterManifestFile = path.join(directory, requesterPackagePath, "package.json");
+  for (const [file, label] of [
+    [lockfile, "OpenClaw signature-audit lock"],
+    [aliasManifestFile, "OpenClaw aliased package manifest"],
+    [requesterManifestFile, "OpenClaw alias requester manifest"],
+  ] as const) {
+    assertRegularFile(file, label);
+  }
+  if (fs.existsSync(actualDirectory)) {
+    throw new Error(`OpenClaw signature-audit destination already exists: ${actualPackagePath}`);
+  }
+
+  const lock = readJsonObject(lockfile, "OpenClaw signature-audit lock");
+  const packages = lock.packages as Record<string, any> | undefined;
+  const aliasEntry = packages?.[aliasPackagePath];
+  const requesterEntry = packages?.[requesterPackagePath];
+  if (
+    !packages ||
+    !aliasEntry ||
+    aliasEntry.name !== actualName ||
+    aliasEntry.version !== version ||
+    aliasEntry.resolved !== resolved ||
+    aliasEntry.integrity !== integrity ||
+    packages[actualPackagePath] ||
+    requesterEntry?.dependencies?.["node-domexception"] !== requestedRange ||
+    requesterEntry.dependencies[actualName] !== undefined
+  ) {
+    throw new Error("OpenClaw signature-audit alias lock identity drifted");
+  }
+  const aliasManifest = readJsonObject(aliasManifestFile, "OpenClaw aliased package manifest");
+  const requesterManifest = readJsonObject(
+    requesterManifestFile,
+    "OpenClaw alias requester manifest",
+  );
+  if (
+    aliasManifest.name !== actualName ||
+    aliasManifest.version !== version ||
+    requesterManifest.dependencies?.["node-domexception"] !== requestedRange ||
+    requesterManifest.dependencies?.[actualName] !== undefined
+  ) {
+    throw new Error("OpenClaw signature-audit installed alias identity drifted");
+  }
+
+  packages[actualPackagePath] = aliasEntry;
+  delete packages[aliasPackagePath];
+  delete requesterEntry.dependencies["node-domexception"];
+  requesterEntry.dependencies[actualName] = version;
+  delete requesterManifest.dependencies["node-domexception"];
+  requesterManifest.dependencies[actualName] = version;
+  fs.mkdirSync(path.dirname(actualDirectory), { recursive: true });
+  fs.renameSync(aliasDirectory, actualDirectory);
+  fs.writeFileSync(lockfile, `${JSON.stringify(lock, null, 2)}\n`);
+  fs.writeFileSync(requesterManifestFile, `${JSON.stringify(requesterManifest, null, 2)}\n`);
+}
+
+function auditLockedGraph(
+  graph: LockedGraph,
+  index: number,
+  config: AuditConfig,
+  tempRoot: string,
+  exceptionFile: string,
+  artifactDirectory: string,
+  npmVersion: string,
+) {
+  const directory = materializeLockedGraph(graph, tempRoot, config.registryOrigin);
+  const result = runReviewedNpmAudit({
+    directory,
+    exceptionFile,
+    graph: graph.id,
+    provenance: {
+      label: graph.label,
+      nodeVersion: process.version,
+      npmVersion,
+      packageSpecs: [graph.packageSpec],
+    },
+    reportFile: path.join(artifactDirectory, `locked-graph-${index + 1}.json`),
+    resultFile: path.join(artifactDirectory, `locked-graph-${index + 1}-policy.json`),
+    threshold: config.severityThreshold,
+    throwOnBlock: false,
+  });
+  if (graph.id === "openclaw-runtime") {
+    normalizeOpenClawSignatureAlias(directory);
+  }
+  run("npm", ["audit", "signatures", "--omit=dev"], directory);
+  return result;
+}
+
+function auditSourceGraph(
+  config: AuditConfig,
+  tempRoot: string,
+  exceptionFile: string,
+  artifactDirectory: string,
+  npmVersion: string,
+) {
+  const sourcePackage = targetRepositoryPath("package.json", "NemoClaw CLI package manifest");
+  const sourceLock = targetRepositoryPath("package-lock.json", "NemoClaw CLI lockfile");
+  const sourceManifest = readJsonObject(sourcePackage, "NemoClaw CLI package manifest");
+  if (typeof sourceManifest.name !== "string" || typeof sourceManifest.version !== "string") {
+    throw new Error("NemoClaw CLI package manifest must declare its name and version");
+  }
+  const directory = materializeSourceGraph(
+    sourcePackage,
+    sourceLock,
+    path.join(tempRoot, "source-graph"),
+    config.registryOrigin,
+  );
+  return auditMaterializedSourceGraph({
+    directory,
+    exceptionFile,
+    artifactDirectory,
+    npmVersion,
+    packageSpec: `${sourceManifest.name}@${sourceManifest.version}`,
+    threshold: config.severityThreshold,
+  });
+}
+
+export function auditMaterializedSourceGraph(
+  options: Readonly<{
+    artifactDirectory: string;
+    directory: string;
+    exceptionFile: string;
+    npmVersion: string;
+    packageSpec: string;
+    threshold: Severity;
+  }>,
+  dependencies: Readonly<{
+    runAudit?: typeof runReviewedNpmAudit;
+    verifySignatures?: (directory: string) => void;
+  }> = {},
+): AuditPolicyResult {
+  const result = (dependencies.runAudit ?? runReviewedNpmAudit)({
+    directory: options.directory,
+    exceptionFile: options.exceptionFile,
+    graph: SOURCE_GRAPH.id,
+    provenance: {
+      label: SOURCE_GRAPH.label,
+      nodeVersion: process.version,
+      npmVersion: options.npmVersion,
+      packageSpecs: [options.packageSpec],
+    },
+    reportFile: path.join(options.artifactDirectory, "source-graph.json"),
+    resultFile: path.join(options.artifactDirectory, "source-graph-policy.json"),
+    threshold: options.threshold,
+    throwOnBlock: false,
+  });
+  (
+    dependencies.verifySignatures ??
+    ((directory) => run("npm", ["audit", "signatures", "--omit=dev"], directory))
+  )(options.directory);
+  return result;
+}
+
+export function assertReviewedAuditReportsPass(
+  reports: readonly ReviewedAuditReport[],
+  threshold: Severity,
+): void {
+  const failures = reports
+    .filter(({ result }) => result.unacceptedBlockingAdvisories.length > 0)
+    .map(
+      ({ label, result }) =>
+        `${label}: ${result.unacceptedBlockingAdvisories.length} unaccepted at or above ${threshold}`,
+    );
+  if (failures.length > 0)
+    throw new Error(`reviewed npm audit threshold failed\n${failures.join("\n")}`);
 }
 
 function main(): void {
@@ -182,38 +502,62 @@ function main(): void {
   if (process.version !== expectedNode) {
     throw new Error(`reviewed npm audit requires Node ${expectedNode}; running ${process.version}`);
   }
-  const artifactDirectory = path.join(REPO_ROOT, config.artifactDirectory);
+  const artifactDirectory = targetRepositoryPath(
+    process.env.NEMOCLAW_REVIEWED_NPM_AUDIT_REPORT_DIR ?? config.artifactDirectory,
+    "audit artifact directory",
+  );
+  const exceptionFile = trustedRepositoryPath(config.exceptionFile, "npm audit exception file");
+  const exceptionRegistry = readAuditExceptionRegistry(exceptionFile);
+  assertExceptionGraphs(
+    exceptionRegistry.policy,
+    new Set([
+      SOURCE_GRAPH.id,
+      config.archiveGraphId,
+      ...config.lockedGraphs.map((graph) => graph.id),
+    ]),
+  );
   fs.rmSync(artifactDirectory, { recursive: true, force: true });
   fs.mkdirSync(artifactDirectory, { recursive: true });
+  const npmVersion = run("npm", ["--version"], TRUSTED_REPO_ROOT).stdout.trim();
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-reviewed-npm-audit-"));
   try {
     const reports = [
       {
+        label: SOURCE_GRAPH.label,
+        result: auditSourceGraph(config, tempRoot, exceptionFile, artifactDirectory, npmVersion),
+      },
+      {
         label: "reviewed archive graph",
-        report: auditGraph(
-          materializeArchiveGraph(config.archivePackages, tempRoot),
-          path.join(artifactDirectory, "reviewed-archive-graph.json"),
-        ),
+        result: runReviewedNpmAudit({
+          directory: materializeArchiveGraph(config.archivePackages, tempRoot),
+          exceptionFile,
+          graph: config.archiveGraphId,
+          provenance: {
+            label: "reviewed archive graph",
+            nodeVersion: process.version,
+            npmVersion,
+            packageSpecs: config.archivePackages.map((reviewed) => reviewed.packageSpec),
+          },
+          reportFile: path.join(artifactDirectory, "reviewed-archive-graph.json"),
+          resultFile: path.join(artifactDirectory, "reviewed-archive-graph-policy.json"),
+          threshold: config.severityThreshold,
+          throwOnBlock: false,
+        }),
       },
       ...config.lockedGraphs.map((graph, index) => ({
         label: graph.label,
-        report: auditGraph(
-          materializeLockedGraph(graph, tempRoot),
-          path.join(artifactDirectory, `locked-graph-${index + 1}.json`),
+        result: auditLockedGraph(
+          graph,
+          index,
+          config,
+          tempRoot,
+          exceptionFile,
+          artifactDirectory,
+          npmVersion,
         ),
       })),
     ];
-    const failures: string[] = [];
-    for (const { label, report } of reports) {
-      const counts = vulnerabilityCounts(report);
-      const summary = SEVERITIES.map((severity) => `${severity}=${counts[severity]}`).join(" ");
-      console.log(`${label}: ${summary}`);
-      const blocked = exceedsAuditThreshold(counts, config.severityThreshold);
-      if (blocked > 0)
-        failures.push(`${label}: ${blocked} at or above ${config.severityThreshold}`);
-    }
-    if (failures.length > 0)
-      throw new Error(`reviewed npm audit threshold failed\n${failures.join("\n")}`);
+    assertReviewedAuditReportsPass(reports, config.severityThreshold);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

@@ -3,6 +3,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+const adapterMocks = vi.hoisted(() => ({
+  dockerRun: vi.fn(),
+  dockerCapture: vi.fn(),
+  backupWithAuthority: vi.fn(),
+}));
+
+vi.mock("../../adapters/docker/run", () => ({
+  dockerRun: adapterMocks.dockerRun,
+  dockerCapture: adapterMocks.dockerCapture,
+}));
 vi.mock("../../state/registry", () => ({
   getSandbox: vi.fn(),
   listSandboxes: vi.fn(),
@@ -10,9 +20,14 @@ vi.mock("../../state/registry", () => ({
 vi.mock("../../state/sandbox", () => ({
   backupSandboxState: vi.fn(),
 }));
+vi.mock("./snapshot/backup-authority", () => ({
+  backupSandboxStateWithManagedAuthority: (name: string) => adapterMocks.backupWithAuthority(name),
+}));
 
+import * as registry from "../../state/registry";
 import {
   backupStartedSandboxState,
+  isSandboxContainerDefinitivelyAbsent,
   returnSandboxContainerToStopped,
   startStoppedSandboxContainerForBackup,
 } from "./stopped-sandbox-backup";
@@ -97,6 +112,74 @@ describe("startStoppedSandboxContainerForBackup", () => {
   });
 });
 
+describe("isSandboxContainerDefinitivelyAbsent (#6520)", () => {
+  const deps = (over: Record<string, unknown> = {}) => ({
+    getSandboxDriver: vi.fn().mockReturnValue("docker"),
+    listLabeledContainerNames: vi.fn().mockReturnValue([]),
+    ...over,
+  });
+
+  it("reports absent when a successful labeled listing shows zero containers", () => {
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb", deps())).toBe(true);
+  });
+
+  it("reports present when a labeled container still exists", () => {
+    const d = deps({ listLabeledContainerNames: vi.fn().mockReturnValue(["openshell-my-sb-abc"]) });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb", d)).toBe(false);
+  });
+
+  it("fails closed for non-docker-driver sandboxes", () => {
+    const d = deps({ getSandboxDriver: vi.fn().mockReturnValue("kubernetes") });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb", d)).toBe(false);
+    expect(d.listLabeledContainerNames).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the labeled listing itself fails (a swallowed ps error is not absence)", () => {
+    const d = deps({ listLabeledContainerNames: vi.fn().mockReturnValue(null) });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb", d)).toBe(false);
+  });
+
+  it("fails closed when the registry read behind the driver gate throws", () => {
+    vi.mocked(registry.getSandbox).mockImplementation(() => {
+      throw new Error("corrupt sandboxes.json");
+    });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb")).toBe(false);
+    expect(adapterMocks.dockerRun).not.toHaveBeenCalled();
+  });
+
+  it("status-checks the default listing with ignoreError so a dead daemon fails closed, not the process", () => {
+    // runner.run() calls process.exit on a non-zero status unless ignoreError
+    // is set, and a swallowed listing error must never read as "absent": a
+    // failed `docker ps` has to surface as false, not as an exit and not as
+    // an empty listing.
+    vi.mocked(registry.getSandbox).mockReturnValue({
+      openshellDriver: "docker",
+    } as unknown as ReturnType<typeof registry.getSandbox>);
+    adapterMocks.dockerRun.mockReturnValue({ status: 1, stdout: "" });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb")).toBe(false);
+    expect(adapterMocks.dockerRun).toHaveBeenCalledWith(
+      expect.arrayContaining(["ps", "-a", "--filter", "label=openshell.ai/sandbox-name=my-sb"]),
+      expect.objectContaining({ ignoreError: true }),
+    );
+  });
+
+  it("reports absent through the default wiring when the listing succeeds empty", () => {
+    vi.mocked(registry.getSandbox).mockReturnValue({
+      openshellDriver: "docker",
+    } as unknown as ReturnType<typeof registry.getSandbox>);
+    adapterMocks.dockerRun.mockReturnValue({ status: 0, stdout: "\n" });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb")).toBe(true);
+  });
+
+  it("reports present through the default wiring when the listing returns a container", () => {
+    vi.mocked(registry.getSandbox).mockReturnValue({
+      openshellDriver: "docker",
+    } as unknown as ReturnType<typeof registry.getSandbox>);
+    adapterMocks.dockerRun.mockReturnValue({ status: 0, stdout: "openshell-my-sb-abc\n" });
+    expect(isSandboxContainerDefinitivelyAbsent("my-sb")).toBe(false);
+  });
+});
+
 describe("returnSandboxContainerToStopped", () => {
   it("reports success when docker stop echoes the name and inspect confirms exited", () => {
     const dockerStop = vi.fn().mockReturnValue("openshell-my-sb-abc123");
@@ -145,6 +228,14 @@ describe("backupStartedSandboxState", () => {
   };
   const unreachable = { ...ok, success: false, unreachable: true };
   const denied = { ...ok, success: false };
+
+  it("uses managed provider authority through the default stopped-backup path", async () => {
+    adapterMocks.backupWithAuthority.mockReturnValueOnce(ok);
+
+    await expect(backupStartedSandboxState("my-sb")).resolves.toEqual(ok);
+
+    expect(adapterMocks.backupWithAuthority).toHaveBeenCalledWith("my-sb");
+  });
 
   it("retries while the just-started container's SSH endpoint is unreachable (#6500)", async () => {
     const backup = vi

@@ -17,9 +17,8 @@ export interface StateFileRestoreSpec {
 }
 
 const SQLITE_RESTORE_PY = [
-  "import os, sqlite3, sys",
+  "import sqlite3, sys",
   "src, dst = sys.argv[1], sys.argv[2]",
-  "os.makedirs(os.path.dirname(dst), exist_ok=True)",
   "src_conn = sqlite3.connect('file:' + src + '?mode=ro', uri=True, timeout=30)",
   "dst_conn = sqlite3.connect(dst, timeout=30)",
   "try:",
@@ -31,7 +30,18 @@ const SQLITE_RESTORE_PY = [
   "finally:",
   "    dst_conn.close()",
   "    src_conn.close()",
-  "os.chmod(dst, 0o660)",
+].join("\n");
+
+const SQLITE_WRITE_CHECK_PY = [
+  "import sqlite3, sys",
+  "dst = sys.argv[1]",
+  "conn = sqlite3.connect(dst, timeout=30)",
+  "try:",
+  "    conn.execute('PRAGMA busy_timeout=30000')",
+  "    conn.execute('BEGIN IMMEDIATE')",
+  "    conn.execute('ROLLBACK')",
+  "finally:",
+  "    conn.close()",
 ].join("\n");
 
 function stateFileRemotePath(dir: string, filePath: string): string {
@@ -46,6 +56,18 @@ export function buildStateFileRestoreCommand(
   const remotePath = stateFileRemotePath(dir, spec.path);
   const quotedRemotePath = shellQuote(remotePath);
   if (spec.strategy === "sqlite_backup") {
+    // The agent gateway can own the live database under a distinct uid, so
+    // restoring in place can fail for the sandbox user and expose a partially
+    // replaced SQLite file to the gateway (#7312). Validate the backup into a
+    // staged database this user owns, then replace the target atomically;
+    // replacement only needs write permission on the parent directory. The
+    // stale WAL/SHM sidecars belong to the replaced database, so drop them.
+    //
+    // A successful swap does not prove the agent can persist to the result, so
+    // open a write transaction against the replaced database before reporting
+    // success. The check runs under the same umask as the restore so its own
+    // sidecars stay group-writable, and both sidecar pairs are dropped: the
+    // stale ones before the check reads them, the check's own after it ends.
     return [
       `dst=${quotedRemotePath}`,
       'parent="$(dirname "$dst")"',
@@ -53,11 +75,17 @@ export function buildStateFileRestoreCommand(
       '[ ! -L "$dst" ] || { echo "refusing symlinked sqlite target: $dst" >&2; exit 11; }',
       'mkdir -p "$parent"',
       'tmp="$(mktemp /tmp/nemoclaw-sqlite-restore.XXXXXX)"',
-      "trap 'rm -f \"$tmp\"' EXIT",
+      'staged="$(mktemp "${parent}/.nemoclaw-sqlite-staged.XXXXXX")"',
+      'trap \'rm -f "$tmp" "$staged" "${staged}-wal" "${staged}-shm"\' EXIT',
       'cat > "$tmp"',
       'chmod 600 "$tmp"',
-      `umask 0007; python3 -c ${shellQuote(SQLITE_RESTORE_PY)} "$tmp" "$dst"`,
-    ].join("; ");
+      `(umask 0007; /usr/bin/python3 -I -S -c ${shellQuote(SQLITE_RESTORE_PY)} "$tmp" "$staged")`,
+      'chmod 660 "$staged"',
+      'mv -f "$staged" "$dst"',
+      'rm -f -- "${dst}-wal" "${dst}-shm"',
+      `(umask 0007; /usr/bin/python3 -I -S -c ${shellQuote(SQLITE_WRITE_CHECK_PY)} "$dst") || { echo "restored database is not writable: $dst" >&2; exit 12; }`,
+      'rm -f -- "${dst}-wal" "${dst}-shm"',
+    ].join(" && ");
   }
 
   const steps = [
@@ -69,7 +97,12 @@ export function buildStateFileRestoreCommand(
     'tmp="$(mktemp "${parent}/.nemoclaw-restore.XXXXXX")"',
     'trap \'rm -f "$tmp" "${anchor_tmp:-}"\' EXIT',
     'cat > "$tmp"',
-    'chmod 640 "$tmp"',
+    // The managed OpenClaw restart preflight accepts only the exact mutable
+    // sandbox:sandbox 0660 configuration posture. Apply that mode to the
+    // staged inode before the atomic swap so the gateway and its trusted
+    // controller never observe the restored config with the generic 0640
+    // state-file mode.
+    refreshOpenClawConfigHash ? 'chmod 660 "$tmp"' : 'chmod 640 "$tmp"',
   ];
 
   if (refreshOpenClawConfigHash) {

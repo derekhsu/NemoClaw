@@ -41,6 +41,15 @@ _AUTO_APPROVAL_CONTENTS = {
     b"disabled\n": _AUTO_APPROVAL_DISABLED,
     b"thread-opt-in\n": _AUTO_APPROVAL_THREAD_OPT_IN,
 }
+_REASONING_EFFORT_FILE = Path(
+    "/usr/local/share/nemoclaw/dcode-reasoning-effort"
+)
+_REASONING_EFFORT_CONTENTS: dict[bytes, str | None] = {
+    b"\n": None,
+    b"low\n": "low",
+    b"medium\n": "medium",
+    b"high\n": "high",
+}
 _MANAGED_FILE_OWNER_UID = 0
 _CREDENTIAL_NAME = re.compile(
     r"(?:^|[_-])(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL)$",
@@ -82,6 +91,11 @@ _ECMASCRIPT_NON_WHITESPACE_SECRET_CHAR = (
     r"\u202f\u205f\u3000\ufeff'\"]"
 )
 _OPENSHELL_ENV_PLACEHOLDER_PREFIX = "openshell:resolve:env:"
+# OpenShell 8eacb477 reserves these for the supervisor and strips them from all
+# child process shapes; fail closed if a regressed runtime exposes them here.
+_OPENSHELL_SUPERVISOR_ONLY_ENV_NAMES = frozenset(
+    {"OPENSHELL_TLS_CA", "OPENSHELL_TLS_CERT", "OPENSHELL_TLS_KEY"}
+)
 _UPSTREAM_PROVIDER_ENV = "NEMOCLAW_UPSTREAM_PROVIDER"
 _FETCH_URL_TRUSTED_PROXY_ENV = (
     "DEEPAGENTS_CODE_FETCH_URL_TRUSTED_PROXY_URL"
@@ -118,6 +132,12 @@ _MCP_CHILD_BINDING_ENV = "NEMOCLAW_DCODE_MCP_BINDING"
 _MCP_SEALED_KIND = "sealed-memfd"
 _MCP_ANONYMOUS_KIND = "anonymous-otmpfile"
 _MCP_ANONYMOUS_DIRECTORY = Path("/tmp")
+_MCP_PRIVATE_ANONYMOUS_DIRECTORY = Path("/run/nemoclaw-dcode-mcp")
+_MCP_PRIVATE_ANONYMOUS_MAX_BYTES = 1_048_576
+_MCP_PRIVATE_ANONYMOUS_MODE = 0o1777
+_MCP_PRIVATE_ANONYMOUS_MOUNT_OPTIONS = frozenset(
+    {"rw", "noexec", "nosuid", "nodev"}
+)
 _MCP_FALLBACK_ERRNOS = {
     errno.EACCES,
     errno.EINVAL,
@@ -135,28 +155,13 @@ _MCP_BLOCKED_ALIASES = {
     "host.docker.internal",
     "host.containers.internal",
 }
-_MCP_RESERVED_NAMES = {"localhost", "local", "internal", "metadata"}
-_MCP_BLOCKED_IPV4_NETWORKS = tuple(
-    ipaddress.ip_network(network)
-    for network in (
-        "0.0.0.0/8",
+_MCP_ROUTED_PRIVATE_IPV4_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
         "10.0.0.0/8",
         "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
         "172.16.0.0/12",
-        "192.0.0.0/24",
-        "192.0.2.0/24",
-        "192.31.196.0/24",
-        "192.52.193.0/24",
-        "192.88.99.0/24",
         "192.168.0.0/16",
-        "192.175.48.0/24",
-        "198.18.0.0/15",
-        "198.51.100.0/24",
-        "203.0.113.0/24",
-        "224.0.0.0/4",
-        "240.0.0.0/4",
     )
 )
 _MANAGED_MCP_FD: int | None = None
@@ -236,8 +241,6 @@ def _is_openshell_placeholder_for_name(name: str, value: str) -> bool:
 def _is_managed_value(name: str, value: str) -> bool:
     if name == "DEEPAGENTS_CODE_OPENAI_API_KEY":
         return value == "nemoclaw-managed-inference"
-    if name == "OPENSHELL_TLS_KEY":
-        return value == "/etc/openshell/tls/client/tls.key"
     if name == "SLACK_BOT_TOKEN":
         return bool(re.fullmatch(r"xoxb-[A-Za-z0-9_-]{10,}", value)) and not _contains_other_platform_secret(value, "slack")
     if name == "SLACK_APP_TOKEN":
@@ -283,6 +286,11 @@ def _is_safe_otlp_endpoint_url(value: str) -> bool:
 
 def _assert_safe_environment() -> None:
     for name, value in os.environ.items():
+        if name in _OPENSHELL_SUPERVISOR_ONLY_ENV_NAMES:
+            raise RuntimeError(
+                f"runtime environment variable {name} is reserved for the "
+                "OpenShell supervisor and must not reach a child process"
+            )
         if _OPENSHELL_ENV_PLACEHOLDER_PREFIX in value:
             if _is_openshell_placeholder_for_name(name, value):
                 continue
@@ -343,13 +351,11 @@ def _validate_managed_mcp_hostname(hostname: str) -> None:
         hostname != hostname.lower()
         or hostname.endswith(".")
         or hostname in _MCP_BLOCKED_ALIASES
-        or hostname in _MCP_RESERVED_NAMES
-        or any(
-            hostname.endswith(f".{reserved}")
-            for reserved in _MCP_RESERVED_NAMES
-        )
     ):
         raise RuntimeError("managed MCP server URL hostname is invalid")
+    # Host preflight owns destination trust and binds every accepted endpoint to
+    # exact OpenShell address pins. This runtime revalidates canonical syntax and
+    # rejects IPv4 literals outside public or routed-private ranges.
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
@@ -360,12 +366,13 @@ def _validate_managed_mcp_hostname(hostname: str) -> None:
         ):
             raise RuntimeError("managed MCP server URL hostname is invalid")
         return
-    if (
-        address.version != 4
-        or not address.is_global
-        or any(address in network for network in _MCP_BLOCKED_IPV4_NETWORKS)
+    if address.version != 4:
+        raise RuntimeError("managed MCP server URL does not support IPv6 literals")
+    if not (
+        (address.is_global and not address.is_multicast)
+        or any(address in network for network in _MCP_ROUTED_PRIVATE_IPV4_NETWORKS)
     ):
-        raise RuntimeError("managed MCP server URL address is not public IPv4")
+        raise RuntimeError("managed MCP server URL address is not an admitted destination")
 
 
 def _validate_managed_mcp_url(value: object) -> str:
@@ -821,13 +828,16 @@ def _sealed_managed_mcp_snapshot(payload: bytes) -> int:
         raise
 
 
-def _anonymous_managed_mcp_snapshot(payload: bytes) -> int:
+def _anonymous_managed_mcp_snapshot_at(
+    payload: bytes,
+    directory: Path,
+) -> int:
     writer: int | None = None
     reader: int | None = None
     complete = False
     try:
         flags = os.O_TMPFILE | os.O_EXCL | os.O_RDWR | os.O_CLOEXEC
-        writer = os.open(_MCP_ANONYMOUS_DIRECTORY, flags, 0o600)
+        writer = os.open(directory, flags, 0o600)
         remaining = memoryview(payload)
         while remaining:
             written = os.write(writer, remaining)
@@ -875,6 +885,82 @@ def _anonymous_managed_mcp_snapshot(payload: bytes) -> int:
             except OSError:
                 # Best-effort teardown must not replace the primary result or error.
                 pass
+
+
+def _validate_private_managed_mcp_tmpfs() -> None:
+    directory = _MCP_PRIVATE_ANONYMOUS_DIRECTORY
+    try:
+        metadata = os.lstat(directory)
+        filesystem = os.statvfs(directory)
+        mount_lines = Path("/proc/self/mountinfo").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(
+            "managed MCP config requires a private bounded tmpfs"
+        ) from exc
+
+    matching_mount_options: list[set[str] | None] = []
+    for line in mount_lines:
+        fields = line.split()
+        if len(fields) <= 4 or fields[4] != str(directory):
+            continue
+        try:
+            separator = fields.index("-")
+        except ValueError:
+            matching_mount_options.append(None)
+            continue
+        if len(fields) <= separator + 3 or fields[separator + 1] != "tmpfs":
+            matching_mount_options.append(None)
+            continue
+        matching_mount_options.append(set(fields[5].split(",")))
+
+    mount_options = (
+        matching_mount_options[0]
+        if len(matching_mount_options) == 1
+        else None
+    )
+
+    total_bytes = filesystem.f_blocks * filesystem.f_frsize
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != _MCP_PRIVATE_ANONYMOUS_MODE
+        or not os.path.ismount(directory)
+        or mount_options is None
+        or not _MCP_PRIVATE_ANONYMOUS_MOUNT_OPTIONS.issubset(mount_options)
+        or total_bytes <= 0
+        or total_bytes > _MCP_PRIVATE_ANONYMOUS_MAX_BYTES
+    ):
+        raise RuntimeError(
+            "managed MCP config requires a private bounded tmpfs"
+        )
+
+
+def _managed_mcp_tmpfile_fallback_allowed(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, AttributeError):
+            return True
+        if isinstance(current, OSError):
+            return current.errno == errno.EOPNOTSUPP
+        current = current.__cause__
+    return False
+
+
+def _anonymous_managed_mcp_snapshot(payload: bytes) -> int:
+    try:
+        return _anonymous_managed_mcp_snapshot_at(
+            payload,
+            _MCP_ANONYMOUS_DIRECTORY,
+        )
+    except RuntimeError as exc:
+        if not _managed_mcp_tmpfile_fallback_allowed(exc):
+            raise
+    _validate_private_managed_mcp_tmpfs()
+    return _anonymous_managed_mcp_snapshot_at(
+        payload,
+        _MCP_PRIVATE_ANONYMOUS_DIRECTORY,
+    )
 
 
 def _managed_mcp_fallback_allowed(exc: BaseException) -> bool:
@@ -1299,6 +1385,64 @@ def managed_auto_approval_mode() -> str:
 def managed_auto_approval_enabled() -> bool:
     """Return whether thread-scoped auto-approval may be explicitly enabled."""
     return managed_auto_approval_mode() == _AUTO_APPROVAL_THREAD_OPT_IN
+
+
+def _unset_reasoning_effort(reason: str) -> None:
+    if os.environ.get("NEMOCLAW_DEBUG") == "1":
+        print(
+            f"NemoClaw managed reasoning effort unset: {reason}",
+            file=sys.stderr,
+        )
+    return None
+
+
+def managed_reasoning_effort() -> str | None:
+    """Return the reasoning effort baked into the image, or None for the endpoint default."""
+    path = _REASONING_EFFORT_FILE
+    try:
+        if path.is_symlink():
+            return _unset_reasoning_effort("capability path is a symlink")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except OSError:
+        return _unset_reasoning_effort("capability file is missing or unreadable")
+
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != _MANAGED_FILE_OWNER_UID
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+            or metadata.st_size not in {
+                len(content) for content in _REASONING_EFFORT_CONTENTS
+            }
+        ):
+            return _unset_reasoning_effort("capability metadata is unsafe")
+
+        chunks: list[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                return _unset_reasoning_effort("capability file was truncated")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            return _unset_reasoning_effort("capability file changed while reading")
+    except OSError:
+        return _unset_reasoning_effort("capability file read failed")
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            # Cleanup cannot weaken the endpoint-default capability result.
+            pass
+
+    raw = b"".join(chunks)
+    if raw not in _REASONING_EFFORT_CONTENTS:
+        return _unset_reasoning_effort("capability contents are invalid")
+    return _REASONING_EFFORT_CONTENTS[raw]
 
 
 def managed_display_provider(adapter_provider: object) -> str:

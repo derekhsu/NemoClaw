@@ -19,12 +19,16 @@ type SetupNimOllamaDeps = {
   isNonInteractive: () => boolean;
   prompt: (message: string) => Promise<string>;
   checkOllamaPortsOrWarn: (args: { isNonInteractive: () => boolean }) => boolean;
-  ensureOllamaLoopbackSystemdOverride: (args: { isNonInteractive: () => boolean }) => string;
+  ensureOllamaLoopbackSystemdOverride: (args: {
+    isNonInteractive: () => boolean;
+    contextWindowFloor?: number;
+  }) => string;
   runOllamaStartupOrGate: (args: {
     ollamaReady: boolean;
     ollamaPort: number;
     getLocalProviderBaseUrl: (provider: string) => string | null;
     isNonInteractive: () => boolean;
+    contextWindowFloor?: number;
   }) => OllamaStartupOutcome;
   shouldFrontOllamaWithProxy: () => boolean;
   startOllamaAuthProxy: () => boolean;
@@ -36,6 +40,7 @@ type SetupNimOllamaDeps = {
       requestedModel: string | null;
       recoveredModel: string | null;
       lockedModel?: string | null;
+      contextWindowFloor?: number;
       promptDefaultModel?: string | null;
     },
     onModelSelected?: (model: string) => void,
@@ -53,18 +58,23 @@ type SetupNimOllamaDeps = {
   }) => boolean;
   printWindowsOllamaTimeoutDiagnostics: () => void;
   resetOllamaHostCache: () => void;
-  installOllamaOnMacOS: (args: { isNonInteractive: () => boolean; isUpgrade: boolean }) => {
-    ok: boolean;
-  };
-  installOllamaOnLinux: (args: { isNonInteractive: () => boolean; isUpgrade: boolean }) => {
-    ok: boolean;
-  };
+  installOllamaOnMacOS: (args: {
+    isNonInteractive: () => boolean;
+    isUpgrade: boolean;
+    contextWindowFloor?: number;
+  }) => { ok: boolean };
+  installOllamaOnLinux: (args: {
+    isNonInteractive: () => boolean;
+    isUpgrade: boolean;
+    contextWindowFloor?: number;
+  }) => { ok: boolean };
   abortNonInteractive: (message: string) => never;
   assertOllamaUpgradeApplied: (menu: {
     hasUpgradableOllama: boolean;
   }) => { ok: true } | { ok: false; message: string };
 };
 
+/** Create Ollama onboarding handlers that propagate agent-specific context floors. */
 export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
   handleWindowsHostOllamaSelection: (
     gpu: any,
@@ -107,6 +117,7 @@ export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
         requestedModel: constrainedModel,
         recoveredModel,
         lockedModel,
+        contextWindowFloor: state.ollamaContextWindowFloor,
         promptDefaultModel,
       },
       (model) => {
@@ -152,7 +163,14 @@ export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
   ): string | null {
     configureOllamaState(state);
     state.model = requestedModel || recoveredModel;
-    return state.assertRouteCompatible?.().requiredModel ?? null;
+    const requiredModel = state.assertRouteCompatible?.().requiredModel ?? null;
+    if (requiredModel && !deps.isNonInteractive()) {
+      console.log(`  Shared gateway route requires Ollama model '${requiredModel}'.`);
+      console.log(
+        "  To use a different model for this agent, rerun with an unused NEMOCLAW_GATEWAY_PORT.",
+      );
+    }
+    return requiredModel;
   }
 
   function applyOllamaFallbackState(
@@ -251,6 +269,7 @@ export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
     let ollamaReady = ollamaRunning;
     const overrideState = deps.ensureOllamaLoopbackSystemdOverride({
       isNonInteractive: deps.isNonInteractive,
+      contextWindowFloor: state.ollamaContextWindowFloor,
     });
     if (overrideState === "ready") {
       ollamaReady = true;
@@ -265,6 +284,7 @@ export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
       ollamaPort: deps.OLLAMA_PORT,
       getLocalProviderBaseUrl: deps.getLocalProviderBaseUrl,
       isNonInteractive: deps.isNonInteractive,
+      contextWindowFloor: state.ollamaContextWindowFloor,
     });
     // Source boundary: ollama-startup owns this closed outcome contract. If a
     // stale package or test double presents an unknown kind, fail closed before
@@ -304,8 +324,16 @@ export function createSetupNimOllamaHandlers(deps: SetupNimOllamaDeps): {
     const isUpgrade = ollamaInstallMenu.hasUpgradableOllama;
     const installResult =
       deps.process.platform === "darwin"
-        ? deps.installOllamaOnMacOS({ isNonInteractive: deps.isNonInteractive, isUpgrade })
-        : deps.installOllamaOnLinux({ isNonInteractive: deps.isNonInteractive, isUpgrade });
+        ? deps.installOllamaOnMacOS({
+            isNonInteractive: deps.isNonInteractive,
+            isUpgrade,
+            contextWindowFloor: state.ollamaContextWindowFloor,
+          })
+        : deps.installOllamaOnLinux({
+            isNonInteractive: deps.isNonInteractive,
+            isUpgrade,
+            contextWindowFloor: state.ollamaContextWindowFloor,
+          });
     if (!installResult.ok) {
       if (deps.isNonInteractive())
         deps.abortNonInteractive("Ollama install failed. See errors above.");

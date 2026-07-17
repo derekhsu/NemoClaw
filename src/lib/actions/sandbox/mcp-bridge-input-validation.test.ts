@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   SUBPROCESS_ENV_ALLOWED_NAMES,
@@ -14,7 +14,7 @@ import {
   parseMcpAddArgs,
   resolveCredentialEnv,
 } from "./mcp-bridge";
-import childVisibleCredentialManifest from "./openshell-child-visible-credentials.v0.0.72.json";
+import childVisibleCredentialManifest from "./openshell-child-visible-credentials.v0.0.101.json";
 
 describe("MCP CLI input validation", () => {
   it("parses server, URL, and env references", () => {
@@ -33,10 +33,90 @@ describe("MCP CLI input validation", () => {
     });
   });
 
+  it("normalizes one exact trusted-private host from a repeated add option (#8267)", () => {
+    expect(
+      parseMcpAddArgs([
+        "local",
+        "--url",
+        "https://10.20.30.40/mcp",
+        "--env",
+        "LOCAL_MCP_TOKEN",
+        "--trusted-private-host",
+        "10.20.30.40",
+      ]),
+    ).toEqual({
+      server: "local",
+      url: "https://10.20.30.40/mcp",
+      env: [{ name: "LOCAL_MCP_TOKEN" }],
+      trustedPrivateHosts: ["10.20.30.40"],
+    });
+
+    expect(() =>
+      parseMcpAddArgs([
+        "local",
+        "--url",
+        "https://mcp.corp.example/mcp",
+        "--env",
+        "LOCAL_MCP_TOKEN",
+        "--trusted-private-host",
+        "MCP.CORP.EXAMPLE.",
+        "--trusted-private-host=mcp.corp.example",
+      ]),
+    ).toThrow(/Duplicate --trusted-private-host/);
+  });
+
+  it("uses generic trusted-private hosts without persisting unrelated entries (#8176)", () => {
+    vi.stubEnv("NEMOCLAW_TRUSTED_PRIVATE_HOSTS", "unrelated.corp.example,10.20.30.40");
+
+    expect(
+      parseMcpAddArgs(["local", "--url", "https://10.20.30.40/mcp", "--env", "LOCAL_MCP_TOKEN"]),
+    ).toEqual({
+      server: "local",
+      url: "https://10.20.30.40/mcp",
+      env: [{ name: "LOCAL_MCP_TOKEN" }],
+    });
+  });
+
+  it("rejects a trusted-private add option for a different URL host (#8267)", () => {
+    expect(() =>
+      parseMcpAddArgs([
+        "local",
+        "--url",
+        "https://mcp.corp.example/mcp",
+        "--env",
+        "LOCAL_MCP_TOKEN",
+        "--trusted-private-host",
+        "other.corp.example",
+      ]),
+    ).toThrow(/does not match MCP server URL host/);
+  });
+
   it("rejects inline env values that would leak through process arguments", () => {
     expect(() =>
       parseMcpAddArgs(["srv", "--url=https://mcp.example.test/rpc", "--env=TOKEN=a=b=c"]),
     ).toThrow(/process arguments and shell history/);
+  });
+
+  it("rejects OpenShell revisioned placeholder names as MCP credentials (#6379)", () => {
+    for (const name of ["v1_TOKEN", "v999999_very_unlikely", "v0_1"]) {
+      expect(() =>
+        parseMcpAddArgs(["github", "--url", "https://mcp.example.test/mcp", "--env", name]),
+      ).toThrow(/reserved for OpenShell credential revisions/);
+      expect(() => resolveCredentialEnv([{ name, value: "host-only-secret" }])).toThrow(
+        /would be skipped instead of attached/,
+      );
+      expect(() =>
+        buildMcpBridgeProviderArgs("create", "provider", [{ name }], {
+          [name]: "host-only-secret",
+        }),
+      ).toThrow(/reserved for OpenShell credential revisions/);
+    }
+
+    for (const name of ["v_TOKEN", "v10_", "versioned_token", "V10_TOKEN"]) {
+      expect(() =>
+        parseMcpAddArgs(["github", "--url", "https://mcp.example.test/mcp", "--env", name]),
+      ).not.toThrow();
+    }
   });
 
   // source-shape-contract: compatibility -- Pinned OpenShell child-visible keys must drive credential rejection through every MCP boundary

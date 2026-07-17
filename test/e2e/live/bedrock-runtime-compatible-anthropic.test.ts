@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import * as http2 from "node:http2";
@@ -30,12 +30,17 @@ import {
 import { expect, test } from "../fixtures/e2e-test.ts";
 import { testHomeEnvironment } from "../fixtures/environment-profiles.ts";
 import { CLI_DIST_ENTRYPOINT, CLI_ENTRYPOINT, REPO_ROOT } from "../fixtures/paths.ts";
-import { redactString } from "../fixtures/redaction.ts";
+import type { TestProgress, TestProgressCapability } from "../fixtures/progress.ts";
+import { summarizeSandboxSnapshot } from "./bedrock-runtime-compatible-anthropic-artifacts.ts";
 import {
-  projectRawOutputForArtifact,
-  type RawArtifactOutputMode,
-  summarizeSandboxSnapshot,
-} from "./bedrock-runtime-compatible-anthropic-artifacts.ts";
+  type ForbiddenLeakPattern,
+  findForbiddenLeaks,
+  frameSnapshotFile,
+  SNAPSHOT_DATA_PREFIX,
+  SNAPSHOT_FILE_PREFIX,
+  SNAPSHOT_PROBE_PID_PREFIX,
+  scanForbiddenLeaks,
+} from "./bedrock-runtime-compatible-anthropic-leaks.ts";
 import {
   BEDROCK_PRE_CONTRACT_ENDPOINT_VALIDATION_INVALID_STATE,
   BEDROCK_PRE_CONTRACT_ENDPOINT_VALIDATION_REMOVAL_CONDITION,
@@ -43,6 +48,10 @@ import {
   BEDROCK_PRE_CONTRACT_ENDPOINT_VALIDATION_SOURCE_BOUNDARY,
   isPreContractEndpointValidationRateLimitEvidence,
 } from "./bedrock-runtime-compatible-anthropic-rate-limit.ts";
+import {
+  type RawRunResult,
+  runRawCommand,
+} from "./bedrock-runtime-compatible-anthropic-raw-command.ts";
 
 // Keep the same live system boundary: host fake Bedrock Runtime endpoint,
 // /etc/hosts mapping, source CLI onboard, OpenShell provider route, sandbox
@@ -60,7 +69,8 @@ const BEDROCK_MODEL =
 const COMPATIBLE_KEY =
   process.env.NEMOCLAW_BEDROCK_RUNTIME_FAKE_KEY ?? "fake-pasted-bedrock-runtime-key-e2e";
 const AGENT = process.env.NEMOCLAW_AGENT ?? "openclaw";
-const SANDBOX_NAME = process.env.NEMOCLAW_SANDBOX_NAME ?? `e2e-bedrock-${AGENT}`;
+const SANDBOX_NAME =
+  process.env.NEMOCLAW_SANDBOX_NAME ?? (AGENT === "hermes" ? "e2e-hm-bedrock" : "e2e-oc-bedrock");
 const ONBOARD_TIMEOUT_MS = 30 * 60_000;
 const TEST_TIMEOUT_MS = 60 * 60_000;
 const SANDBOX_TIMEOUT_MS = 180_000;
@@ -75,27 +85,6 @@ type EventStreamCodecConstructor = new (
   toUtf8: (input: Uint8Array) => string,
   fromUtf8: (input: string) => Uint8Array,
 ) => EventStreamCodec;
-
-interface RawRunResult {
-  readonly command: readonly string[];
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly timedOut: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly redactedStdout: string;
-  readonly redactedStderr: string;
-}
-
-interface RawRunOptions {
-  readonly artifactName: string;
-  readonly artifacts: ArtifactSink;
-  readonly artifactOutputMode?: RawArtifactOutputMode;
-  readonly cwd?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly redactionValues?: readonly string[];
-  readonly timeoutMs?: number;
-}
 
 interface MockBedrockRuntime {
   readonly port: number;
@@ -122,8 +111,7 @@ function isMissingSandboxCleanupOutput(text: string): boolean {
 }
 
 function sandboxShellArgs(script: string): string[] {
-  const encoded = Buffer.from(script, "utf8").toString("base64");
-  return ["sh", "-lc", `printf %s ${shellQuote(encoded)} | base64 -d | sh`];
+  return ["sh", "-lc", script];
 }
 
 function assertAgent(value: string): asserts value is AgentName {
@@ -176,7 +164,7 @@ function createBedrockTlsFixture(home: string): { cert: Buffer; key: Buffer; cer
       "-addext",
       `subjectAltName=DNS:${BEDROCK_HOSTNAME}`,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", killSignal: "SIGKILL", timeout: 30_000 },
   );
   expect(
     generated.status,
@@ -186,96 +174,6 @@ function createBedrockTlsFixture(home: string): { cert: Buffer; key: Buffer; cer
     cert: fs.readFileSync(certPath),
     key: fs.readFileSync(keyPath),
     certPath,
-  };
-}
-
-function redactedCommand(command: readonly string[], values: readonly string[]): string[] {
-  return command.map((part) => redactString(part, values));
-}
-
-async function runRawCommand(
-  command: string,
-  args: readonly string[],
-  options: RawRunOptions,
-): Promise<RawRunResult> {
-  const timeoutMs = options.timeoutMs ?? 60_000;
-  const redactionValues = [...(options.redactionValues ?? [])];
-  const child = spawn(command, [...args], {
-    cwd: options.cwd ?? REPO_ROOT,
-    detached: true,
-    env: options.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const fullCommand = [command, ...args];
-  let stdout = "";
-  let stderr = "";
-  let timedOut = false;
-  let spawnError: Error | undefined;
-
-  const killProcessGroup = (signal: NodeJS.Signals): void => {
-    if (child.pid === undefined) return;
-    try {
-      process.kill(-child.pid, signal);
-    } catch {
-      child.kill(signal);
-    }
-  };
-
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    killProcessGroup("SIGTERM");
-    setTimeout(() => killProcessGroup("SIGKILL"), 1_000).unref();
-  }, timeoutMs);
-  timeout.unref();
-
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString("utf8");
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
-  child.on("error", (error) => {
-    spawnError = error;
-  });
-
-  const { exitCode, signal } = await new Promise<{
-    exitCode: number | null;
-    signal: NodeJS.Signals | null;
-  }>((resolve) => {
-    child.on("close", (code, closeSignal) => resolve({ exitCode: code, signal: closeSignal }));
-  });
-  clearTimeout(timeout);
-
-  if (spawnError) {
-    const message = redactString(spawnError.message, redactionValues);
-    throw new Error(`failed to spawn ${redactString(command, redactionValues)}: ${message}`);
-  }
-
-  const redactedStdout = redactString(stdout, redactionValues);
-  const redactedStderr = redactString(stderr, redactionValues);
-  const artifactOutputMode = options.artifactOutputMode ?? "content";
-  const artifactStdout = projectRawOutputForArtifact(redactedStdout, "stdout", artifactOutputMode);
-  const artifactStderr = projectRawOutputForArtifact(redactedStderr, "stderr", artifactOutputMode);
-  await options.artifacts.writeText(`raw-shell/${options.artifactName}.stdout.txt`, artifactStdout);
-  await options.artifacts.writeText(`raw-shell/${options.artifactName}.stderr.txt`, artifactStderr);
-  await options.artifacts.writeJson(`raw-shell/${options.artifactName}.result.json`, {
-    command: redactedCommand(fullCommand, redactionValues),
-    exitCode,
-    signal,
-    timedOut,
-    stdout: artifactStdout,
-    stderr: artifactStderr,
-  });
-
-  return {
-    command: fullCommand,
-    exitCode,
-    signal,
-    timedOut,
-    stdout,
-    stderr,
-    redactedStdout,
-    redactedStderr,
   };
 }
 
@@ -581,20 +479,24 @@ function stopBedrockAdapter(home: string): void {
   }
 }
 
+const BEDROCK_ADAPTER_LAUNCHER_PATTERN =
+  /(?:^|[^A-Za-z0-9_.-])bedrock-runtime-adapter\.(?:mts|js)(?:$|[^A-Za-z0-9_.-])/;
+
 function isBedrockAdapterProcess(pid: number): boolean {
-  const expectedScript = "bedrock-runtime-adapter.js";
   try {
     const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replaceAll("\0", " ");
-    if (cmdline.includes(expectedScript)) return true;
+    if (BEDROCK_ADAPTER_LAUNCHER_PATTERN.test(cmdline)) return true;
   } catch {
     // Fall back to ps on platforms without procfs.
   }
 
   const ps = spawnSync("ps", ["-p", String(pid), "-o", "args="], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
   });
-  return ps.status === 0 && ps.stdout.includes(expectedScript);
+  return ps.status === 0 && BEDROCK_ADAPTER_LAUNCHER_PATTERN.test(ps.stdout);
 }
 
 async function restoreHostsFile(
@@ -1040,6 +942,7 @@ async function assertHermesConfig(sandbox: SandboxClient, home: string): Promise
   if (/^models:\s*\n(?:[ \t].*\n)*?[ \t]+providers:/m.test(config.stdout)) {
     errors.push("OpenClaw-style models.providers block present");
   }
+  expect(Object.hasOwn(model, "reasoning_effort")).toBe(false);
   if (config.stdout.includes("openshell:")) errors.push("OpenShell provider placeholder present");
   expect(errors).toEqual([]);
 }
@@ -1152,13 +1055,14 @@ function assertAdapterLogBreadcrumbs(home: string, agent: AgentName): void {
 
 const SNAPSHOT_SCRIPT = trustedSandboxShellScript(`
 set +e
+printf '${SNAPSHOT_PROBE_PID_PREFIX}%s\\n' "$$"
 emit_file() {
   path="$1"
   [ -r "$path" ] || return 0
   size=$(wc -c <"$path" 2>/dev/null || echo 0)
   [ "$size" -le 1048576 ] || return 0
-  printf '\\n@@NEMOCLAW_E2E_FILE@@ %s\\n' "$path"
-  tr '\\000' '\\n' <"$path" 2>/dev/null || true
+  printf '\\n${SNAPSHOT_FILE_PREFIX}%s\\n' "$path"
+  tr '\\000' '\\n' <"$path" 2>/dev/null | sed 's/^/${SNAPSHOT_DATA_PREFIX}/' || true
 }
 
 for root in /sandbox/.openclaw /sandbox/.hermes /etc/nemoclaw /tmp; do
@@ -1178,25 +1082,6 @@ for proc_dir in /proc/[0-9]*; do
   done
 done
 `);
-
-function findForbiddenLeaks(
-  text: string,
-  label: string,
-  patterns: Array<[string, string]>,
-): string[] {
-  const locations: string[] = [];
-  let current = label;
-  for (const line of text.split("\n")) {
-    if (line.startsWith("@@NEMOCLAW_E2E_FILE@@ ")) {
-      current = line.slice("@@NEMOCLAW_E2E_FILE@@ ".length);
-      continue;
-    }
-    for (const [name, value] of patterns) {
-      if (value && line.includes(value)) locations.push(`${name}: ${current}`);
-    }
-  }
-  return [...new Set(locations)].sort();
-}
 
 function isPreContractEndpointValidationRateLimit(options: {
   mock: MockBedrockRuntime | undefined;
@@ -1250,16 +1135,21 @@ async function assertNoBedrockLeaks(options: {
   home: string;
   mock: MockBedrockRuntime;
   onboarding: RawRunResult;
+  progress: Pick<TestProgress, "activity" | "event" | "onOutput"> & TestProgressCapability;
   sandbox: SandboxClient;
   redact: (text: string, extraValues?: string[]) => string;
 }): Promise<void> {
   const adapterToken = readAdapterToken(options.home);
-  const patterns: Array<[string, string]> = [
-    ["fake user key", COMPATIBLE_KEY],
-    ["adapter token", adapterToken],
-    ["AWS bearer env name", "AWS_BEARER_TOKEN_BEDROCK"],
-    ["adapter token env name", "NEMOCLAW_BEDROCK_RUNTIME_ADAPTER_TOKEN"],
-    ["raw Bedrock hostname", BEDROCK_HOSTNAME],
+  const patterns: ForbiddenLeakPattern[] = [
+    { name: "fake user key", value: COMPATIBLE_KEY },
+    { name: "adapter token", value: adapterToken },
+    { name: "AWS bearer env name", value: "AWS_BEARER_TOKEN_BEDROCK" },
+    {
+      name: "adapter token env name",
+      value: "NEMOCLAW_BEDROCK_RUNTIME_ADAPTER_TOKEN",
+      allowInSnapshotProbeEnvironment: true,
+    },
+    { name: "raw Bedrock hostname", value: BEDROCK_HOSTNAME },
   ];
   const snapshot = await runRawCommand(
     "openshell",
@@ -1269,6 +1159,7 @@ async function assertNoBedrockLeaks(options: {
       artifacts: options.artifacts,
       artifactOutputMode: "metadata-only",
       env: testEnv(options.home),
+      progress: options.progress,
       redactionValues: [COMPATIBLE_KEY, adapterToken],
       timeoutMs: 180_000,
     },
@@ -1277,27 +1168,28 @@ async function assertNoBedrockLeaks(options: {
     ? fs.readFileSync(adapterLogPath(options.home), "utf8")
     : "";
   const hostLogs = [
-    "@@NEMOCLAW_E2E_FILE@@ onboard stdout",
-    options.onboarding.stdout,
-    "@@NEMOCLAW_E2E_FILE@@ onboard stderr",
-    options.onboarding.stderr,
-    "@@NEMOCLAW_E2E_FILE@@ adapter log",
-    adapterLog,
-    "@@NEMOCLAW_E2E_FILE@@ fake Bedrock mock log",
-    options.mock.logs.join("\n"),
+    frameSnapshotFile("onboard stdout", options.onboarding.stdout),
+    frameSnapshotFile("onboard stderr", options.onboarding.stderr),
+    frameSnapshotFile("adapter log", adapterLog),
+    frameSnapshotFile("fake Bedrock mock log", options.mock.logs.join("\n")),
   ].join("\n");
   await options.artifacts.writeText(
     "host-bedrock-runtime-logs.txt",
     options.redact(hostLogs, [COMPATIBLE_KEY, adapterToken]),
   );
 
-  const leaks = [
-    ...findForbiddenLeaks(snapshot.stdout, "sandbox snapshot", patterns),
-    ...findForbiddenLeaks(hostLogs, "host logs", patterns),
-  ];
+  const sandboxLeakScan = scanForbiddenLeaks(snapshot.stdout, "sandbox snapshot", patterns);
+  expect(
+    sandboxLeakScan.snapshotProbeEnvironmentExemptions.some(
+      (entry) => entry.name === "adapter token env name",
+    ),
+    "OpenShell no longer projects the adapter placeholder into the snapshot child; remove the probe-environment exemption",
+  ).toBe(true);
+  const leaks = [...sandboxLeakScan.leaks, ...findForbiddenLeaks(hostLogs, "host logs", patterns)];
   await options.artifacts.writeJson("sandbox-snapshot-bedrock-runtime-summary.json", {
     ...summarizeSandboxSnapshot(snapshot.stdout),
     forbiddenLeakCount: leaks.length,
+    snapshotProbeEnvironmentExemptions: sandboxLeakScan.snapshotProbeEnvironmentExemptions,
     rawContentPublished: false,
   });
   expect(leaks).toEqual([]);
@@ -1305,8 +1197,22 @@ async function assertNoBedrockLeaks(options: {
 
 test("bedrock runtime compatible Anthropic endpoint routes through managed inference.local", {
   timeout: TEST_TIMEOUT_MS,
-}, async ({ artifacts, cleanup, host, sandbox, secrets, skip }) => {
+  meta: {
+    e2ePhases: [
+      "validate prerequisites and start fake Bedrock endpoint",
+      "onboard agent through Bedrock adapter",
+      "validate managed adapter route and config",
+      "exercise agent inference through Bedrock",
+      "audit Bedrock traffic and secret isolation",
+    ],
+  },
+}, async ({ artifacts, cleanup, host, progress, sandbox, secrets, skip }) => {
   assertAgent(AGENT);
+  const shard =
+    process.env.GITHUB_ACTIONS === "true"
+      ? process.env.NEMOCLAW_E2E_SHARD
+      : (process.env.NEMOCLAW_E2E_SHARD ?? AGENT);
+  expect(shard).toBe(AGENT);
   validateSandboxName(SANDBOX_NAME);
 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-bedrock-runtime-home-"));
@@ -1408,6 +1314,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
   });
 
   await cleanupSandboxState(host, home);
+  progress.phase("onboard agent through Bedrock adapter");
   onboarding = await runRawCommand(
     "node",
     [
@@ -1421,6 +1328,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
       artifactName: `onboard-bedrock-runtime-${AGENT}`,
       artifacts,
       env: onboardEnv(home, AGENT, tls.certPath),
+      progress,
       redactionValues: [COMPATIBLE_KEY],
       timeoutMs: ONBOARD_TIMEOUT_MS,
     },
@@ -1433,6 +1341,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
   });
   expect(onboarding.exitCode, redactedResultText(onboarding)).toBe(0);
 
+  progress.phase("validate managed adapter route and config");
   await assertOnboardIdentity(home, AGENT);
   await assertAdapterHealth(host, home);
   await assertOpenShellProviderRoute(host, home);
@@ -1442,6 +1351,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
     await assertOpenClawConfig(sandbox, home);
   }
 
+  progress.phase("exercise agent inference through Bedrock");
   await assertSandboxInference(sandbox, home);
   if (AGENT === "hermes") {
     await assertHermesApiChat(sandbox, home);
@@ -1449,6 +1359,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
     await assertOpenClawAgentTurn(sandbox, home);
   }
 
+  progress.phase("audit Bedrock traffic and secret isolation");
   expect(
     mock.converseCount,
     "fake Bedrock Runtime endpoint observed authenticated Converse traffic",
@@ -1465,6 +1376,7 @@ test("bedrock runtime compatible Anthropic endpoint routes through managed infer
     home,
     mock,
     onboarding,
+    progress,
     sandbox,
     redact: (text, extraValues) => secrets.redact(text, extraValues),
   });

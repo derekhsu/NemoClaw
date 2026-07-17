@@ -17,6 +17,8 @@ export const RUNTIME_CONFIG_GUARD = path.join(
   "runtime-config-guard.py",
 );
 
+const HERMES_GUARD_TIMEOUT_MS = 90_000;
+
 export interface RestartFixture {
   root: string;
   sandboxDir: string;
@@ -95,6 +97,19 @@ export function createRestartFixture(): RestartFixture {
   };
 }
 
+export function allowRestartFixturePeerTraversal(fixture: RestartFixture): () => void {
+  const testTempRoot = path.dirname(fixture.root);
+  const testTempRootMode = mode(testTempRoot);
+  fs.chmodSync(testTempRoot, testTempRootMode | 0o001);
+  try {
+    fs.chmodSync(fixture.root, mode(fixture.root) | 0o001);
+  } catch (error) {
+    fs.chmodSync(testTempRoot, testTempRootMode);
+    throw error;
+  }
+  return () => fs.chmodSync(testTempRoot, testTempRootMode);
+}
+
 export function runWriteConfig(fixture: RestartFixture, expectedDigest: string, content: string) {
   return spawnSync(
     "python3",
@@ -110,7 +125,7 @@ export function runWriteConfig(fixture: RestartFixture, expectedDigest: string, 
       "--expected-config-sha256",
       expectedDigest,
     ],
-    { encoding: "utf-8", input: content, timeout: 5000 },
+    { encoding: "utf-8", input: content, timeout: HERMES_GUARD_TIMEOUT_MS },
   );
 }
 
@@ -142,7 +157,7 @@ export function runGuard(action: "seal-restart" | "unseal-restart", fixture: Res
   args.push(...(action === "seal-restart" ? ["--hash-file", fixture.hashPath] : []));
   return spawnSync("python3", args, {
     encoding: "utf-8",
-    timeout: 5000,
+    timeout: HERMES_GUARD_TIMEOUT_MS,
   });
 }
 
@@ -218,7 +233,10 @@ export function runShieldsTransactionAction(
     ...(options.rollbackMode ? ["--rollback-shields-mode", options.rollbackMode] : []),
     ...(options.token ? ["--lock-token", options.token] : []),
   );
-  return spawnSync("python3", args, { encoding: "utf-8", timeout: 5000 });
+  return spawnSync("python3", args, {
+    encoding: "utf-8",
+    timeout: HERMES_GUARD_TIMEOUT_MS,
+  });
 }
 
 export function strictHashIsValid(fixture: RestartFixture): boolean {

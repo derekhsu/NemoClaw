@@ -142,7 +142,7 @@ describe("CLI dispatch", () => {
     expect(output).toContain("nemoclaw upgrade-sandboxes");
     expect(output).toContain("(--check, --auto, --yes|-y)");
     expect(output).toContain("nemoclaw update");
-    expect(output).toContain("(--check, --fresh, --yes|-y)");
+    expect(output).toContain("(--check, --fresh, --allow-downgrade, --yes|-y)");
     expect(output).toContain("nemoclaw gc");
     expect(output).toContain("(--yes|-y|--force, --dry-run)");
     expect(output).toContain("nemoclaw onboard");
@@ -203,6 +203,70 @@ describe("CLI dispatch", () => {
         expect(runOclifArgv).not.toHaveBeenCalled();
         expect(exitSpy).not.toHaveBeenCalled();
       },
+    );
+  });
+
+  it.each([
+    ["native sandbox recovery", ["sandbox", "recover", "alpha"]],
+    ["public sandbox diagnostics", ["alpha", "doctor"]],
+  ] as const)("routes %s when legacy migration is broken", async (_label, argv) => {
+    await withDirectPublicDispatch(
+      async ({ dispatchCli, migrateLegacyPortState, runOclifArgv, runOclifCommandById }) => {
+        await dispatchCli([...argv]);
+
+        expect(migrateLegacyPortState).not.toHaveBeenCalled();
+        expect(runOclifArgv.mock.calls.length + runOclifCommandById.mock.calls.length).toBe(1);
+      },
+      { migrationError: new Error("injected migration failure"), sandboxNames: ["alpha"] },
+    );
+  });
+
+  it.each([
+    ["plan", ["internal", "uninstall", "plan", "--json"]],
+    ["run-plan", ["internal", "uninstall", "run-plan", "--yes"]],
+  ] as const)("migrates legacy port state before internal uninstall %s", async (_label, argv) => {
+    await withDirectPublicDispatch(
+      async ({ dispatchCli, migrateLegacyPortState, runOclifArgv }) => {
+        await dispatchCli([...argv]);
+
+        expect(migrateLegacyPortState).toHaveBeenCalledTimes(1);
+        expect(runOclifArgv).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("fails closed before internal uninstall when legacy migration is unsafe", async () => {
+    await withDirectPublicDispatch(
+      async ({ dispatchCli, migrateLegacyPortState, runOclifArgv, stderr }) => {
+        await dispatchCli(["internal", "uninstall", "run-plan", "--yes"]);
+
+        expect(migrateLegacyPortState).toHaveBeenCalledTimes(1);
+        expect(runOclifArgv).not.toHaveBeenCalled();
+        expect(stderr.join("\n")).toContain("injected migration failure");
+        expect(process.exitCode).toBe(1);
+      },
+      { migrationError: new Error("injected migration failure") },
+    );
+  });
+
+  it("keeps ordinary stateful commands behind the migration gate", async () => {
+    await withDirectPublicDispatch(
+      async ({
+        dispatchCli,
+        migrateLegacyPortState,
+        runOclifArgv,
+        runOclifCommandById,
+        stderr,
+      }) => {
+        await dispatchCli(["alpha", "status"]);
+
+        expect(migrateLegacyPortState).toHaveBeenCalledTimes(1);
+        expect(runOclifArgv).not.toHaveBeenCalled();
+        expect(runOclifCommandById).not.toHaveBeenCalled();
+        expect(stderr.join("\n")).toContain("injected migration failure");
+        expect(process.exitCode).toBe(1);
+      },
+      { migrationError: new Error("injected migration failure"), sandboxNames: ["alpha"] },
     );
   });
 
@@ -297,7 +361,7 @@ describe("CLI dispatch", () => {
           argv: ["policy", "set"],
           entered: "policy set",
           command: "Run: openshell policy set --policy <policy-file> --wait <sandbox-name>",
-          notes: ["nemoclaw <sandbox-name> policy-add <preset>"],
+          notes: ["nemoclaw <sandbox-name> policy add <preset>"],
         },
         {
           argv: ["gateway", "stop"],
@@ -348,7 +412,7 @@ describe("CLI dispatch", () => {
         'case "$*" in',
         '  "status") printf "Status: Connected\\nGateway: nemoclaw\\n"; exit 0 ;;',
         '  "gateway info -g nemoclaw") printf "Gateway: nemoclaw\\n"; exit 0 ;;',
-        '  "sandbox list") echo "liost Ready"; exit 0 ;;',
+        '  "sandbox list"*) echo "liost Ready"; exit 0 ;;',
         '  "sandbox get liost") printf "Name: liost\\nPhase: Ready\\nPolicy:\\n"; exit 0 ;;',
         '  "policy get --full liost") exit 1 ;;',
         '  "inference get") exit 1 ;;',
@@ -368,6 +432,13 @@ describe("CLI dispatch", () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain("CONNECTED_LIOST");
     expect(r.out).not.toContain("Unknown command: liost");
+    const calls = fs.readFileSync(path.join(home, "openshell-calls.log"), "utf8").split("\n");
+    // Every sandbox list in this flow is gateway-scoped, including registry
+    // recovery's. An unscoped list returns every sandbox on the host, so on a
+    // two-gateway host recovery would bind a sibling gateway's sandbox to the
+    // selected gateway (#7105).
+    expect(calls).not.toContain("sandbox list");
+    expect(calls).toContain("sandbox list -g nemoclaw");
   });
 
   it("fails fast on gated NEMOCLAW_VLLM_MODEL without HF token before sandbox side effects", () => {

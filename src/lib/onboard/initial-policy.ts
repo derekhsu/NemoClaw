@@ -9,6 +9,21 @@ import { isObjectRecord } from "../core/json-types";
 import { getMessagingPolicyKeysByChannel } from "../messaging/channels";
 import * as policies from "../policy";
 import {
+  applyBaselineExclusions,
+  type BaselineExclusionRequest,
+} from "../policy/baseline-exclusion";
+import {
+  collectPlatformIdentity,
+  type PlatformIdentity,
+} from "../readiness/platform-qualification";
+import {
+  isQualifiedStationProfile,
+  isQualifiedStationRuntime,
+  isStationGb300PciDevice,
+  isStationGb300ProductName,
+  type StationProfile,
+} from "../readiness/station-qualification";
+import {
   allMessagingChannelPolicyPresets,
   requiredMessagingChannelPolicyPresets,
 } from "./messaging-policy-presets";
@@ -22,18 +37,144 @@ export type InitialSandboxPolicy = {
   cleanup?: () => boolean;
 };
 
+export function discloseInitialSandboxPolicy(policy: InitialSandboxPolicy): void {
+  if (policy.appliedPresets.length === 0) return;
+  console.log("  Including policy preset(s) at sandbox boot:", policy.appliedPresets.join(", "));
+  policies.logPresetScope(fs.readFileSync(policy.policyPath, "utf8"));
+}
+
 const HERMES_MESSAGING_POLICY_KEYS = getMessagingPolicyKeysByChannel({ agent: "hermes" });
 
 const PROC_PATH = "/proc";
 const PROC_COMM_READ_WRITE_PATHS = ["/proc/self/comm", "/proc/self/task/*/comm"];
+const SYSFS_PATH = "/sys";
+const PCI_BDF_PATTERN = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/iu;
+const STATION_GB300_SHARED_SYSFS_RELATIVE_PATHS = [
+  "devices/system/cpu",
+  "devices/system/memory",
+  "devices/system/node",
+  "module/nvidia/initstate",
+  "module/nvidia_uvm/initstate",
+] as const;
 
 function isProcEntryOwnedByOpenShell(entry: string): boolean {
   return entry === PROC_PATH || PROC_COMM_READ_WRITE_PATHS.includes(entry);
 }
 
+function deduplicateDirectGpuSysfsEntries(
+  entries: string[],
+  candidates: ReadonlySet<string>,
+): string[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (!candidates.has(entry)) return true;
+    if (seen.has(entry)) return false;
+    seen.add(entry);
+    return true;
+  });
+}
+
 type DirectGpuPolicyOptions = {
   procReadWrite?: boolean;
+  sysfsReadOnlyPaths?: readonly string[];
 };
+
+export { isStationGb300ProductName };
+
+function readTrimmedFile(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+export function discoverStationGb300SysfsReadOnlyPaths(
+  productName: string,
+  sysfsRoot = SYSFS_PATH,
+  stationProfile?: StationProfile | null,
+): string[] {
+  if (!isStationGb300ProductName(productName)) return [];
+  if (stationProfile !== undefined && !isQualifiedStationProfile(stationProfile)) {
+    throw new Error(
+      "Cannot prepare Station GB300 direct GPU sandbox policy; the Station software profile is unsupported or unknown.",
+    );
+  }
+
+  const readOnlyPaths: string[] = [];
+  const pciDevicesRoot = path.join(sysfsRoot, "bus", "pci", "devices");
+  let pciDeviceNames: string[] = [];
+  try {
+    pciDeviceNames = fs.readdirSync(pciDevicesRoot).sort();
+  } catch {
+    // A Station image without PCI sysfs cannot use the scoped GPU exception.
+  }
+  for (const pciDeviceName of pciDeviceNames) {
+    if (!PCI_BDF_PATTERN.test(pciDeviceName)) continue;
+    const pciDeviceRoot = path.join(pciDevicesRoot, pciDeviceName);
+    const vendor = readTrimmedFile(path.join(pciDeviceRoot, "vendor"))?.toLowerCase();
+    const device = readTrimmedFile(path.join(pciDeviceRoot, "device"))?.toLowerCase();
+    const pciClass = readTrimmedFile(path.join(pciDeviceRoot, "class"));
+    if (isStationGb300PciDevice(vendor, device, pciClass)) {
+      readOnlyPaths.push(`${SYSFS_PATH}/bus/pci/devices/${pciDeviceName}`);
+    }
+  }
+  if (readOnlyPaths.length === 0) {
+    throw new Error(
+      `Cannot prepare Station GB300 direct GPU sandbox policy; no exact NVIDIA GB300 PCI device was found under ${pciDevicesRoot}.`,
+    );
+  }
+
+  for (const relativePath of STATION_GB300_SHARED_SYSFS_RELATIVE_PATHS) {
+    if (fs.existsSync(path.join(sysfsRoot, relativePath))) {
+      readOnlyPaths.push(`${SYSFS_PATH}/${relativePath}`);
+    }
+  }
+  return readOnlyPaths;
+}
+
+export function discoverHostStationGb300SysfsReadOnlyPaths(
+  options: {
+    platform?: string;
+    architecture?: string;
+    hasNvidiaGpu?: boolean;
+    identity?: PlatformIdentity;
+    sysfsRoot?: string;
+  } = {},
+): string[] {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "linux") return [];
+  const identity = options.identity ?? collectPlatformIdentity();
+  if (identity.nvidiaPlatform !== "station") return [];
+  if (!identity.productName || !isStationGb300ProductName(identity.productName)) {
+    throw new Error(
+      "Cannot prepare Station GB300 direct GPU sandbox policy; the detected Station product is not a qualified GB300 system.",
+    );
+  }
+  if (!isQualifiedStationProfile(identity.stationProfile)) {
+    throw new Error(
+      "Cannot prepare Station GB300 direct GPU sandbox policy; the Station software profile is unsupported or unknown.",
+    );
+  }
+  if (
+    !isQualifiedStationRuntime({
+      platform,
+      architecture: options.architecture ?? process.arch,
+      osId: identity.osId,
+      osVersionId: identity.osVersionId,
+      hasNvidiaGpu: options.hasNvidiaGpu ?? identity.stationGb300PciGpu === true,
+    })
+  ) {
+    throw new Error(
+      "Cannot prepare Station GB300 direct GPU sandbox policy; Linux ARM64, Ubuntu 24.04, and an available GB300 GPU are required.",
+    );
+  }
+  return discoverStationGb300SysfsReadOnlyPaths(
+    identity.productName,
+    options.sysfsRoot ?? SYSFS_PATH,
+    identity.stationProfile,
+  );
+}
 
 export function buildDirectGpuPolicyYaml(
   basePolicy: string,
@@ -45,22 +186,50 @@ export function buildDirectGpuPolicyYaml(
   }
   parsed.filesystem_policy = parsed.filesystem_policy || {};
   const fsPolicy = parsed.filesystem_policy;
+  const sysfsReadOnlyPaths = [...(options.sysfsReadOnlyPaths ?? [])];
+  const sysfsReadOnlyPathSet = new Set(sysfsReadOnlyPaths);
   // OpenShell adds /proc as read-write only after GPU devices are present.
   // Remove entries that would block that enrichment or be treated as literal paths.
   const readOnly = Array.isArray(fsPolicy.read_only)
     ? fsPolicy.read_only.map((entry: unknown) => String(entry))
     : [];
-  fsPolicy.read_only = readOnly.filter((entry: string) => !isProcEntryOwnedByOpenShell(entry));
-  const readWrite = Array.isArray(fsPolicy.read_write)
-    ? fsPolicy.read_write.map((entry: unknown) => String(entry))
-    : [];
-  fsPolicy.read_write = readWrite.filter((entry: string) => !isProcEntryOwnedByOpenShell(entry));
+  const readWrite = deduplicateDirectGpuSysfsEntries(
+    Array.isArray(fsPolicy.read_write)
+      ? fsPolicy.read_write
+          .map((entry: unknown) => String(entry))
+          .filter((entry: string) => !isProcEntryOwnedByOpenShell(entry))
+      : [],
+    sysfsReadOnlyPathSet,
+  );
+  const readWriteSet = new Set(readWrite);
+  fsPolicy.read_only = deduplicateDirectGpuSysfsEntries(
+    readOnly.filter((entry: string) => !isProcEntryOwnedByOpenShell(entry)),
+    sysfsReadOnlyPathSet,
+  ).filter((entry: string) => !sysfsReadOnlyPathSet.has(entry) || !readWriteSet.has(entry));
+  fsPolicy.read_write = readWrite;
+  if (
+    sysfsReadOnlyPaths.length > 0 &&
+    !fsPolicy.read_only.includes(SYSFS_PATH) &&
+    !fsPolicy.read_write.includes(SYSFS_PATH)
+  ) {
+    // CUDA reads PCI and host topology plus NVIDIA module initialization state
+    // during cuInit(). Grant only those measured sysfs paths through Landlock;
+    // no GPU path needs sysfs write access.
+    const readOnlySet = new Set(fsPolicy.read_only);
+    for (const candidate of sysfsReadOnlyPaths) {
+      if (!readOnlySet.has(candidate) && !readWriteSet.has(candidate)) {
+        fsPolicy.read_only.push(candidate);
+        readOnlySet.add(candidate);
+      }
+    }
+  }
   if (options.procReadWrite && !fsPolicy.read_write.includes(PROC_PATH)) {
-    // Linux Docker-driver GPU patching recreates the container with GPU flags
-    // after `openshell sandbox create`, so OpenShell never sees `--gpu` and
-    // cannot add its native /proc GPU enrichment. Mirror that enrichment here
-    // for the patched path; without it Landlock denies the NVIDIA runtime's
-    // /proc/<pid>/task/<tid>/comm write even though Docker GPU access works.
+    // This exists only for the legacy post-create Docker GPU compatibility
+    // path, which recreates the container after `openshell sandbox create` and
+    // prevents OpenShell from seeing `--gpu`. Mirror native /proc enrichment
+    // until NemoClaw #4316 removes the recreation in
+    // src/lib/onboard/docker-gpu-patch-finalize.ts; remove this grant when
+    // native OpenShell GPU creation replaces that compatibility path.
     fsPolicy.read_write.push(PROC_PATH);
   }
   return YAML.stringify(parsed);
@@ -212,14 +381,22 @@ export function prepareInitialSandboxCreatePolicy(
   options: {
     directGpu?: boolean;
     dockerGpuPatch?: boolean;
+    hostGpuAvailable?: boolean;
+    stationGb300SysfsReadOnlyPaths?: readonly string[];
     additionalPresets?: string[];
     agentName?: string | null;
     policyTier?: string | null;
+    baselineExclusions?: readonly BaselineExclusionRequest[];
   } = {},
 ): InitialSandboxPolicy {
   const directGpuPolicy = options.directGpu
     ? prepareDirectGpuSandboxPolicy(basePolicyPath, {
         procReadWrite: options.dockerGpuPatch === true,
+        sysfsReadOnlyPaths:
+          options.stationGb300SysfsReadOnlyPaths ??
+          discoverHostStationGb300SysfsReadOnlyPaths({
+            hasNvidiaGpu: options.hostGpuAvailable,
+          }),
       })
     : null;
   let effectiveBasePolicyPath = directGpuPolicy?.policyPath || basePolicyPath;
@@ -279,6 +456,25 @@ export function prepareInitialSandboxCreatePolicy(
       }
     }
 
+    // Replay operator baseline exclusions before presets merge on top. Fails
+    // closed via applyBaselineExclusions when a recorded approval no longer
+    // matches the current baseline, so a changed release forces re-review.
+    const baselineExclusions = options.baselineExclusions ?? [];
+    if (baselineExclusions.length > 0) {
+      const excluded = applyBaselineExclusions(
+        basePolicy,
+        baselineExclusions,
+        policyAgent ?? "openclaw",
+      );
+      if (excluded.excludedKeys.length > 0) {
+        const policyPath = secureTempFile("nemoclaw-agent-policy", ".yaml");
+        cleanupFns.push(createPolicyTempCleanup(policyPath, "nemoclaw-agent-policy"));
+        fs.writeFileSync(policyPath, excluded.content, { encoding: "utf-8", mode: 0o600 });
+        effectiveBasePolicyPath = policyPath;
+        basePolicy = excluded.content;
+      }
+    }
+
     const basePolicyNames = getNetworkPolicyNames(basePolicy);
     if (basePolicyNames === null) {
       return {
@@ -315,6 +511,7 @@ export function prepareInitialSandboxCreatePolicy(
 
     const mergedPolicy = policies.mergePresetNamesIntoPolicy(basePolicy, createTimePresets, {
       agent: policyAgent,
+      excludedBaselineKeys: baselineExclusions.map((exclusion) => exclusion.key),
     });
     if (mergedPolicy.missingPresets.length > 0) {
       throw new Error(

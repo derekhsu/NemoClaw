@@ -45,6 +45,15 @@ function mutateSandboxOperationsJob(source: string, mutate: (jobSource: string) 
 }
 
 describe("sandbox operations workflow boundary", () => {
+  it("rejects a workflow that restores the retired sandbox-rlimits-connect job", () => {
+    const workflow = readSandboxOperationsWorkflow();
+    workflow.jobs["sandbox-rlimits-connect"] = structuredClone(workflow.jobs["sandbox-operations"]);
+
+    expect(validateSandboxOperationsWorkflow(workflow)).toContain(
+      "sandbox-rlimits-connect must remain consolidated into sandbox-operations",
+    );
+  });
+
   it("accepts shared guarded Docker authentication without a job-specific configure step", () => {
     const workflow = readSandboxOperationsWorkflow();
     const steps = workflow.jobs["sandbox-operations"].steps!;
@@ -140,7 +149,7 @@ describe("sandbox operations workflow boundary", () => {
 
     expect(
       validateCentralWorkflowMutation((source) =>
-        source.replace("permissions:\n  contents: read", "permissions:\n  contents: write"),
+        source.replace("  contents: read", "  contents: write"),
       ),
     ).toContain("workflow permissions.contents must be read");
   });

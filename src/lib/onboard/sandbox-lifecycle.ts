@@ -10,6 +10,11 @@ export function removeSandboxUnlessSessionReservation(
   entry: SandboxEntry | null,
   sandboxName: string,
 ): void {
+  const recreate = onboardSession.loadSession()?.checkpoint?.sandboxRecreate;
+  if (recreate?.sandboxName === sandboxName && recreate.phase !== "completed") {
+    return;
+  }
+
   if (!registry.isPendingReservationForSession(entry, onboardSession.loadSession()?.sessionId)) {
     registry.removeSandbox(sandboxName);
   }
@@ -29,7 +34,6 @@ export interface SandboxLifecycleHelpers {
     preservedMcpState: SandboxMcpState | undefined;
     liveExists: boolean;
   };
-  pruneStaleSandboxEntry(sandboxName: string): boolean;
   shouldRestoreLatestBackupOnRecreate(): boolean;
   confirmRecreateForSelectionDrift(
     sandboxName: string,
@@ -44,15 +48,6 @@ export function createSandboxLifecycleHelpers(deps: SandboxLifecycleDeps): Sandb
   function sandboxExistsInGateway(sandboxName: string): boolean {
     const output = deps.runCaptureOpenshell(["sandbox", "get", sandboxName], { ignoreError: true });
     return Boolean(output);
-  }
-
-  function pruneStaleSandboxEntry(sandboxName: string): boolean {
-    const existing = registry.getSandbox(sandboxName);
-    const liveExists = sandboxExistsInGateway(sandboxName);
-    if (existing && !liveExists) {
-      registry.removeSandbox(sandboxName);
-    }
-    return liveExists;
   }
 
   function inspectSandboxForCreate(sandboxName: string) {
@@ -104,7 +99,6 @@ export function createSandboxLifecycleHelpers(deps: SandboxLifecycleDeps): Sandb
 
   return {
     inspectSandboxForCreate,
-    pruneStaleSandboxEntry,
     shouldRestoreLatestBackupOnRecreate,
     confirmRecreateForSelectionDrift,
     isOpenclawReady,

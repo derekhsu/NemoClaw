@@ -12,6 +12,7 @@ import {
   removeReviewedNpmArchive,
   resolveReviewedNpmArchivePath,
   verifyReviewedNpmCache,
+  verifyReviewedNpmLockPackages,
   verifyReviewedNpmMetadata,
 } from "../scripts/lib/reviewed-npm-archive.mts";
 
@@ -199,6 +200,58 @@ describe("reviewed npm archive", () => {
         NPM_CONFIG_USERCONFIG: "/dev/null",
       });
     }
+  });
+
+  it("uses a lock alias's canonical package identity for cache verification", () => {
+    const reviewed = cacheRequest();
+    const lockfilePath = path.join(reviewed.tempDirectory as string, "alias-lock.json");
+    fs.writeFileSync(
+      lockfilePath,
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {},
+            "node_modules/legacy-name": {
+              integrity: INTEGRITY,
+              name: "@example/reviewed",
+              resolved: TARBALL_URL,
+              version: "1.2.3",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const calls: Array<{ args: readonly string[]; request: ReviewedNpmArchiveRequest }> = [];
+
+    expect(
+      verifyReviewedNpmCache({ ...reviewed, lockfilePath }, cachedArchiveRunner(calls)),
+    ).toEqual([PACKAGE_SPEC]);
+    expect(calls.map(({ request }) => request.packageSpec)).toEqual([
+      PACKAGE_SPEC,
+      PACKAGE_SPEC,
+      PACKAGE_SPEC,
+    ]);
+  });
+
+  it("allows nested shrinkwrap metadata only for explicit cache-seed inspection", () => {
+    const reviewed = cacheRequest();
+    const lock = JSON.parse(fs.readFileSync(WECHAT_LOCK, "utf-8"));
+    lock.packages["node_modules/@tencent-weixin/openclaw-weixin"].hasShrinkwrap = true;
+    const lockfilePath = path.join(reviewed.tempDirectory as string, "shrinkwrap-seed-lock.json");
+    fs.writeFileSync(lockfilePath, `${JSON.stringify(lock, null, 2)}\n`);
+    const request = { lockfilePath, registryOrigin: "https://registry.npmjs.org/" };
+
+    expect(() => verifyReviewedNpmLockPackages(request)).toThrow(
+      "must not delegate to nested shrinkwrap",
+    );
+    expect(verifyReviewedNpmLockPackages({ ...request, allowNestedShrinkwrap: true })).toEqual([
+      "@tencent-weixin/openclaw-weixin@2.4.3",
+      "qrcode-terminal@0.12.0",
+      "zod@4.4.3",
+    ]);
   });
 
   it("rejects an off-origin locked archive before npm can read the cache", () => {

@@ -36,6 +36,7 @@ describe("Docker GPU recreate orchestration", () => {
         runOpenshell,
         sleep: vi.fn(),
         now: () => new Date("2026-05-12T00:00:00Z"),
+        detectSandboxFallbackDns: vi.fn(() => null),
         readDir: vi.fn(() => null),
         readFile: vi.fn(() => null),
       },
@@ -43,6 +44,10 @@ describe("Docker GPU recreate orchestration", () => {
 
     expect(result.newContainerId).toBe("new-container-id");
     expect(result.mode.kind).toBe("gpus");
+    expect(dockerStop).toHaveBeenCalledWith(
+      "old-container-id",
+      expect.objectContaining({ timeout: 90_000 }),
+    );
     expect(dockerRunDetached).toHaveBeenCalledWith(
       expect.arrayContaining([
         "--name",
@@ -106,6 +111,7 @@ describe("Docker GPU recreate orchestration", () => {
         runOpenshell,
         sleep: vi.fn(),
         now: () => new Date("2026-05-12T00:00:00Z"),
+        detectSandboxFallbackDns: vi.fn(() => null),
       },
     );
 

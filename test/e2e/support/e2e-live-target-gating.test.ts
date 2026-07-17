@@ -11,11 +11,7 @@ import { testTimeoutOptions } from "../../helpers/timeouts.ts";
 import { LIVE_E2E_ROOT, REPO_ROOT } from "../fixtures/paths.ts";
 
 const VITEST = path.join(REPO_ROOT, "node_modules", "vitest", "vitest.mjs");
-const SPECIAL_GATE_ENV = [
-  "NEMOCLAW_E2E_CONNECT_RLIMITS",
-  "NEMOCLAW_ISSUE_4434_LIVE",
-  "NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX",
-] as const;
+const SPECIAL_GATE_ENV = ["NEMOCLAW_ISSUE_4434_LIVE", "NEMOCLAW_MCP_BRIDGE_AGENT"] as const;
 
 function liveTestFiles(root = LIVE_E2E_ROOT): string[] {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -67,6 +63,43 @@ function linesForFile(lines: readonly string[], file: string): string[] {
 }
 
 describe("live E2E target gating", () => {
+  it(
+    "collects the bootstrap install test through the trusted-main legacy path",
+    testTimeoutOptions(90_000),
+    () => {
+      const legacy = listLiveTests({
+        enabled: true,
+        env: { E2E_TARGET_ID: "launchable-smoke" },
+        files: ["launchable-smoke.test.ts"],
+      });
+
+      expect(legacy.status, legacy.stderr || legacy.stdout).toBe(0);
+      expect(linesForFile(legacy.lines, "launchable-smoke.test.ts")).toEqual([
+        "[e2e-live] test/e2e/live/launchable-smoke.test.ts > bootstrap install smoke: bootstrap, onboard, sandbox health, live inference, cleanup",
+      ]);
+
+      const renamed = listLiveTests({
+        enabled: true,
+        env: { E2E_TARGET_ID: "bootstrap-install-smoke" },
+        files: ["bootstrap-install-smoke.test.ts"],
+      });
+
+      expect(renamed.status, renamed.stderr || renamed.stdout).toBe(0);
+      expect(linesForFile(renamed.lines, "bootstrap-install-smoke.test.ts")).toEqual([
+        "[e2e-live] test/e2e/live/bootstrap-install-smoke.test.ts > bootstrap install smoke: bootstrap, onboard, sandbox health, live inference, cleanup",
+      ]);
+
+      const inactive = listLiveTests({
+        enabled: true,
+        env: { E2E_TARGET_ID: "launchable-smoke" },
+        files: ["bootstrap-install-smoke.test.ts"],
+      });
+
+      expect(inactive.status, inactive.stderr || inactive.stdout).toBe(0);
+      expect(linesForFile(inactive.lines, "bootstrap-install-smoke.test.ts")).toEqual([]);
+    },
+  );
+
   it("collects no live files without project opt-in and all live files with it", () => {
     const disabled = listLiveTests({ enabled: false, filesOnly: true });
     const enabled = listLiveTests({ enabled: true, filesOnly: true });
@@ -86,8 +119,6 @@ describe("live E2E target gating", () => {
     testTimeoutOptions(15_000),
     () => {
       const gatedFiles = [
-        ["sandbox-rlimits-connect.test.ts", "NEMOCLAW_E2E_CONNECT_RLIMITS"],
-        ["mcp-bridge.test.ts", "NEMOCLAW_MCP_BRIDGE_AGENT_MATRIX"],
         ["issue-4434-tui-unreachable-inference.test.ts", "NEMOCLAW_ISSUE_4434_LIVE"],
       ] as const;
       const files = gatedFiles.map(([file]) => file);
@@ -105,6 +136,36 @@ describe("live E2E target gating", () => {
       }
     },
   );
+
+  it("collects exactly one reviewed MCP bridge agent shard", testTimeoutOptions(30_000), () => {
+    const file = "mcp-bridge.test.ts";
+    const expectedTestByShard = {
+      deepagents: "mcp-bridge-deepagents",
+      hermes: "mcp-bridge-hermes",
+      openclaw: "mcp-bridge",
+    } as const;
+
+    for (const [shard, expectedTest] of Object.entries(expectedTestByShard)) {
+      const result = listLiveTests({
+        enabled: true,
+        env: { NEMOCLAW_MCP_BRIDGE_AGENT: shard },
+        files: [file],
+      });
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(linesForFile(result.lines, file)).toEqual([
+        `[e2e-live] test/e2e/live/${file} > ${expectedTest}`,
+      ]);
+    }
+
+    const invalid = listLiveTests({
+      enabled: true,
+      env: { NEMOCLAW_MCP_BRIDGE_AGENT: "all" },
+      files: [file],
+    });
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain("Unsupported NEMOCLAW_MCP_BRIDGE_AGENT: all");
+  });
 
   it("applies Linux gates at real Vitest collection", () => {
     const linuxTests = [

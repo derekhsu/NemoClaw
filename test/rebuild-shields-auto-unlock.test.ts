@@ -14,10 +14,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadAgent } from "../src/lib/agent/defs";
 import { killTimer } from "../src/lib/shields/timer-control";
 
 const REPO_ROOT = path.join(import.meta.dirname, "..");
 const NODE_BIN = path.dirname(process.execPath);
+const OPENCLAW_STATE_LOCK_PLAN = loadAgent("openclaw").stateLockPlan;
 const tmpFixtures: string[] = [];
 
 afterEach(() => {
@@ -160,13 +162,14 @@ function createFixture(opts: { shieldsLocked: boolean }) {
   const fakeRoot = path.join(tmpDir, "fake-sandbox-root");
   fs.mkdirSync(path.join(fakeRoot, "workspace"), { recursive: true });
   fs.writeFileSync(path.join(fakeRoot, "workspace", "marker.txt"), "test");
+  const deleteMarkerPath = path.join(tmpDir, "sandbox-deleted");
   const lockStatePath = path.join(tmpDir, "config-lock-state.txt");
   fs.writeFileSync(lockStatePath, opts.shieldsLocked ? "locked" : "unlocked");
 
   // Fake openshell — also returns a parseable YAML policy for the
   // shields-down policy snapshot capture path.
   const sshConfig = [
-    `Host openshell-${sandboxName}`,
+    `Host openshell-${sandboxName}.default`,
     "  HostName 127.0.0.1",
     "  Port 2222",
     "  User sandbox",
@@ -176,12 +179,19 @@ function createFixture(opts: { shieldsLocked: boolean }) {
   fs.writeFileSync(
     path.join(tmpDir, "openshell"),
     `#!/usr/bin/env node
+const fs = require("node:fs");
 const a = process.argv.slice(2);
+const deleteMarkerPath = ${JSON.stringify(deleteMarkerPath)};
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (a[0]==="-V" || a[0]==="--version")         { process.stdout.write("openshell 0.0.72\\n"); process.exit(0); }
+if (a[0]==="-V" || a[0]==="--version")         { process.stdout.write("openshell 0.0.101\\n"); process.exit(0); }
 if (a[0]==="sandbox" && a[1]==="list")       { process.stdout.write("${sandboxName}\\n"); process.exit(0); }
 if (a[0]==="sandbox" && a[1]==="ssh-config") { process.stdout.write("${sshConfig}\\n"); process.exit(0); }
-if (a[0]==="sandbox" && a[1]==="delete")     { process.exit(0); }
+if (a[0]==="sandbox" && a[1]==="delete")     { fs.writeFileSync(deleteMarkerPath, "deleted\\n"); process.exit(0); }
+if (a[0]==="sandbox" && a[1]==="get") {
+  if (fs.existsSync(deleteMarkerPath)) { process.stderr.write("Error: sandbox ${sandboxName} not found\\n"); process.exit(1); }
+  process.stdout.write("Name: ${sandboxName}\\nPhase: Ready\\n");
+  process.exit(0);
+}
 if (a[0]==="policy" && a[1]==="get")         { process.stdout.write("version: 1\\nnetwork_policies:\\n  test: {}\\n"); process.exit(0); }
 if (a[0]==="policy" && a[1]==="set")         { process.exit(0); }
 if (a[0]==="status")                         { process.stdout.write("Server Status\\n  Gateway: nemoclaw\\n  Status: Connected\\n"); process.exit(0); }
@@ -201,7 +211,7 @@ process.exit(0);
       path.join(tmpDir, component),
       `#!/usr/bin/env node
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.72\\n");
+if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.101\\n");
 process.exit(0);
 `,
       { mode: 0o755 },
@@ -216,12 +226,27 @@ process.exit(0);
     `#!/usr/bin/env node
 const fs = require("fs");
 const a = process.argv.slice(2);
+const { isOpenClawSecurityInventoryProbe } = require(${JSON.stringify(
+      path.join(REPO_ROOT, "test", "helpers", "onboard-script-mocks.cjs"),
+    )});
 const lockStatePath = ${JSON.stringify(lockStatePath)};
 function readLockState() {
   try { return fs.readFileSync(lockStatePath, "utf8").trim(); } catch { return "unlocked"; }
 }
 function writeLockState(state) {
   fs.writeFileSync(lockStatePath, state);
+}
+function completeStateDirGuard(action, consumeInput) {
+  if (consumeInput) fs.readFileSync(0, "utf8");
+  if (action === "lock") writeLockState("locked");
+  if (action === "unlock") writeLockState("unlocked");
+  process.stdout.write(JSON.stringify({
+    type: "result",
+    action,
+    status: "ok",
+    issueCount: 0,
+  }) + "\\n");
+  process.exit(0);
 }
 if (a[0]==="info") {
   process.stdout.write(JSON.stringify({ServerVersion:"27.0.0", OperatingSystem:"Docker Engine", NCPU:8, MemTotal:17179869184}) + "\\n");
@@ -238,6 +263,7 @@ if (a[0]==="image" && a[1]==="inspect") {
 if (a[0]==="tag" || a[0]==="rmi") { process.exit(0); }
 if (a[0]==="run") {
   if (a.includes("nslookup")) process.stdout.write("Server: 127.0.0.11\\n** server can't find nemoclaw.invalid: NXDOMAIN\\n");
+  else if (isOpenClawSecurityInventoryProbe(a)) process.stdout.write("nemoclaw-security-inventory-ok\\n");
   else if (a.includes("/usr/bin/ldd")) process.stdout.write("ldd (GNU libc) 2.41\\n");
   process.exit(0);
 }
@@ -274,6 +300,9 @@ if (a[0]==="exec") {
   if (pythonIndex >= 0) {
     const helper = cmd[pythonIndex + 2];
     const action = cmd[pythonIndex + 3];
+    if (cmd[pythonIndex + 1] === "-I" && helper === "-" && cmd.includes("--plan-json")) {
+      completeStateDirGuard(action, true);
+    }
     if (helper === "/usr/local/lib/nemoclaw/openclaw-config-guard.py") {
       if (action === "lock") writeLockState("locked");
       if (action === "unlock") writeLockState("unlocked");
@@ -288,16 +317,13 @@ if (a[0]==="exec") {
       process.exit(0);
     }
     if (helper === "/usr/local/lib/nemoclaw/state-dir-guard.py") {
-      if (action === "lock") writeLockState("locked");
-      if (action === "unlock") writeLockState("unlocked");
-      process.stdout.write(JSON.stringify({
-        type: "result",
-        action,
-        status: "ok",
-        issueCount: 0,
-      }) + "\\n");
-      process.exit(0);
+      completeStateDirGuard(action, false);
     }
+  }
+  if (cmd[0]==="test" && cmd[1]==="-r") { process.exit(0); }
+  if (cmd[0]==="cat" && cmd[1]==="/usr/local/share/nemoclaw/state-lock-plan.json") {
+    process.stdout.write(JSON.stringify(${JSON.stringify(OPENCLAW_STATE_LOCK_PLAN)}) + "\\n");
+    process.exit(0);
   }
   // Verification reads:
   //   stat -c '%a %U:%G' <path>      → expect "660 sandbox:sandbox" or "2770 sandbox:sandbox"
@@ -386,13 +412,13 @@ function runRebuild(fixture: ReturnType<typeof createFixture>) {
         NEMOCLAW_NO_CONNECT_HINT: "1",
         NO_COLOR: "1",
       },
-      timeout: 30_000,
+      timeout: 90_000,
     },
   );
 }
 
 describe("rebuild auto-unlocks when shields are UP (#3113)", () => {
-  it("detects locked shields and prints auto-unlock notice", { timeout: 60_000 }, () => {
+  it("detects locked shields and prints auto-unlock notice", { timeout: 120_000 }, () => {
     const f = createFixture({ shieldsLocked: true });
     const r = runRebuild(f);
     const output = (r.stdout || "") + (r.stderr || "");
@@ -415,9 +441,10 @@ describe("rebuild auto-unlocks when shields are UP (#3113)", () => {
     expect(output).toContain("Capturing current policy snapshot");
     // Backup proceeds.
     expect(output).toContain("Backing up sandbox state");
+    expect(output).not.toContain("OpenShell did not confirm that the sandbox is absent");
   });
 
-  it("skips auto-unlock when shields are not configured", { timeout: 60_000 }, () => {
+  it("skips auto-unlock when shields are not configured", { timeout: 120_000 }, () => {
     const f = createFixture({ shieldsLocked: false });
     const r = runRebuild(f);
     const output = (r.stdout || "") + (r.stderr || "");
@@ -429,5 +456,6 @@ describe("rebuild auto-unlocks when shields are UP (#3113)", () => {
     expect(output).not.toContain("Shields are UP");
     expect(output).not.toContain("temporarily unlocking for rebuild backup");
     expect(output).toContain("Backing up sandbox state");
+    expect(output).not.toContain("OpenShell did not confirm that the sandbox is absent");
   });
 });

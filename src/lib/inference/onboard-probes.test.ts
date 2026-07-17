@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { captureAuthConfigPath } from "../adapters/http/auth-config-test-helpers";
 import {
@@ -27,6 +27,8 @@ const {
   probeOpenAiLikeEndpoint,
   RETRIABLE_HTTP_PROBE_STATUSES,
 } = require("./onboard-probes");
+const { assertEndpointResolvesPublic } =
+  require("./endpoint-ssrf-preflight") as typeof import("./endpoint-ssrf-preflight");
 
 const FAKE_CONFIG_PATH = "/tmp/nemoclaw-test-credential.conf";
 const FAKE_CREDENTIAL_ARGS = ["--config", FAKE_CONFIG_PATH] as const;
@@ -308,7 +310,7 @@ describe("OpenAI-compatible inference probes", () => {
     expect(getChatCompletionsProbePayload("nvidia/nemotron-3-super-120b-a12b")).toEqual({
       model: "nvidia/nemotron-3-super-120b-a12b",
       messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      max_tokens: 8,
+      max_tokens: 16,
     });
   });
 
@@ -316,7 +318,7 @@ describe("OpenAI-compatible inference probes", () => {
     expect(getChatCompletionsProbePayload("nvidia/nvidia/nemotron-3-ultra")).toEqual({
       model: "nvidia/nvidia/nemotron-3-ultra",
       messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      max_tokens: 8,
+      max_tokens: 16,
     });
   });
 
@@ -325,26 +327,48 @@ describe("OpenAI-compatible inference probes", () => {
       expect(getChatCompletionsProbePayload(model)).toEqual({
         model,
         messages: [{ role: "user", content: "Reply with exactly: OK" }],
-        max_completion_tokens: 8,
+        max_completion_tokens: 16,
       });
     }
   });
 
-  it("uses an extended validation budget for slow NVIDIA Build models", () => {
-    for (const model of ["qwen/qwen3.5-397b-a17b", "deepseek-ai/deepseek-v4-flash"]) {
-      const args = getChatCompletionsProbeCurlArgs({
-        credentialArgs: FAKE_CREDENTIAL_ARGS,
-        model,
-        url: "https://integrate.api.nvidia.com/v1/chat/completions",
-        isWsl: false,
-      });
-      expect(args[args.indexOf("--connect-timeout") + 1]).toBe("10");
-      expect(args[args.indexOf("--max-time") + 1]).toBe("300");
+  // Some hosted endpoints reject a reply budget below 16 with HTTP 400 even
+  // though discovery succeeds and normal inference works, so a bounded probe
+  // that undershoots that floor fails a valid route. Whichever field a model
+  // uses, the budget must clear the floor (#7939).
+  it("requests a reply budget hosted endpoints accept, in whichever field the model uses (#7939)", () => {
+    const endpointMinimumReplyTokens = 16;
+
+    for (const model of [
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/nvidia/nemotron-3-ultra",
+      "openai/openai/gpt-5.6-sol",
+      "moonshotai/kimi-k2.6",
+      "deepseek-ai/deepseek-v4-pro",
+      "gpt-5.4",
+      "o3-mini",
+    ]) {
+      const payload = getChatCompletionsProbePayload(model);
+      const budget = payload.max_completion_tokens ?? payload.max_tokens;
+
+      expect(typeof budget, `${model} states a reply budget`).toBe("number");
+      expect(budget, model).toBeGreaterThanOrEqual(endpointMinimumReplyTokens);
     }
+  });
+
+  it("uses an extended validation budget for DeepSeek V4 Flash", () => {
+    const args = getChatCompletionsProbeCurlArgs({
+      credentialArgs: FAKE_CREDENTIAL_ARGS,
+      model: "deepseek-ai/deepseek-v4-flash",
+      url: "https://integrate.api.nvidia.com/v1/chat/completions",
+      isWsl: false,
+    });
+    expect(args[args.indexOf("--connect-timeout") + 1]).toBe("10");
+    expect(args[args.indexOf("--max-time") + 1]).toBe("300");
 
     const wslArgs = getChatCompletionsProbeCurlArgs({
       credentialArgs: FAKE_CREDENTIAL_ARGS,
-      model: "qwen/qwen3.5-397b-a17b",
+      model: "deepseek-ai/deepseek-v4-flash",
       url: "https://integrate.api.nvidia.com/v1/chat/completions",
       isWsl: true,
     });
@@ -356,7 +380,7 @@ describe("OpenAI-compatible inference probes", () => {
     expect(getChatCompletionsProbePayload("moonshotai/kimi-k2.6")).toEqual({
       model: "moonshotai/kimi-k2.6",
       messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      max_tokens: 8,
+      max_tokens: 16,
       chat_template_kwargs: { thinking: false },
     });
 
@@ -415,6 +439,175 @@ describe("OpenAI-compatible inference probes", () => {
     expect(args).toContain(FAKE_CONFIG_PATH);
   });
 
+  it("retries a reasoning-only tool-call response with a larger output budget", () => {
+    const script = `#!/usr/bin/env bash
+outfile=""
+payload=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) outfile="$2"; shift 2 ;;
+    -w) shift 2 ;;
+    -d) payload="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+n=$(cat "${HARNESS_COUNTER}")
+n=$((n + 1))
+echo "$n" > "${HARNESS_COUNTER}"
+printf '%s' "$payload" > "${HARNESS_TMPDIR}/request-$n.json"
+if [ -n "$outfile" ]; then
+  if [ "$n" -eq 1 ]; then
+    cat <<'JSON' > "$outfile"
+{"choices":[{"finish_reason":"length","message":{"content":"","reasoning":"Planning the tool call.","tool_calls":null}}]}
+JSON
+  else
+    cat <<'JSON' > "$outfile"
+{"choices":[{"finish_reason":"tool_calls","message":{"content":"","tool_calls":[{"type":"function","function":{"name":"sessions_send","arguments":"{\\"message\\":\\"hello\\"}"}}]}}]}
+JSON
+  fi
+fi
+printf '200'
+exit 0
+`;
+    withFakeCurlProbe(
+      { script, dirPrefix: "nemoclaw-reasoning-tool-probe-" },
+      ({ counter, tmpDir }) => {
+        const result = probeOpenAiLikeEndpoint("http://127.0.0.1:11434/v1", "qwen3-vl:4b", "", {
+          skipResponsesProbe: true,
+          requireChatCompletionsToolCalling: true,
+        });
+
+        expect(result).toMatchObject({ ok: true, api: "openai-completions" });
+        expect(fs.readFileSync(counter, "utf8").trim()).toBe("2");
+        const initialPayload = JSON.parse(
+          fs.readFileSync(path.join(tmpDir, "request-1.json"), "utf8"),
+        );
+        const retryPayload = JSON.parse(
+          fs.readFileSync(path.join(tmpDir, "request-2.json"), "utf8"),
+        );
+        expect(initialPayload).toMatchObject({ max_tokens: 256, tool_choice: "required" });
+        expect(retryPayload).toMatchObject({ max_tokens: 1024, tool_choice: "required" });
+      },
+    );
+  });
+
+  it("rejects a strict DeepSeek timeout after the larger-budget retry", () => {
+    const script = `#!/usr/bin/env bash
+outfile=""
+payload=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) outfile="$2"; shift 2 ;;
+    -w) shift 2 ;;
+    -d) payload="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+n=$(cat "${HARNESS_COUNTER}")
+n=$((n + 1))
+echo "$n" > "${HARNESS_COUNTER}"
+printf '%s' "$payload" > "${HARNESS_TMPDIR}/request-$n.json"
+if [ "$n" -eq 1 ]; then
+  cat <<'JSON' > "$outfile"
+{"choices":[{"finish_reason":"length","message":{"content":"","reasoning":"Planning the tool call."}}]}
+JSON
+  printf '200'
+  exit 0
+fi
+: > "$outfile"
+printf '000'
+exit 28
+`;
+    withFakeCurlProbe(
+      { script, dirPrefix: "nemoclaw-reasoning-tool-timeout-" },
+      ({ counter, tmpDir }) => {
+        const result = probeOpenAiLikeEndpoint(
+          "http://127.0.0.1:11434/v1",
+          "deepseek-ai/deepseek-v4-pro",
+          "",
+          {
+            skipResponsesProbe: true,
+            requireChatCompletionsToolCalling: true,
+          },
+        );
+
+        expect(result).toMatchObject({ ok: false });
+        expect(fs.readFileSync(counter, "utf8").trim()).toBe("2");
+        const initialPayload = JSON.parse(
+          fs.readFileSync(path.join(tmpDir, "request-1.json"), "utf8"),
+        );
+        const retryPayload = JSON.parse(
+          fs.readFileSync(path.join(tmpDir, "request-2.json"), "utf8"),
+        );
+        expect(initialPayload).toMatchObject({ max_tokens: 256 });
+        expect(retryPayload).toMatchObject({ max_tokens: 1024 });
+      },
+    );
+  });
+
+  it("does not restart Chat Completions after its reasoning retry times out", () => {
+    const script = `#!/usr/bin/env bash
+outfile=""
+payload=""
+url=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) outfile="$2"; shift 2 ;;
+    -w) shift 2 ;;
+    -d) payload="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+  esac
+done
+n=$(cat "${HARNESS_COUNTER}")
+n=$((n + 1))
+echo "$n" > "${HARNESS_COUNTER}"
+printf '%s' "$payload" > "${HARNESS_TMPDIR}/request-$n.json"
+if echo "$url" | grep -q '/responses'; then
+  : > "$outfile"
+  printf '000'
+  exit 28
+fi
+if [ "$n" -eq 2 ]; then
+  cat <<'JSON' > "$outfile"
+{"choices":[{"finish_reason":"length","message":{"content":"","reasoning":"Planning the tool call."}}]}
+JSON
+  printf '200'
+  exit 0
+fi
+if [ "$n" -eq 3 ]; then
+  : > "$outfile"
+  printf '000'
+  exit 28
+fi
+cat <<'JSON' > "$outfile"
+{"choices":[{"finish_reason":"tool_calls","message":{"content":"","tool_calls":[{"type":"function","function":{"name":"sessions_send","arguments":"{\\"message\\":\\"hello\\"}"}}]}}]}
+JSON
+printf '200'
+exit 0
+`;
+    withFakeCurlProbe(
+      { script, dirPrefix: "nemoclaw-reasoning-mixed-timeout-" },
+      ({ counter, tmpDir }) => {
+        const result = probeOpenAiLikeEndpoint(
+          "https://api.example.com/v1",
+          "qwen3-vl:4b",
+          "sk-test",
+          { requireChatCompletionsToolCalling: true },
+        );
+
+        expect(result).toMatchObject({ ok: false });
+        expect(fs.readFileSync(counter, "utf8").trim()).toBe("3");
+        expect(
+          JSON.parse(fs.readFileSync(path.join(tmpDir, "request-2.json"), "utf8")),
+        ).toMatchObject({ max_tokens: 256 });
+        expect(
+          JSON.parse(fs.readFileSync(path.join(tmpDir, "request-3.json"), "utf8")),
+        ).toMatchObject({ max_tokens: 1024 });
+        expect(fs.existsSync(path.join(tmpDir, "request-4.json"))).toBe(false);
+      },
+    );
+  });
+
   describe("sandbox-internal URL handling", () => {
     it("identifies host.openshell.internal as sandbox-internal", () => {
       expect(isSandboxInternalUrl("http://host.openshell.internal:8001/v1")).toBe(true);
@@ -455,6 +648,32 @@ describe("OpenAI-compatible inference probes", () => {
     });
   });
 
+  it("explains how to enable vLLM tool parsing when the frontend disables it", () => {
+    const body = `if [ -n "$outfile" ]; then
+  cat <<'JSON' > "$outfile"
+{"error":{"message":"tool parsing is disabled by frontend configuration"}}
+JSON
+fi
+printf '400'
+exit 0
+`;
+    withFakeCurlProbe(
+      { script: makeFakeCurlScript(body), dirPrefix: "nemoclaw-disabled-tool-parser-probe-" },
+      () => {
+        const result = probeOpenAiLikeEndpoint("http://127.0.0.1:8000/v1", "local-model", "dummy", {
+          skipResponsesProbe: true,
+          requireChatCompletionsToolCalling: true,
+        });
+
+        expect(result).toMatchObject({ ok: false });
+        expect(result.message).toContain("Chat Completions tool parsing is disabled");
+        expect(result.message).toContain("--enable-auto-tool-choice");
+        expect(result.message).toContain("--tool-call-parser");
+        expect(result.message).toContain("selected frontend registers");
+      },
+    );
+  });
+
   describe("private-address SSRF guard (#6293)", () => {
     it("rejects a non-loopback private LAN endpoint before issuing any probe (#6293)", () => {
       const result = probeOpenAiLikeEndpoint(
@@ -475,6 +694,39 @@ describe("OpenAI-compatible inference probes", () => {
       });
       expect(result).toMatchObject({ ok: false });
       expect(result.message).toMatch(/private\/internal address/i);
+    });
+
+    it("allows a preflight-approved RFC1918 literal while keeping metadata blocked (#6861)", async () => {
+      const preflight = await assertEndpointResolvesPublic("http://10.0.0.8/v1", async () => [], {
+        trustedPrivateHosts: ["10.0.0.8"],
+      });
+      const body = `if [ -n "$outfile" ]; then
+  cat <<'JSON' > "$outfile"
+{"choices":[{"message":{"content":"OK"}}]}
+JSON
+fi
+printf '200'
+exit 0
+`;
+      withFakeCurlProbe(
+        { script: makeFakeCurlScript(body), dirPrefix: "nemoclaw-trusted-private-probe-" },
+        () => {
+          const approved = probeOpenAiLikeEndpoint("http://10.0.0.8/v1", "openai/model", "dummy", {
+            skipResponsesProbe: true,
+            pinnedAddresses: [],
+            trustedPrivateCapability: preflight.trustedPrivateCapability,
+          });
+          expect(approved).toMatchObject({ ok: true });
+
+          const metadata = probeOpenAiLikeEndpoint(
+            "http://169.254.169.254/v1",
+            "openai/model",
+            "dummy",
+            { skipResponsesProbe: true, pinnedAddresses: [] },
+          );
+          expect(metadata).toMatchObject({ ok: false });
+        },
+      );
     });
 
     it("allows a loopback endpoint so local inference validation can proceed (#6293)", () => {
@@ -813,6 +1065,10 @@ exit 28
 outfile=""
 url=""
 payload=""
+n=$(cat "${HARNESS_COUNTER}")
+n=$((n + 1))
+echo "$n" > "${HARNESS_COUNTER}"
+printf '%s\n' "$@" > "${HARNESS_TMPDIR}/request-$n-args.txt"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) outfile="$2"; shift 2 ;;
@@ -821,9 +1077,6 @@ while [ "$#" -gt 0 ]; do
     *) url="$1"; shift ;;
   esac
 done
-n=$(cat "${HARNESS_COUNTER}")
-n=$((n + 1))
-echo "$n" > "${HARNESS_COUNTER}"
 if echo "$url" | grep -q '/responses'; then
   if printf '%s' "$payload" | grep -q '"stream":true'; then
     if [ -n "$outfile" ]; then
@@ -856,17 +1109,31 @@ fi
 printf '200'
 exit 0
 `;
-    withFakeCurlProbe({ script, dirPrefix: "nemoclaw-stream-fallback-" }, ({ lines }) => {
-      const result = probeOpenAiLikeEndpoint(
-        "https://api.example.com/v1",
-        "test-model",
-        "sk-test",
-        { probeStreaming: true },
-      );
+    vi.stubEnv("NEMOCLAW_ONBOARD_VALIDATION_TIMEOUT_SECONDS", "300");
+    try {
+      withFakeCurlProbe({ script, dirPrefix: "nemoclaw-stream-fallback-" }, ({ lines, tmpDir }) => {
+        const result = probeOpenAiLikeEndpoint(
+          "https://api.example.com/v1",
+          "test-model",
+          "sk-test",
+          { probeStreaming: true },
+        );
 
-      expect(result).toMatchObject({ ok: true, api: "openai-completions" });
-      expect(lines.join("\n")).toMatch(/missing required events/i);
-    });
+        expect(result).toMatchObject({ ok: true, api: "openai-completions" });
+        expect(lines.join("\n")).toMatch(/missing required events/i);
+        expect(fs.readFileSync(path.join(tmpDir, "request-1-args.txt"), "utf8")).toContain(
+          "--max-time\n300\n",
+        );
+        expect(fs.readFileSync(path.join(tmpDir, "request-2-args.txt"), "utf8")).toContain(
+          "--max-time\n5\n",
+        );
+        expect(fs.readFileSync(path.join(tmpDir, "request-3-args.txt"), "utf8")).toContain(
+          "--max-time\n300\n",
+        );
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   // PR #5975 review notes PRA-3 (Standard) and PRA-2 (Required). The unit

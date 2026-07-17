@@ -259,6 +259,40 @@ describe("Fix: validateTarEntries rejects malicious tar entries", () => {
 });
 
 describe("Fix: safeTarExtract blocks malicious archives and extracts safe ones", () => {
+  it.each([
+    ["path traversal", [{ path: "../escape.txt", content: "attacker-payload" }], "path traversal"],
+    [
+      "a hard link",
+      [{ path: "inside/link.json", type: "1", linkTarget: "../outside.json" }],
+      "hard link",
+    ],
+    [
+      "an escaping symlink",
+      [{ path: "escape-link", type: "2", linkTarget: "../outside.txt" }],
+      "symlink",
+    ],
+  ])("rejects a file-backed archive containing %s", async (_case, entries, expectedError) => {
+    const { safeTarExtract } = await loadSandboxState();
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-file-backed-hostile-"));
+    try {
+      const archivePath = path.join(workDir, "archive.tar");
+      const targetDir = path.join(workDir, "backup");
+      fs.mkdirSync(targetDir);
+      fs.writeFileSync(archivePath, buildTar(entries), { mode: 0o600 });
+
+      const result = safeTarExtract({ filePath: archivePath }, targetDir);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain(expectedError);
+      expect(fs.readdirSync(targetDir)).toEqual([]);
+      expect(fs.existsSync(path.join(workDir, "escape.txt"))).toBe(false);
+      expect(fs.existsSync(path.join(workDir, "outside.json"))).toBe(false);
+      expect(fs.existsSync(path.join(workDir, "outside.txt"))).toBe(false);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks archive with path traversal — no files written", async () => {
     const { safeTarExtract } = await loadSandboxState();
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-safe-"));
@@ -439,23 +473,24 @@ describe("Fix: safeTarExtract blocks malicious archives and extracts safe ones",
   });
 
   it.each([
-    "weather",
-    "slack",
-  ])("allows the %s OpenClaw extension peer link with the exact global package target", async (extensionName) => {
+    ["weather", "/usr/local/lib/node_modules/openclaw"],
+    ["slack", "/usr/local/lib/node_modules/openclaw"],
+    ["whatsapp", "/usr/local/lib/nemoclaw/openclaw-runtime/node_modules/openclaw"],
+  ])("allows the %s OpenClaw extension peer link with an exact image package target", async (extensionName, packageTarget) => {
     const { safeTarExtract } = await loadSandboxState();
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-audit-whitelist-extract-"));
     try {
       const targetDir = path.join(workDir, "backup");
       fs.mkdirSync(targetDir, { recursive: true });
 
-      // Archive-installed plugins symlink their OpenClaw peer dependency to
-      // the global package. The exact target escapes both the archive and
-      // /sandbox/, so it requires the narrow extension peer-link exception.
+      // Archive-installed plugins symlink their OpenClaw peer dependency to a
+      // trusted image package location. The exact target escapes both the
+      // archive and /sandbox/, so it requires the narrow peer-link exception.
       const tar = buildTar([
         {
           path: `extensions/${extensionName}/node_modules/openclaw`,
           type: "2",
-          linkTarget: "/usr/local/lib/node_modules/openclaw",
+          linkTarget: packageTarget,
         },
       ]);
 

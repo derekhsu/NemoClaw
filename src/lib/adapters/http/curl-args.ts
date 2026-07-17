@@ -3,6 +3,10 @@
 
 import { isIP } from "node:net";
 import path from "node:path";
+import {
+  assertTrustedPrivateEndpointCapability,
+  type TrustedPrivateEndpointCapability,
+} from "../../security/trusted-private-endpoint";
 import { isCredentialShapedName } from "../../security/credential-env";
 import { ROOT } from "../../state/paths";
 
@@ -16,8 +20,10 @@ export interface CurlProbeArgOptions {
    * hardcoded host.
    */
   allowRedirects?: boolean;
-  /** Public addresses approved by the endpoint SSRF preflight. */
+  /** Addresses approved by the endpoint SSRF preflight. */
   pinnedAddresses?: readonly string[];
+  /** Non-forgeable proof of the exact pins admitted for a trusted private host. */
+  trustedPrivateCapability?: TrustedPrivateEndpointCapability;
 }
 
 const CURL_CONFIG_OPTIONS = new Set(["--config", "-K"]);
@@ -62,7 +68,13 @@ const CURL_SAFE_FLAG_OPTIONS = new Set([
 // genuinely need to follow redirects from a fixed, hardcoded host (e.g. the
 // Ollama manifest probe) must opt in via CurlProbeArgOptions.allowRedirects.
 const CURL_REDIRECT_FLAG_OPTIONS = new Set(["-L", "-sfL", "--location"]);
-const CURL_SAFE_VALUE_OPTIONS = new Set(["--connect-timeout", "--max-time", "-X", "--request"]);
+const CURL_SAFE_VALUE_OPTIONS = new Set([
+  "--connect-timeout",
+  "--max-time",
+  "--max-filesize",
+  "-X",
+  "--request",
+]);
 const CURL_FORBIDDEN_MULTI_TRANSFER_OPTIONS = new Set(["--next"]);
 const CURL_SHORT_OPTIONS_WITH_VALUES = new Set(["-K", "-b", "-T", "-d", "-F", "-H", "-X"]);
 
@@ -189,6 +201,28 @@ function isPrivateResolveAddress(address: string): boolean {
   return isPrivateIp(address);
 }
 
+function getTrustedPrivateResolveAddresses(
+  target: URL,
+  opts: CurlProbeArgOptions,
+): readonly string[] {
+  if (!opts.trustedPrivateCapability) return [];
+  if (opts.pinnedAddresses === undefined) {
+    throw new Error("curl probe trusted private capability requires pinnedAddresses");
+  }
+  const targetHost = normalizeHostname(target.hostname);
+  const authorityAddresses =
+    opts.pinnedAddresses.length > 0
+      ? opts.pinnedAddresses
+      : isIP(targetHost) !== 0
+        ? [targetHost]
+        : opts.pinnedAddresses;
+  return assertTrustedPrivateEndpointCapability(
+    target.hostname,
+    authorityAddresses,
+    opts.trustedPrivateCapability,
+  ).addresses;
+}
+
 function assertResolveMatchesApprovedEndpoint(
   value: string,
   target: URL,
@@ -203,6 +237,7 @@ function assertResolveMatchesApprovedEndpoint(
   const port = value.slice(firstSeparator + 1, secondSeparator);
   const addresses = parseResolveAddresses(value.slice(secondSeparator + 1));
   const approved = [...new Set(opts.pinnedAddresses ?? [])];
+  const trustedPrivate = [...getTrustedPrivateResolveAddresses(target, opts)];
   if (approved.length === 0) {
     throw new Error("curl probe --resolve requires SSRF-preflight-approved pinnedAddresses");
   }
@@ -212,8 +247,13 @@ function assertResolveMatchesApprovedEndpoint(
   if (addresses.length === 0 || addresses.some((address) => isIP(address) === 0)) {
     throw new Error("curl probe --resolve addresses must be numeric IP addresses");
   }
-  if (addresses.some((address) => isPrivateResolveAddress(address))) {
-    throw new Error("curl probe --resolve must not map the destination to a private address");
+  const trustedPrivateSet = new Set(trustedPrivate);
+  if (
+    addresses.some((address) => isPrivateResolveAddress(address) && !trustedPrivateSet.has(address))
+  ) {
+    throw new Error(
+      "curl probe --resolve must not map the destination to an unauthorized private address",
+    );
   }
   const actualSet = new Set(addresses);
   const approvedSet = new Set(approved);
@@ -233,6 +273,7 @@ export function validateCurlProbeArgs(
   const args = [...argv];
   const url = normalizeHttpProbeUrl(args.pop());
   const parsedUrl = new URL(url);
+  const trustedPrivate = getTrustedPrivateResolveAddresses(parsedUrl, opts);
   let sawResolve = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -309,6 +350,14 @@ export function validateCurlProbeArgs(
     }
     throw new Error(`curl probe option is not allowed: ${option}`);
   }
+  if (trustedPrivate.length > 0 && !sawResolve) {
+    const targetAddress = normalizeHostname(parsedUrl.hostname);
+    if (isIP(targetAddress) === 0 || !trustedPrivate.includes(targetAddress)) {
+      throw new Error(
+        "curl probe trusted private capability must match the exact private IP URL or --resolve mapping",
+      );
+    }
+  }
   return { args, url };
 }
 
@@ -334,4 +383,13 @@ export function buildCurlProbeSpawnArgs(
     mode === "chat-stream" || mode === "event-stream-with-status" ? ["-w", "%{http_code}"] : [];
   // lgtm[js/file-access-to-http] URL/argv are validated; file-backed config paths must be explicitly trusted.
   return [...args, ...outputArgs, ...statusArgs, url];
+}
+
+export function buildBoundedCurlProbeSpawnArgs(
+  args: string[],
+  url: string,
+  statusMarker: string,
+): string[] {
+  // lgtm[js/file-access-to-http] URL/argv are validated; the status marker is generated in-process.
+  return [...args, "-w", `${statusMarker}%{http_code}`, url];
 }

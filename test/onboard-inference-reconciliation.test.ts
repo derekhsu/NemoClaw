@@ -150,7 +150,7 @@ describe("onboard helpers", () => {
         /inference set -g nemoclaw --no-verify --provider compatible-anthropic-endpoint --model anthropic\.claude-3-5-sonnet-20240620-v1:0/,
       );
       // biome-ignore format: keep the complete route reservation assertion within this legacy file's enforced budget.
-      expect(updateSandbox).toHaveBeenCalledWith("test-box", { model: "anthropic.claude-3-5-sonnet-20240620-v1:0", provider: "compatible-anthropic-endpoint", endpointUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", credentialEnv: "COMPATIBLE_ANTHROPIC_API_KEY", preferredInferenceApi: null, gatewayName: "nemoclaw" });
+      expect(updateSandbox).toHaveBeenCalledWith("test-box", { model: "anthropic.claude-3-5-sonnet-20240620-v1:0", provider: "compatible-anthropic-endpoint", endpointUrl: "https://bedrock-runtime.us-east-1.amazonaws.com", endpointSource: "onboard", credentialEnv: "COMPATIBLE_ANTHROPIC_API_KEY", preferredInferenceApi: null, gatewayName: "nemoclaw" });
     });
   });
   it("resolves a sandbox name before reconciling Hermes Provider on resume", {
@@ -933,52 +933,5 @@ console.log(JSON.stringify({
         1,
       );
     });
-  });
-  it("migrates a legacy credentials.json into env so setupInference can register the provider", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-resume-cred-"));
-    const legacyDir = path.join(tmpDir, ".nemoclaw");
-    const legacyFile = path.join(legacyDir, "credentials.json");
-    fs.mkdirSync(legacyDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      legacyFile,
-      JSON.stringify({ OPENAI_API_KEY: "sk-TEST-NOT-A-REAL-STORED-KEY" }),
-      { mode: 0o600 },
-    );
-    const credentialEnv =
-      require("../src/lib/onboard/credential-env") as typeof import("../src/lib/onboard/credential-env.js");
-    try {
-      await withProcessEnv({ HOME: tmpDir, OPENAI_API_KEY: undefined }, async () => {
-        const harness = createDirectSetupInferenceHarness({
-          runOpenshell: (args) =>
-            args.slice(0, 2).join(" ") === "provider get"
-              ? { status: 0, stdout: "", stderr: "" }
-              : undefined,
-          overrides: { hydrateCredentialEnv: credentialEnv.hydrateCredentialEnv },
-        });
-
-        await harness.setupInference(
-          "test-box",
-          "gpt-5.4",
-          "openai-api",
-          "https://api.openai.com/v1",
-          "OPENAI_API_KEY",
-        );
-
-        assert.equal(process.env.OPENAI_API_KEY, "sk-TEST-NOT-A-REAL-STORED-KEY");
-        assert.equal(
-          fs.existsSync(legacyFile),
-          true,
-          "legacy credentials.json must survive the staging-only hydrate path",
-        );
-        const providerUpdate = harness.commands.find((entry) =>
-          entry.command.includes("provider update -g nemoclaw openai-api"),
-        );
-        assert.ok(providerUpdate, "expected provider update command");
-        assert.equal(providerUpdate.env?.OPENAI_API_KEY, "sk-TEST-NOT-A-REAL-STORED-KEY");
-        assert.doesNotMatch(providerUpdate.command, /sk-TEST-NOT-A-REAL-STORED-KEY/);
-      });
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
   });
 });

@@ -120,7 +120,7 @@ wechat_spec="${package_identity[0]}"
 wechat_tarball="${package_identity[1]}"
 wechat_integrity="${package_identity[2]}"
 
-# Materialize the exact PR-provided graph without executing dependency scripts.
+# Materialize the PR-provided dependency graph without executing dependency scripts.
 npm --prefix "$runtime_dir" ci \
   --userconfig "$trusted_npmrc" \
   --registry "$npm_registry" \
@@ -138,18 +138,165 @@ for package_spec in "$wechat_spec" "qrcode-terminal@0.12.0" "zod@4.4.3"; do
 done
 
 audit_status=0
+audit_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 npm --prefix "$runtime_dir" audit \
   --userconfig "$trusted_npmrc" \
   --registry "$npm_registry" \
   --omit=dev \
   --audit-level=low \
   --json >"$report_dir/npm-audit.json" || audit_status=$?
+audit_finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Record scanner/database provenance next to the raw report so a later reader
+# can establish exactly which registry endpoint served this audit (#7338).
+# Mirrors the *.provenance.json sidecars scripts/audit-reviewed-npm-graph.mts
+# writes for the reviewed graphs. Keep the endpoint derivation and GHSA id
+# extraction below in sync with deriveAuditEndpoints/extractAdvisoryIds in
+# that script; a shared implementation would need a Node module boundary this
+# shell action does not have.
+REPORT_PATH="$report_dir/npm-audit.json" \
+  PROVENANCE_PATH="$report_dir/npm-audit.provenance.json" \
+  CONFIGURED_REGISTRY="$npm_registry" \
+  PACKAGE_SPEC="$wechat_spec" \
+  STARTED_AT="$audit_started_at" \
+  FINISHED_AT="$audit_finished_at" \
+  AUDIT_STATUS="$audit_status" \
+  NPM_VERSION="$(npm --version)" \
+  node <<'NODE'
+const fs = require("node:fs");
+let report = {};
+let failure;
+try {
+  report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, "utf8"));
+} catch {
+  // A transport failure can leave a non-JSON report; the audit status check
+  // below still fails the run, and the sidecar records the attempt.
+  failure = "npm audit did not produce a parseable JSON report";
+}
+if (typeof report !== "object" || report === null || Array.isArray(report)) {
+  // JSON.parse also accepts null, arrays, and bare strings, which real npm
+  // never emits; normalize so the checks below cannot crash and the sidecar
+  // still records the attempt as failed.
+  report = {};
+  if (failure === undefined) {
+    failure = "npm audit did not produce a JSON object report";
+  }
+}
+// npm's dominant failure mode writes PARSEABLE error JSON (`{"error": ...}`)
+// and exits nonzero; mirror parseAuditReport in
+// scripts/audit-reviewed-npm-graph.mts so such a run is never mistaken for a
+// clean scan: report.error, exit status above 1, or a nonzero exit with zero
+// findings all mark the attempt as failed.
+const auditStatus = Number(process.env.AUDIT_STATUS);
+const severities = ["info", "low", "moderate", "high", "critical"];
+const severityCounts = report?.metadata?.vulnerabilities;
+const hasCompleteSeverityCounts =
+  severityCounts &&
+  typeof severityCounts === "object" &&
+  !Array.isArray(severityCounts) &&
+  severities.every((severity) => {
+    const count = severityCounts[severity];
+    return typeof count === "number" && Number.isSafeInteger(count) && count >= 0;
+  });
+const findingCount = hasCompleteSeverityCounts
+  ? severities.reduce((total, severity) => total + severityCounts[severity], 0)
+  : 0;
+if (failure === undefined && report.error !== undefined) {
+  failure = `npm audit returned an error report: ${JSON.stringify(report.error)}`;
+} else if (failure === undefined && !hasCompleteSeverityCounts) {
+  failure = "npm audit did not produce a complete vulnerability finding report";
+} else if (
+  failure === undefined &&
+  (!Number.isSafeInteger(auditStatus) ||
+    auditStatus > 1 ||
+    (auditStatus !== 0 && findingCount === 0))
+) {
+  failure = `npm audit exited ${process.env.AUDIT_STATUS} without vulnerability findings`;
+}
+const advisoryIds = new Set();
+const findings = report && typeof report.vulnerabilities === "object" ? report.vulnerabilities : {};
+for (const finding of Object.values(findings ?? {})) {
+  const via = Array.isArray(finding?.via) ? finding.via : [];
+  for (const cause of via) {
+    const url = typeof cause === "object" && cause !== null ? cause.url : undefined;
+    if (typeof url !== "string") continue;
+    for (const match of url.match(/GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}/gi) ?? []) {
+      advisoryIds.add(`GHSA${match.slice(4).toLowerCase()}`);
+    }
+  }
+}
+const registryBase = process.env.CONFIGURED_REGISTRY.replace(/\/+$/, "");
+const provenance = {
+  schemaVersion: 1,
+  scanner: {
+    name: "npm audit",
+    npmVersion: process.env.NPM_VERSION,
+    nodeVersion: process.version,
+  },
+  registry: {
+    configuredRegistry: process.env.CONFIGURED_REGISTRY,
+    bulkAdvisoryEndpoint: `${registryBase}/-/npm/v1/security/advisories/bulk`,
+    note: "npm audit posts the dependency graph to the bulk advisory endpoint of the configured registry; on request failure npm reports no advisory data.",
+  },
+  run: { startedAt: process.env.STARTED_AT, finishedAt: process.env.FINISHED_AT },
+  graph: { label: "WeChat locked runtime graph", packageSpecs: [process.env.PACKAGE_SPEC] },
+  // rawReportPath is relative to the directory containing the sidecar.
+  rawReportPath: "npm-audit.json",
+  advisoryIds: [...advisoryIds].sort(),
+  ...(failure === undefined ? {} : { failure }),
+};
+fs.writeFileSync(process.env.PROVENANCE_PATH, `${JSON.stringify(provenance, null, 2)}\n`);
+if (failure !== undefined) process.exitCode = 1;
+NODE
+
+run_signature_audit() {
+  local attempt
+  local attempt_report
+  local command_status
+  local signature_attempt_limit=3
+  local signature_report="$report_dir/npm-audit-signatures.txt"
+  local signature_debug_dir="$report_dir/npm-audit-signature-debug"
+
+  : >"$signature_report"
+  for ((attempt = 1; attempt <= signature_attempt_limit; attempt += 1)); do
+    attempt_report="$report_dir/npm-audit-signatures-attempt-${attempt}.txt"
+    command_status=0
+    npm --prefix "$runtime_dir" audit signatures \
+      --userconfig "$trusted_npmrc" \
+      --registry "$npm_registry" \
+      --cache "$trusted_cache" \
+      >"$attempt_report" 2>&1 || command_status=$?
+    {
+      printf 'attempt=%d status=%d\n' "$attempt" "$command_status"
+      cat "$attempt_report"
+    } >>"$signature_report"
+
+    if ((command_status == 0)); then
+      return 0
+    fi
+
+    if [[ -d "$trusted_cache/_logs" ]]; then
+      mkdir -p "$signature_debug_dir"
+      cp -a "$trusted_cache/_logs/." "$signature_debug_dir/"
+    fi
+
+    # Retry only when failed npm output contains the registry download marker.
+    # A failure without this marker stops further signature audit attempts.
+    if ! grep -Fq "npm error Failed to download" "$attempt_report"; then
+      return "$command_status"
+    fi
+    if ((attempt < signature_attempt_limit)); then
+      printf 'retrying transient signature download after attempt %d\n' "$attempt" \
+        >>"$signature_report"
+      sleep 2
+    fi
+  done
+
+  return "$command_status"
+}
 
 signature_status=0
-npm --prefix "$runtime_dir" audit signatures \
-  --userconfig "$trusted_npmrc" \
-  --registry "$npm_registry" \
-  >"$report_dir/npm-audit-signatures.txt" 2>&1 || signature_status=$?
+run_signature_audit || signature_status=$?
 
 # Reproduce the sandbox-user npm-pack boundary with the exact reviewed archive.
 # The trusted source cache is read-only; only its short-lived copy is writable.

@@ -1,0 +1,41 @@
+name: Image Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent runtime to build
+        required: true
+        default: openclaw
+      tag:
+        description: Fully qualified image tag
+        required: true
+      push:
+        description: Push after build
+        required: true
+        type: boolean
+        default: false
+      base_image:
+        description: Optional explicit base image override
+        required: false
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: npm ci
+      - name: Build image metadata
+        run: >
+          node ./bin/nemoclaw.js image build
+          --agent "${{ inputs.agent }}"
+          --tag "${{ inputs.tag }}"
+          ${{ inputs.push && '--push' || '' }}
+          ${{ inputs.base_image != '' && format('--base-image {0}', inputs.base_image) || '' }}
+          --json | tee image-build.json
+      - name: Upload metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-build-metadata
+          path: image-build.json

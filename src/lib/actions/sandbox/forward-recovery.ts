@@ -1,19 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawnSync } from "node:child_process";
+
+import { resolveOpenshell } from "../../adapters/openshell/resolve";
 import { captureOpenshell, isCommandTimeout, runOpenshell } from "../../adapters/openshell/runtime";
-import { OPENSHELL_PROBE_TIMEOUT_MS } from "../../adapters/openshell/timeouts";
+import {
+  OPENSHELL_OPERATION_TIMEOUT_MS,
+  OPENSHELL_PROBE_TIMEOUT_MS,
+} from "../../adapters/openshell/timeouts";
 import * as agentRuntime from "../../agent/runtime";
 import { DASHBOARD_PORT } from "../../core/ports";
 import { waitUntil } from "../../core/wait";
 import { getActiveMessagingHostForward } from "../../messaging/host-forward";
+import { hydrateDerivedSandboxMessagingPlanFields } from "../../messaging/hydration";
 import type { SandboxMessagingHostForwardPlan } from "../../messaging/manifest";
-import { hydrateDerivedSandboxMessagingPlanFields } from "../../messaging/persistence";
 import { parseSandboxMessagingPlan } from "../../messaging/plan-validation";
 import { isRemoteDashboardBindRequested } from "../../onboard/dockerfile-remote-dashboard-bind-contract";
+import { resolveSandboxGatewayName } from "../../onboard/gateway-binding";
 import { isWsl } from "../../platform";
+import { ROOT } from "../../state/paths";
 import * as registry from "../../state/registry";
 import { parseForwardList } from "../../state/sandbox-session";
+import { buildSubprocessEnv } from "../../subprocess-env";
 import {
   classifyForwardHealthWithReachability,
   isLocalForwardReachable,
@@ -38,8 +47,50 @@ type SandboxForwardRecoveryOptions = {
   isWsl?: boolean;
 };
 
+type DashboardForwardStopRunner = (
+  args: string[],
+  options: { ignoreError: true; stdio: "ignore"; timeout: number },
+) => { status?: number | null };
+
+const FORWARD_RELEASE_TIMEOUT_MS = 5_000;
+const FORWARD_RELEASE_POLL_MS = 250;
+
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+function runDashboardForwardStopBestEffort(
+  args: string[],
+  options: { timeout: number },
+): { status?: number | null } {
+  try {
+    const openshellBinary = resolveOpenshell();
+    if (!openshellBinary) return { status: 1 };
+    return spawnSync(openshellBinary, args, {
+      cwd: ROOT,
+      env: buildSubprocessEnv(),
+      stdio: "ignore",
+      timeout: options.timeout,
+    });
+  } catch {
+    // The container lifecycle action has already completed; cleanup must not
+    // replace that result when OpenShell cannot be launched.
+    return { status: 1 };
+  }
+}
+
+function confirmDashboardForwardReleased(
+  port: number,
+  isForwardReachable: (port: number) => boolean,
+): boolean {
+  const now = Date.now;
+  return waitUntil(() => !isForwardReachable(port), {
+    deadlineMs: now() + FORWARD_RELEASE_TIMEOUT_MS,
+    initialIntervalMs: FORWARD_RELEASE_POLL_MS,
+    maxIntervalMs: FORWARD_RELEASE_POLL_MS,
+    backoffFactor: 1,
+    now,
+  });
 }
 
 export function resolveSandboxDashboardPort(
@@ -59,6 +110,48 @@ export function resolveSandboxDashboardPort(
   }
 
   return DASHBOARD_PORT;
+}
+
+/**
+ * Tear down the host-side dashboard port-forward this sandbox created.
+ *
+ * `stop` stops the container but must also release the forward it spawned;
+ * leaving it alive orphans an `ssh -L` listener on the dashboard port, which
+ * `status` then misreports as a foreign `sandbox_dashboard_port_conflict` and
+ * which `start`/`recover` contend with (#7227). Best-effort: a stop must still
+ * free container resources when openshell is unreachable, so errors are ignored
+ * — mirroring the sandbox- and gateway-scoped forward cleanup used elsewhere.
+ * OpenShell may return before its SSH listener exits, so successful commands
+ * also receive a bounded host-port release wait.
+ */
+export function teardownSandboxDashboardForward(
+  sandboxName: string,
+  deps: {
+    getSandbox?: typeof registry.getSandbox;
+    isLocalForwardReachable?: typeof isLocalForwardReachable;
+    resolveSandboxDashboardPort?: typeof resolveSandboxDashboardPort;
+    resolveSandboxGatewayName?: typeof resolveSandboxGatewayName;
+    runOpenshell?: DashboardForwardStopRunner;
+  } = {},
+): void {
+  try {
+    const getSandbox = deps.getSandbox ?? registry.getSandbox;
+    const sandbox = getSandbox(sandboxName);
+    if (!sandbox) return;
+    const gatewayName = (deps.resolveSandboxGatewayName ?? resolveSandboxGatewayName)(sandbox);
+    const resolvePort = deps.resolveSandboxDashboardPort ?? resolveSandboxDashboardPort;
+    const port = resolvePort(sandboxName, { getSandbox: () => sandbox });
+    const run = deps.runOpenshell ?? runDashboardForwardStopBestEffort;
+    const result = run(["forward", "stop", String(port), sandboxName, "--gateway", gatewayName], {
+      ignoreError: true,
+      stdio: "ignore",
+      timeout: OPENSHELL_OPERATION_TIMEOUT_MS,
+    });
+    if (result.status !== 0) return;
+    confirmDashboardForwardReleased(port, deps.isLocalForwardReachable ?? isLocalForwardReachable);
+  } catch {
+    // Defense in depth for injected or future runners: teardown is best-effort.
+  }
 }
 
 /**
@@ -192,13 +285,17 @@ export function ensureSandboxPortForwardForPort(
     );
   }
 
-  // OpenShell v0.0.72 removes the forward PID file shortly after SIGTERM,
+  // OpenShell v0.0.85 removes the forward PID file shortly after SIGTERM,
   // before the old SSH listener is guaranteed to release its host port. A
   // blind stop -> start can therefore collide with the just-stopped process.
   // Preserve authoritative owner metadata while waiting: accept a target-
-  // owned forward that recovered on its own, reject another sandbox, and only
-  // start after an otherwise-unowned local listener has actually quiesced.
-  // NemoClaw must compensate while the already-released OpenShell 0.0.72
+  // owned forward that recovered on its own, reject another sandbox, and
+  // prefer starting only after an otherwise-unowned local listener has
+  // quiesced. If an authoritative list remains ownerless while the listener
+  // stays reachable, `forward start` is still the reconciliation operation:
+  // its result is accepted below only after the list reports the exact target
+  // owner. An unavailable list and forced bind replacement remain fail-closed.
+  // NemoClaw must compensate while the supported OpenShell 0.0.85
   // contract remains supported; test/process-recovery.test.ts locks both the
   // delayed-release and fail-closed cases. Remove this wait only after every
   // supported OpenShell release either waits for host-listener release before
@@ -209,7 +306,7 @@ export function ensureSandboxPortForwardForPort(
       health: forwardHealth,
       portReleased: false,
     };
-    const stopSettled = waitUntil(
+    waitUntil(
       () => {
         stopState.health = isSandboxPortForwardHealthy(sandboxName, port, expectedBind);
         stopState.portReleased = !isLocalForwardReachable(port);
@@ -227,7 +324,10 @@ export function ensureSandboxPortForwardForPort(
       },
     );
     if (stopState.health === true && !forceRestart) return acceptSuccessfulForward();
-    if (stopState.health === "occupied" || !stopSettled || !stopState.portReleased) return false;
+    if (stopState.health === "occupied") return false;
+    if (!stopState.portReleased && (forceRestart || stopState.health === null)) {
+      return false;
+    }
   }
 
   if (!beforeStart()) return false;
@@ -235,14 +335,20 @@ export function ensureSandboxPortForwardForPort(
     ["forward", "start", "--background", forwardTarget, sandboxName],
     {
       ignoreError: true,
-      // OpenShell 0.0.72 leaves the background SSH forward attached to the
+      // OpenShell 0.0.85 leaves the background SSH forward attached to the
       // caller's inherited descriptors. Detach them so a scripted `recover`
       // can finish after the foreground OpenShell command exits. Keep this
       // until every supported OpenShell release redirects those descriptors.
       stdio: "ignore",
     },
   );
-  if (startResult.status !== 0) return false;
+  // OpenShell 0.0.85 returns an error when start preflight finds a validated
+  // live forward for the requested port. Recovery cannot change that upstream
+  // CLI contract, so a reachable listener settles against the authoritative
+  // forward list below; an absent listener still fails fast. Remove this
+  // tolerance once every supported OpenShell release makes `forward start`
+  // idempotent for an already-tracked live forward.
+  if (startResult.status !== 0 && !isLocalForwardReachable(port)) return false;
 
   // `forward start --background` can return before its authoritative list
   // entry becomes visible. Poll for the exact live sandbox+port owner instead

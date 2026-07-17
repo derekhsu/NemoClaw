@@ -62,6 +62,12 @@ outcome, the smallest change, and how it was verified. Explore alternatives only
 change behavior, security, data safety, or a supported contract. Once the smallest safe change is
 clear and testable, stop exploring and implement it.
 
+### Writing Guide
+
+Follow the [NemoClaw Writing Guide](WRITING.md) when you add or modify explanatory text.
+Use the [NemoClaw Controlled Word List](.agents/skills/_shared/controlled-words.md) for approved project terms.
+The Writing Guide defines its scope, rules, examples, and review policy.
+
 ## Before You Open an Issue
 
 Open an issue when you encounter one of the following situations.
@@ -121,7 +127,8 @@ To drive the same workflow through a compatible coding agent, ask:
 
 > Set up this machine as a NemoClaw contributor and prepare it for a first PR.
 
-The `nemoclaw-contributor-onboard` skill invokes the setup script, pauses for user-controlled account or privileged changes, and explains the first-PR workflow.
+The `nemoclaw-contributor-onboard` skill invokes the setup script and pauses for user-controlled account or host changes.
+After the doctor passes, it routes planning, implementation, and PR publication to the owning contributor skills.
 Expose the development `nemoclaw` command only when you want an npm link or user-local shim:
 
 ```bash
@@ -194,8 +201,11 @@ These are the primary npm scripts for day-to-day development:
 | `npm run dev:setup` | Install or repair repository-local contributor tooling |
 | `npm run dev:doctor` | Run read-only contributor environment readiness checks |
 | `npm run agent` | Launch the repository-pinned Pi coding agent |
-| `npm run check` | Run repo-wide pre-commit and full CLI/plugin coverage checks |
-| `npm run check:diff` | Reproduce `pre-commit`, `commit-msg`, and `pre-push` checks for the diff from `origin/main` |
+| `npm run validate:pr` | Validate a routine PR diff with `pre-commit`, `commit-msg`, and `pre-push` checks from `origin/main` |
+| `npm run checks:repository` | Run the narrow custom repository checks used by lint and hooks |
+| `npm run check` | Run the broad repo-wide pre-commit and full CLI/plugin coverage baseline |
+| `npm run check:diff` | Compatibility alias for `npm run validate:pr` |
+| `npm run checks` | Compatibility alias for `npm run checks:repository`; prints scope guidance before delegating |
 | `npm run format` | Auto-format Biome-supported source files |
 | `npm run typecheck:cli` | Type-check the root TypeScript project using `tsconfig.cli.json` |
 | `npm --prefix nemoclaw run typecheck` | Type-check plugin production and test sources without emitting files |
@@ -206,6 +216,8 @@ These are the primary npm scripts for day-to-day development:
 | `npm run test:watch` | Watch the CLI, plugin, and E2E-support projects and rerun affected tests |
 | `npm run test:shuffle` | Shuffle test order in the focused source projects without collecting coverage |
 | `npm run test:diagnose:leaks` | Report async-resource leaks and diagnose a Vitest process that hangs during shutdown |
+| `npm run test:e2e-phases:check` | Validate semantic phase plans for every live E2E test and workflow-selected credential-free integration test without executing test bodies |
+| `npm run test:runtime-audit -- <artifact-dir> [...]` | Rank captured live E2E runs by median, p95, variability, and slowest phase |
 | `npm run test:integration` | Clean-build the CLI and run root integration and installer tests |
 | `npm run test:package` | Clean-build CLI/plugin artifacts and run compiled-package contracts |
 | `npm run test:live-e2e` | Opt into live E2E scenarios (mutates real external state) |
@@ -226,6 +238,29 @@ npx vitest run --project e2e-support
 
 This project is fast and does not run live targets. Live E2E remains opt-in through
 `npm run test:live-e2e` or the applicable GitHub Actions workflow.
+
+Every `e2e-live` test, plus every credential-free integration test selected by
+the shared E2E workflow planner, must declare its ordered, behavior-specific
+phase plan in `meta.e2ePhases`, call
+`progress.phase("literal phase label")` at those boundaries, and reach the final
+test-declared phase on every passing path. Live tests import the shared
+`e2e-test` fixture, which appends `release registered E2E resources` so cleanup
+duration and failures have their own phase. Workflow-selected integration tests
+import `workflow-e2e-test` and declare their own final release phase. Run
+`npm run test:e2e-phases:check` after changing either coverage set or its
+workflow selection; collection validates the union without running test bodies. See
+[`test/e2e/docs/README.md`](test/e2e/docs/README.md) for the logging and artifact
+contract.
+
+Use the shared `ShellProbe` for E2E child processes. The semantic-phase check
+also follows shared E2E helpers and rejects new direct asynchronous process
+boundaries unless they are explicitly audited for content-free activity and
+timestamp-only output reporting. Synchronous process calls must have a positive
+timeout shorter than the first heartbeat and use `killSignal: "SIGKILL"` so the
+child cannot ignore that bound; write child contents only through the redacted
+artifact sink. Pass the auto fixture's frozen, canonical `progress` capability
+through unchanged; custom, copied, or no-op progress adapters are rejected at
+audited subprocess boundaries.
 
 ### Test Declarative Behavior
 
@@ -298,8 +333,13 @@ existing contract.
 Write `describe` and `it` titles so the Vitest tree reads as behavioral documentation. Start test
 titles with behavior or context rather than issue numbers, flags, or scenario labels, and put local
 issue references in a final suffix such as `(#1234)`. Prefer
-`it("reticulates splines correctly (#1234)")` over
+`it("reticulates splines for valid control points (#1234)")` over
 `it("#1234 fixes spline reticulation")`.
+
+Apply the [NemoClaw Writing Guide](WRITING.md) to each added or modified test title.
+The title checker enforces objective title shape only. A language finding can block when ambiguity
+changes the test meaning. Other findings are suggestions. Reviewers must not request unrelated title
+cleanup.
 
 Run `npm run test:spec` to render the suite with Vitest's hierarchical tree reporter. Run
 `npm run test:titles:check` to enforce the objective title-shape conventions without attempting to
@@ -316,17 +356,18 @@ All git hooks are managed by [prek](https://prek.j178.dev/), a fast, single-bina
 | **pre-push** | Path-scoped incremental CLI/plugin TypeScript checks and checked-JavaScript checks |
 
 For PR preparation, normal `pre-commit`, `commit-msg`, and `pre-push` hooks are valid verification when they pass and were not bypassed with `--no-verify`.
-If hooks were skipped, missing, failed, or uncertain, run `npm run check:diff` once to reproduce those checks for the diff from `origin/main`.
-Refresh that remote-tracking base with `git fetch origin main` before relying on the fallback.
+If hooks were skipped, missing, failed, or uncertain, refresh the remote-tracking base with `git fetch origin main`, then run `npm run validate:pr` once to reproduce those checks for the current diff.
 
 Pre-push selects the root TypeScript, checked-JavaScript, and plugin type checks from the paths changed relative to the push base, and uses incremental compilation for the TypeScript projects.
-The `check:diff` fallback applies the same path selection, so do not rerun type checks separately solely to prepare a PR.
+The `validate:pr` command applies the same path selection, so do not rerun type checks separately solely to prepare a PR.
 CI runs the complete type-check gates independently; local path selection is a fast-feedback optimization, not the authoritative trust boundary.
 
 If you still have `core.hooksPath` set from an old Husky setup, Git will ignore `.git/hooks`. Run `git config --unset core.hooksPath` in this repo, then `npm install` so `prek install` (via `prepare`) can register the hooks.
 
+`npm run checks:repository` runs only the custom checks collected under `scripts/checks`; lint and the repository-check hook use it internally. The `npm run checks` alias remains available for compatibility and prints the canonical routine and narrow command names before delegating.
+
 `npm run check` is the whole-repository pre-commit and full CLI/plugin coverage baseline for broad changes to hooks, formatters, generated checks, or shared validation behavior.
-It is not part of routine PR preparation for a focused change.
+It is not part of routine PR preparation for a focused change. The `npm run check:diff` alias remains available for consumers migrating to `npm run validate:pr`.
 Full coverage enforces the aggregate ratchets in `ci/coverage-threshold-*.json` and per-file floors
 for security-sensitive SSRF, credential filtering and redaction, policy mutation, and state-lock
 modules. CLI coverage shards defer the per-file checks until their reports are merged. Pull requests
@@ -340,7 +381,7 @@ npm run docs
 ```
 
 Leave the broad-gate verification item unchecked unless you actually ran the applicable command.
-If hooks were skipped or unavailable, run `npm run check:diff` before opening the PR.
+If hooks were skipped or unavailable, refresh `origin/main`, then run `npm run validate:pr` before opening the PR.
 For code changes, map each success criterion to the narrowest stable test or other evidence that proves it, then run those targeted checks once per relevant change set and record the commands as evidence.
 Reproduce defects before fixing them when feasible; when reproduction is not feasible, record why and preserve the strongest available pre-fix evidence.
 Add regression coverage at the earliest stable behavior boundary that could have caught the defect, and add higher-level coverage only when it protects a distinct integration boundary.
@@ -375,8 +416,62 @@ Shell scripts (`scripts/*.sh`) must pass ShellCheck and use `shfmt` formatting.
 
 If your change affects user-facing behavior (new commands, changed defaults, new features, bug fixes that contradict existing docs), update the relevant pages under `docs/` in the same PR.
 
+The [documentation contributor guide](docs/CONTRIBUTING.md) owns public-facing documentation
+procedure and rules.
+
 If you use an AI coding agent (Cursor, Claude Code, Codex, etc.), the repo includes the `nemoclaw-contributor-update-docs` skill that drafts doc updates. Use it before writing from scratch and follow the style guide in [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 During release prep, run that skill first, make any doc version bumps, then open the docs refresh PR.
+
+### Documentation Writer Review Receipt
+
+After you complete a code or documentation change, a documentation writer subagent must review the completed changes.
+For a documentation-only change, the subagent must verify the changed pages against [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) and [WRITING.md](WRITING.md).
+The review must cover terminology, structure, voice, and code-sample presentation.
+Complete the Documentation Writer Review section in the PR description after that review.
+Keep one review completion checkbox and one instance of each visible or hidden field.
+
+Record one result:
+
+- `docs-updated` when the reviewed pull request changes documentation.
+  List the changed documentation paths as evidence.
+  For a documentation-only change, state that the subagent reviewed the writing rules and documentation style.
+- `no-docs-needed` when a code change does not require documentation and the evidence explains why.
+- `blocked` when a named decision, dependency, access problem, or input prevents the review.
+
+Record the product and surface that ran the review, such as `Codex Desktop`, `Codex CLI`, `Claude Code`, or `Cursor`.
+Use the same name for the same surface across PRs so the report groups its data correctly.
+
+Commit all changes from the final review.
+Then run these commands and put their values in the receipt's hidden HTML metadata comments:
+
+```bash
+git rev-parse --short HEAD
+git rev-parse --short HEAD:AGENTS.md
+```
+
+GitHub supplies the pull-request identity to the workflow and report.
+The hidden head SHA identifies the pull-request revision that the review covered.
+Rerun the review after any new commit changes the pull-request head.
+Pushing a new commit runs the receipt check again and reports the review as stale until the hidden metadata is refreshed.
+The Documentation Writer Review check reports an advisory finding when the receipt is missing, incomplete, or stale.
+The check compares the hidden head SHA with the current PR head and the hidden `AGENTS.md` blob SHA with the current PR's file.
+
+Maintainers can export receipt data from PR descriptions:
+
+```bash
+npm run docs-review:report -- --since 2026-06-12 --format csv > /tmp/nemoclaw-docs-review.csv
+```
+
+The report uses the authenticated GitHub CLI session and returns JSON by default.
+It measures receipt coverage, head-revision freshness, review results, and agent-surface counts.
+The `eligiblePrs` JSON metric reports the total eligible pull requests.
+The `eligibleCodePrs` and `eligibleDocsOnlyPrs` metrics report the code and documentation-only counts.
+It records the `AGENTS.md` blob SHA, but only the PR check compares that SHA with the current PR's file.
+It does not prove that an agent loaded `AGENTS.md`; it records observable workflow compliance.
+The retrospective report classifies code and documentation changes from the checked Type of Change field.
+It reports a PR as unclassified when that field is incomplete or contradictory.
+Use `--format summary` to print only aggregate metrics.
+Use `--until YYYY-MM-DD` to set the end of the reporting period.
 
 To build and preview docs locally:
 
@@ -396,7 +491,8 @@ For Markdown docs routing, user-skill guidance, and release-prep documentation w
 
 ## Pull Requests
 
-We welcome contributions. Every PR requires maintainer review before merge. To keep the review queue healthy, limit the number of open PRs you have at any time to fewer than 10.
+We welcome contributions. Every PR requires maintainer review before merge. Contributors may have up to 10 open PRs at one time.
+Core maintainers listed in `.github/workflows/pr-limit.yaml` are exempt from this limit.
 Maintainers review pull requests according to project priority, security impact, release readiness, and reviewer availability.
 PRs that solve issues with Priority set to Urgent or High are more likely to receive earlier review when maintainers have capacity.
 For substantial features or behavior changes, start with a GitHub Discussion before opening a large implementation PR.
@@ -446,7 +542,7 @@ If any commit is missing GitHub verification, fix the branch before opening a PR
 If force-push is not allowed after an unverified commit is published, open a fresh branch and fresh PR with a clean compliant history.
 
 > [!WARNING]
-> Accounts that repeatedly exceed this limit or submit automated bulk PRs may have their PRs closed or their access restricted.
+> Non-exempt accounts that repeatedly exceed this limit or submit automated bulk PRs may have their PRs closed or their access restricted.
 
 ### No External Project Links
 
@@ -469,7 +565,7 @@ Follow these steps to submit a pull request.
 2. Make your changes with tests.
 3. Run the relevant checks.
    Run targeted tests once per relevant change set, let normal hooks provide verification, and run `npm run docs` for doc changes.
-   Rerun targeted tests after later behavior-affecting edits or hook autofixes. If hooks were skipped or unavailable, run `npm run check:diff` once instead of reproducing the checks separately.
+   Rerun targeted tests after later behavior-affecting edits or hook autofixes. If hooks were skipped or unavailable, refresh `origin/main`, then run `npm run validate:pr` once instead of reproducing the checks separately.
 4. Confirm the PR description includes the DCO declaration and every commit appears as `Verified` in GitHub.
 5. Open a PR.
 

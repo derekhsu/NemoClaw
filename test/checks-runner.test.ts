@@ -4,12 +4,12 @@
 import type { SpawnSyncOptions } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 
-import { buildCheckSpawnInvocation, runChecks } from "../scripts/checks/run";
+import { buildCheckSpawnInvocation, CHECKS, runChecks } from "../scripts/checks/run.mts";
 
 const sampleCheck = {
   name: "sample",
   command: "tsx.cmd",
-  args: ["scripts/checks/sample.ts"],
+  args: ["scripts/checks/sample.mts"],
 };
 
 function successfulSpawn(): { status: number | null } {
@@ -17,6 +17,22 @@ function successfulSpawn(): { status: number | null } {
 }
 
 describe("checks runner", () => {
+  it("registers the source architecture check", () => {
+    expect(CHECKS).toContainEqual({
+      name: "source-architecture",
+      command: process.platform === "win32" ? "tsx.cmd" : "tsx",
+      args: ["scripts/checks/source-architecture.mts"],
+    });
+  });
+
+  it("registers the test registration boundary check", () => {
+    expect(CHECKS).toContainEqual({
+      name: "test-registration-boundary",
+      command: process.platform === "win32" ? "tsx.cmd" : "tsx",
+      args: ["scripts/checks/test-registration-boundary.mts"],
+    });
+  });
+
   it("runs Windows command shims through cmd.exe", () => {
     expect(
       buildCheckSpawnInvocation(sampleCheck, "win32", {
@@ -24,7 +40,7 @@ describe("checks runner", () => {
       }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "tsx.cmd", "scripts/checks/sample.ts"],
+      args: ["/d", "/s", "/c", "tsx.cmd", "scripts/checks/sample.mts"],
     });
   });
 
@@ -37,7 +53,7 @@ describe("checks runner", () => {
   it("keeps POSIX runner execution direct", () => {
     expect(buildCheckSpawnInvocation(sampleCheck, "linux")).toEqual({
       command: "tsx.cmd",
-      args: ["scripts/checks/sample.ts"],
+      args: ["scripts/checks/sample.mts"],
     });
   });
 
@@ -57,7 +73,7 @@ describe("checks runner", () => {
 
     expect(spawn).toHaveBeenCalledWith(
       "C:\\Windows\\System32\\cmd.exe",
-      ["/d", "/s", "/c", "tsx.cmd", "scripts/checks/sample.ts"],
+      ["/d", "/s", "/c", "tsx.cmd", "scripts/checks/sample.mts"],
       expect.objectContaining({ stdio: "inherit" }),
     );
     expect(calls[0]?.shell).toBeUndefined();
@@ -72,7 +88,7 @@ describe("checks runner", () => {
 
     expect(spawn).toHaveBeenCalledWith(
       "tsx.cmd",
-      ["scripts/checks/sample.ts"],
+      ["scripts/checks/sample.mts"],
       expect.objectContaining({ stdio: "inherit" }),
     );
   });

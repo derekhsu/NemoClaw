@@ -6,6 +6,10 @@ import type { SandboxMessagingPlan } from "../../messaging";
 import { hydrateCredentialEnv } from "../../onboard/credential-env";
 import { DCODE_AUTO_APPROVAL_FEATURE } from "../../onboard/dcode-auto-approval";
 import { managedSandboxFeatureIssue } from "../../onboard/managed-sandbox-feature";
+import {
+  type HermesCronRestorePlan,
+  validateHermesCronRestoreBackup,
+} from "../../state/rebuild/hermes-cron-restore-backup";
 import type { RebuildManifest } from "../../state/sandbox";
 import { assertMcpDestroyNotPending } from "./mcp-bridge-state";
 import {
@@ -20,6 +24,7 @@ import {
   isDcodeRebuildAgent,
 } from "./rebuild-dcode-orchestrator";
 import {
+  disposeRebuildAgentBaseImagePreflight,
   type RebuildAgentBaseImagePreflight,
   type RebuildLiveState,
   type RebuildSandboxEntry,
@@ -37,10 +42,12 @@ import { printRebuildPreflightFailure } from "./rebuild-preflight-error";
 import {
   acquireRebuildOnboardLock,
   assertRebuildEntryUnchanged,
+  blockRebuildOnPendingBaselineTransition,
   checkRebuildGatewaySchemaPreflight,
   expectedRebuildEntryAfterVersionCheck,
   getRebuildSandboxEntryOrBail,
   isSingleAgentRebuildSupported,
+  type RebuildRoutePreflightReceipt,
   runRebuildGatewayIntentPreflight,
 } from "./rebuild-preflight-guards";
 import { prepareRebuildTargetPreflights } from "./rebuild-preflight-target-phase";
@@ -51,6 +58,8 @@ import {
 } from "./rebuild-prepared-recovery";
 import { checkRebuildGatewayCredentialReuseOrBail } from "./rebuild-provider-preflight";
 import type { RebuildTargetConfig } from "./rebuild-target-preflight";
+
+export { finalizePreparedRebuildImageMessagingPlan } from "./rebuild-custom-image-preflight";
 
 export interface RebuildPreflightPhaseResult {
   sandboxEntry: RebuildSandboxEntry;
@@ -64,9 +73,46 @@ export interface RebuildPreflightPhaseResult {
   recoveryManifest: RebuildManifest | null;
   dcodePreflight: DcodeRebuildOrchestrator;
   preparedImage: PreparedRebuildImage | null;
+  routePreflightReceipt: RebuildRoutePreflightReceipt;
   releaseOnboardLock: () => void;
   log: RebuildLog;
   bail: RebuildBail;
+}
+
+interface HermesCronRestoreBackupPreflightInput {
+  rebuildAgent: string | null;
+  backupPath: string | null;
+  backedUpDirs: readonly string[];
+  log: RebuildLog;
+  bail: RebuildBail;
+}
+
+export function runHermesCronRestoreBackupPreflight({
+  rebuildAgent,
+  backupPath,
+  backedUpDirs,
+  log,
+  bail,
+}: HermesCronRestoreBackupPreflightInput): { plan: HermesCronRestorePlan | null } | null {
+  if (rebuildAgent !== "hermes" || backupPath === null || !backedUpDirs.includes("cron")) {
+    return { plan: null };
+  }
+  try {
+    const plan = validateHermesCronRestoreBackup(backupPath);
+    log(
+      `Hermes cron restore preflight: activeJobs=${String(plan.activeJobs)}, scriptJobs=${String(plan.scriptJobs)}, gate=${String(plan.requiresDispatchGate)}`,
+    );
+    return { plan };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    printRebuildPreflightFailure(
+      `the Hermes cron backup failed script-reference validation: ${detail}`,
+      `Repair or disable the affected job before rebuilding. Backup: ${backupPath}`,
+      "Hermes cron restore preflight failed.",
+      bail,
+    );
+    return null;
+  }
 }
 
 /**
@@ -89,9 +135,10 @@ export async function runRebuildPreflightPhase(
     requestedObservabilityEnabled,
     skipConfirm,
   } = createRebuildCommandContext(options, opts);
-  const activeSessionCount = countActiveSandboxSessionsForRebuild(sandboxName);
   const sandboxEntry = getRebuildSandboxEntryOrBail(sandboxName, bail);
   if (!sandboxEntry) return null;
+  if (blockRebuildOnPendingBaselineTransition(sandboxEntry, sandboxName, bail)) return null;
+  const activeSessionCount = countActiveSandboxSessionsForRebuild(sandboxName);
   // #6376: refuse a stuck MCP destroy transaction up front — before backup,
   // image prep, or the old-sandbox delete. The only MCP marker check used to
   // live inside the destroy phase, which runs AFTER the backup phase, so a
@@ -102,7 +149,12 @@ export async function runRebuildPreflightPhase(
   try {
     assertMcpDestroyNotPending(sandboxEntry);
   } catch (error) {
-    bail(error instanceof Error ? error.message : String(error));
+    printRebuildPreflightFailure(
+      "a pending MCP destroy transaction blocks rebuild.",
+      "Resolve the pending MCP state before retrying rebuild.",
+      error instanceof Error ? error.message : String(error),
+      bail,
+    );
     return null;
   }
   const confirmedEntrySnapshot = JSON.stringify(sandboxEntry);
@@ -175,6 +227,7 @@ export async function runRebuildPreflightPhase(
     sandboxName,
     entry: expectedSandboxEntry,
     rebuildAgent,
+    managedWorkloadRebuild: expectedSandboxEntry.workload?.kind === "managed-image",
     log,
     bail,
     deps: {
@@ -190,8 +243,11 @@ export async function runRebuildPreflightPhase(
   let retainDcodePreflight = false;
   let preparedImage: PreparedRebuildImage | null = null;
   let retainPreparedImage = false;
+  let baseImagePreflight: RebuildAgentBaseImagePreflight | null = null;
+  let retainBaseImagePreflight = false;
   try {
     const releaseOnboardLock = acquireRebuildOnboardLock(sandboxName, bail);
+    if (!releaseOnboardLock) return null;
     let retainOnboardLock = false;
     try {
       assertRebuildEntryUnchanged(sandboxName, JSON.stringify(expectedSandboxEntry), bail);
@@ -215,6 +271,7 @@ export async function runRebuildPreflightPhase(
         bail,
       });
       if (!preparedTarget) return null;
+      baseImagePreflight = preparedTarget.baseImagePreflight;
       preparedImage = preparedTarget.preparedImage;
 
       const liveState = await resolveRebuildLiveState(sandboxName, expectedSandboxEntry, log, bail);
@@ -229,8 +286,11 @@ export async function runRebuildPreflightPhase(
           recoveryRecreate,
           preparedTarget.recreateOptions.targetGatewayPort,
         );
-        if (!imageReady || !dcodePreflight.preparedReplacement) return null;
-        preparedTarget.recreateOptions.preparedDcodeRebuild = dcodePreflight.preparedReplacement;
+        if (!imageReady) return null;
+        if (!preparedTarget.recreateOptions.managedWorkloadRebuild) {
+          if (!dcodePreflight.preparedReplacement) return null;
+          preparedTarget.recreateOptions.preparedDcodeRebuild = dcodePreflight.preparedReplacement;
+        }
       }
       // Keep credential-reuse validation after DCode's live-route/image proofs,
       // but before shields, backup, or any destructive rebuild work begins.
@@ -252,6 +312,7 @@ export async function runRebuildPreflightPhase(
       retainOnboardLock = true;
       retainDcodePreflight = true;
       retainPreparedImage = true;
+      retainBaseImagePreflight = true;
       return {
         sandboxEntry: expectedSandboxEntry,
         rebuildAgent,
@@ -273,5 +334,12 @@ export async function runRebuildPreflightPhase(
   } finally {
     if (!retainDcodePreflight) dcodePreflight.cleanup();
     if (!retainPreparedImage && preparedImage) disposePreparedBuildContext(preparedImage);
+    if (
+      !retainBaseImagePreflight &&
+      baseImagePreflight &&
+      !disposeRebuildAgentBaseImagePreflight(baseImagePreflight)
+    ) {
+      console.warn("  Warning: temporary rebuild base-image handoff could not be removed.");
+    }
   }
 }

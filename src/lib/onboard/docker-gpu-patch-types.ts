@@ -18,6 +18,9 @@ type DockerRenameFn = (
   opts?: DockerRunOptions,
 ) => DockerRunResult;
 type DockerLogsFn = (containerName: string, opts?: { tail?: number; timeout?: number }) => string;
+type ContainerDnsProbeFn = (
+  opts?: import("./preflight").ProbeContainerDnsOpts,
+) => import("./preflight").DnsProbeResult;
 
 export type DockerGpuPatchDeps = {
   dockerCapture?: DockerCaptureFn;
@@ -34,12 +37,14 @@ export type DockerGpuPatchDeps = {
   homedir?: () => string;
   now?: () => Date;
   detectSandboxFallbackDns?: () => string | null;
+  /** Probe the exact fallback resolver before destructive recreation. */
+  probeContainerDns?: ContainerDnsProbeFn;
   /**
    * Resolve the host group ID(s) that own the Jetson/Tegra GPU device nodes
-   * (`/dev/nvmap`, `/dev/nvhost-*`). Used by the Jetson recreate to grant the
-   * sandbox user matching `--group-add` membership so CUDA can open them
-   * (#4231). Injectable so the Jetson permission path is testable without
-   * Tegra hardware.
+   * (`/dev/nvmap`, `/dev/nvhost-*`, and `/dev/dri/renderD*`). Used by the
+   * Jetson recreate to grant the sandbox user matching `--group-add`
+   * membership so CUDA can open them (#4231, #7610). Injectable so the Jetson
+   * permission path is testable without Tegra hardware.
    */
   detectTegraDeviceGroupGids?: () => string[];
   /** Injectable directory lister for unit testing CDI spec discovery. */
@@ -77,6 +82,9 @@ export type DockerGpuPatchFailureContext = {
   selectedMode?: DockerGpuPatchMode | null;
   modeAttempts?: DockerGpuPatchModeAttempt[];
   rolledBack?: boolean;
+  replacementStopConfirmed?: boolean;
+  replacementRemovalConfirmed?: boolean;
+  replacementPresence?: "absent" | "present" | "unknown";
 };
 
 export type DockerGpuPatchResult = {
@@ -94,18 +102,33 @@ export type DockerGpuPatchResult = {
   backupRemoved: boolean;
 };
 
+export type DockerUlimit = {
+  name: string;
+  soft: number;
+  hard: number;
+};
+
 export type DockerGpuCloneRunOptions = {
   image?: string | null;
   networkMode?: string | null;
   openshellEndpoint?: string | null;
   sandboxFallbackDns?: string | null;
   openshellSandboxCommand?: readonly string[] | null;
+  requiredUlimits?: readonly DockerUlimit[] | null;
+  /**
+   * Exact replacement process boundary used only by dormant managed bootstrap.
+   * Ordinary recreation leaves both fields unset.
+   */
+  containerEntrypoint?: string | null;
+  containerCommand?: readonly string[] | null;
+  /** Stopped staging name used before exact-name cutover. */
+  containerName?: string | null;
   /**
    * Extra supplementary group IDs to add to the recreated container via
    * `--group-add`. On Jetson these are the host group(s) owning the Tegra GPU
-   * device nodes (`/dev/nvmap`, `/dev/nvhost-*`); granting the sandbox user
-   * membership lets CUDA's nvmap init open them instead of failing with
-   * `NvRmMemInitNvmap ... Permission denied` (#4231).
+   * device nodes; granting the sandbox user membership lets CUDA's nvmap init
+   * open them instead of failing with `NvRmMemInitNvmap ... Permission
+   * denied` (#4231, #7610).
    */
   extraGroupGids?: readonly string[] | null;
 };
@@ -113,6 +136,7 @@ export type DockerGpuCloneRunOptions = {
 export type DockerGpuPatchDiagnostics = {
   dir: string;
   cleanupCommands: string[];
+  cleanupDisposition: "manual" | "not_required" | "pending_rollback" | "unknown";
   summaryLines: string[];
 };
 
@@ -160,7 +184,15 @@ export type DockerGpuPatchFailureKind =
 export type DockerGpuPatchFailureClassification = {
   kind: DockerGpuPatchFailureKind;
   headline: string;
+  /** Stable create-mode identity used when a saved verdict crosses rollback. */
+  selectedModeKind?: DockerGpuPatchModeKind | null;
   summaryLines: string[];
+  /**
+   * Prose guidance for failure signatures whose cause is supported by an
+   * exact runtime signal. Kept separate from `summaryLines` so the on-disk
+   * summary stays machine-readable `key=value` (#7996).
+   */
+  hints?: string[];
 };
 
 export type DockerContainerInspect = {
@@ -169,6 +201,9 @@ export type DockerContainerInspect = {
   Name?: string;
   Config?: {
     Image?: string;
+    AttachStdin?: boolean;
+    AttachStdout?: boolean;
+    AttachStderr?: boolean;
     Env?: string[] | null;
     Labels?: Record<string, string> | null;
     Entrypoint?: string[] | string | null;
@@ -178,10 +213,38 @@ export type DockerContainerInspect = {
     Hostname?: string;
     Tty?: boolean;
     OpenStdin?: boolean;
+    StopTimeout?: number | null;
+    Volumes?: Record<string, unknown> | null;
+  } | null;
+  State?: {
+    Running?: boolean;
+    Paused?: boolean;
+    Restarting?: boolean;
+    Dead?: boolean;
   } | null;
   HostConfig?: {
     Binds?: string[] | null;
+    Mounts?: Array<{
+      Type?: string;
+      Source?: string;
+      Target?: string;
+      ReadOnly?: boolean;
+      Consistency?: string;
+      BindOptions?: unknown;
+      VolumeOptions?: {
+        NoCopy?: boolean;
+        Labels?: Record<string, string> | null;
+        Subpath?: string;
+        DriverConfig?: unknown;
+      } | null;
+      TmpfsOptions?: {
+        SizeBytes?: number;
+        Mode?: number;
+        Options?: string[][] | null;
+      } | null;
+    }> | null;
     NetworkMode?: string;
+    PortBindings?: Record<string, Array<{ HostIp?: string; HostPort?: string }> | null> | null;
     RestartPolicy?: { Name?: string; MaximumRetryCount?: number } | null;
     CapAdd?: string[] | null;
     CapDrop?: string[] | null;
@@ -196,11 +259,18 @@ export type DockerContainerInspect = {
     CpuPeriod?: number;
     CpusetCpus?: string;
     CpusetMems?: string;
+    PidsLimit?: number | null;
+    ConsoleSize?: number[] | null;
     Privileged?: boolean;
     Init?: boolean;
     IpcMode?: string;
     PidMode?: string;
     GroupAdd?: string[] | null;
+    Ulimits?: Array<{
+      Name?: string;
+      Soft?: number;
+      Hard?: number;
+    }> | null;
     Dns?: string[] | null;
     DnsSearch?: string[] | null;
     DeviceRequests?: Array<{
@@ -208,6 +278,7 @@ export type DockerContainerInspect = {
       DeviceIDs?: string[] | null;
     }> | null;
     ShmSize?: number;
+    ReadonlyRootfs?: boolean;
     ReadonlyPaths?: string[] | null;
     MaskedPaths?: string[] | null;
   } | null;

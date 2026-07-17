@@ -1,20 +1,41 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   contractExceptionAllowlistErrors,
+  isSourceShapePathSkipped,
+  renderSourceShapeHuman,
+  renderSourceShapeJson,
+  renderSourceShapeMetrics,
+  runSourceShapeCommand,
   scanTextForTest,
   scanTextForTestReport,
   sourceShapeSummary,
-} from "../scripts/find-source-shape-tests";
+} from "../scripts/find-source-shape-tests.mts";
 
 function detectedCaseNames(source: string): string[] {
   return scanTextForTest("test/virtual-source-shape.test.ts", source).map((entry) => entry.name);
 }
 
 describe("source-shape scanner", () => {
+  it("skips the local nested worktree checkout container", () => {
+    const repoRoot = path.resolve(".");
+
+    expect(isSourceShapePathSkipped(path.join(repoRoot, "worktrees"))).toBe(true);
+    expect(
+      isSourceShapePathSkipped(
+        path.join(repoRoot, "worktrees", "feature", "test", "example.test.ts"),
+      ),
+    ).toBe(true);
+    expect(isSourceShapePathSkipped(path.join(repoRoot, "test", "example.test.ts"))).toBe(false);
+  });
+
   it("detects source reads through variable-declared arrow helpers", () => {
     const cases = detectedCaseNames(`
       import { readFileSync } from "node:fs";
@@ -664,5 +685,87 @@ describe("source-shape scanner", () => {
         allowed,
       ),
     ).toEqual([expect.stringContaining("duplicate source-shape exception identity")]);
+  });
+});
+
+describe("source-shape scanner output", () => {
+  function reportFor(source: string) {
+    const fileReport = scanTextForTestReport("test/virtual-source-shape.test.ts", source);
+    return { summary: sourceShapeSummary(fileReport), ...fileReport };
+  }
+
+  const source = `
+    import { readFileSync } from "node:fs";
+    import { expect, it } from "vitest";
+
+    it("mirrors source text", () => {
+      const sourceText = readFileSync("src/lib/example.ts", "utf8");
+      expect(sourceText).toContain("implementation detail");
+    });
+  `;
+
+  it("renders the human report and metrics from scan results", () => {
+    const output = renderSourceShapeHuman(reportFor(source));
+
+    expect(output).toContain("Detected 1 source-shape test cases:");
+    expect(output).toContain("test/virtual-source-shape.test.ts:");
+    expect(output).toContain("METRIC source_shape_cases=1");
+  });
+
+  it("renders a JSON report from scan results", () => {
+    const report = reportFor(source);
+
+    expect(JSON.parse(renderSourceShapeJson(report))).toEqual(report);
+  });
+
+  it("renders metrics without the human report", () => {
+    const output = renderSourceShapeMetrics(reportFor(source));
+
+    expect(output).toContain("METRIC source_shape_cases=1");
+    expect(output).not.toContain("Detected");
+  });
+
+  it("dispatches JSON output without running the budget check", () => {
+    const writeOutput = vi.fn();
+    const checkBudget = vi.fn();
+
+    runSourceShapeCommand(["--json"], reportFor(source), { writeOutput, checkBudget });
+
+    expect(writeOutput).toHaveBeenCalledOnce();
+    expect(JSON.parse(writeOutput.mock.calls[0]![0])).toEqual(reportFor(source));
+    expect(checkBudget).not.toHaveBeenCalled();
+  });
+
+  it("writes the human report before checking the budget", () => {
+    const writeOutput = vi.fn();
+    const checkBudget = vi.fn();
+
+    runSourceShapeCommand(["--check"], reportFor(source), { writeOutput, checkBudget });
+
+    expect(writeOutput).toHaveBeenCalledWith(
+      expect.stringContaining("METRIC source_shape_cases=1"),
+    );
+    expect(checkBudget).toHaveBeenCalledOnce();
+    expect(writeOutput.mock.invocationCallOrder[0]).toBeLessThan(
+      checkBudget.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not run the CLI when imported", () => {
+    const scriptUrl = pathToFileURL(path.resolve("scripts/find-source-shape-tests.mts")).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "-e",
+        `import(${JSON.stringify(scriptUrl)}).then(() => { console.log("IMPORT_ONLY_OK"); });`,
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("IMPORT_ONLY_OK");
+    expect(result.stdout).not.toContain("METRIC source_shape_cases=");
   });
 });

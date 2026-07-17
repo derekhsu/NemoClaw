@@ -5,8 +5,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import { type MockInstance, vi } from "vitest";
+import type { GatewayRestartResult } from "../../src/lib/actions/sandbox/gateway-restart";
+import { makePreparedRecoveryManifest } from "../../src/lib/actions/sandbox/rebuild-flow-test-fixtures";
+import { snapshotEnv } from "./rebuild-flow-test-support";
 
 type RebuildSandbox = typeof import("../../src/lib/actions/sandbox/rebuild")["rebuildSandbox"];
+
+export { makePreparedRecoveryManifest, snapshotEnv };
 
 const requireDist = createRequire(
   path.join(process.cwd(), "src/lib/actions/sandbox/rebuild-flow-harness.ts"),
@@ -35,6 +40,7 @@ const { rebuildOnboardDependencies } = requireDist("./rebuild-onboard-dependenci
 const onboardCredentialEnv = requireDist("../../onboard/credential-env.js");
 const onboardSession = requireDist("../../state/onboard-session.js");
 const registry = requireDist("../../state/registry.js");
+const registryPersistence = requireDist("../../state/registry/persistence.js");
 const sandboxState = requireDist("../../state/sandbox.js");
 const sandboxSession = requireDist("../../state/sandbox-session.js");
 const sandboxVersion = requireDist("../../sandbox/version.js");
@@ -51,6 +57,10 @@ const rebuildInference = requireDist("./rebuild-inference-preflight.js");
 const rebuildFlowHelpers = requireDist("./rebuild-flow-helpers.js");
 const rebuildManagedImage = requireDist("./rebuild-managed-image-preflight.js");
 const rebuildMessagingConflict = requireDist("./rebuild-messaging-conflict-preflight.js");
+const rebuildRoutePreflight = requireDist("./rebuild-preflight-guards.js");
+const gatewayTeardownAuthority = requireDist(
+  "../../onboard/gateway-teardown-authority.js",
+) as typeof import("../../src/lib/onboard/gateway-teardown-authority");
 const shields = requireDist("../../shields/index.js");
 
 type RebuildFlowStep = {
@@ -75,8 +85,29 @@ export type RebuildFlowSession = Record<string, unknown> & {
 
 export type RebuildFlowOverrides = {
   agentName?: string;
+  sessionAgentName?: string | null;
   applyPreset?: (presetName: string) => boolean;
+  captureOpenshell?: (
+    args: string[],
+    options?: Record<string, unknown>,
+  ) => {
+    status: number | null;
+    output?: string;
+    stdout?: string;
+    stderr?: string;
+    error?: Error;
+  };
   executeSandboxCommand?: () => { status: number; stdout: string; stderr: string } | null;
+  checkAndRecoverSandboxProcesses?: () => {
+    checked: boolean;
+    wasRunning: boolean | null;
+    recovered: boolean;
+    forwardRecovered: boolean;
+    forwardRecoveryFailed?: boolean;
+    secretBoundaryRefused?: boolean;
+    mcpReconciliationRefused?: boolean;
+  };
+  restartSandboxGateway?: () => GatewayRestartResult;
   onboard?: (session: RebuildFlowSession) => Promise<void> | void;
   repairMutableConfigPerms?: () =>
     | { applied: false; skipReason: "agent" | "locked" | "unreadable"; reason: string }
@@ -116,6 +147,9 @@ export type RebuildFlowOverrides = {
   openShieldsWindow?: () => { relocked: boolean; wasLocked: boolean } | null;
   preflightMessagingConflicts?: () => Promise<void> | void;
   preflightAuthoritativeRebuildTarget?: (options: Record<string, unknown>) => Promise<void> | void;
+  revalidateRebuildRouteBeforeDelete?: (
+    receipt: Record<string, unknown>,
+  ) => { ok: true; receipt: Record<string, unknown> } | { ok: false; message: string };
   mcpPreparation?: {
     entries: Array<Record<string, unknown>>;
     detachedProviderEntries: Array<Record<string, unknown>>;
@@ -129,9 +163,16 @@ export type RebuildFlowHarness = {
   applyPresetContentSpy: MockInstance;
   backupSandboxStateSpy: MockInstance;
   disposePreparedDcodeRebuildImageSpy: MockInstance;
+  dockerRmiSpy: MockInstance;
   errorSpy: MockInstance;
   ensureAgentBaseImageSpy: MockInstance;
+  pinTrustedAgentBaseImageOverrideForOperationSpy: MockInstance;
+  pinTrustedAgentRemoteBaseImageOverrideForOperationSpy: MockInstance;
+  restoreTrustedAgentBaseImageOverrideSpy: MockInstance;
+  restoreTrustedAgentRemoteBaseImageOverrideSpy: MockInstance;
   executeSandboxCommandSpy: MockInstance;
+  checkAndRecoverSandboxProcessesSpy: MockInstance;
+  restartSandboxGatewaySpy: MockInstance;
   ensureMessagingHostForwardAfterRebuildSpy: MockInstance;
   logSpy: MockInstance;
   finalizeIncompleteOnboardStepSpy: MockInstance;
@@ -149,6 +190,7 @@ export type RebuildFlowHarness = {
   restoreSandboxEntrySpy: MockInstance;
   restoreRegistryEntryIfMissingSpy: MockInstance;
   restoreSandboxStateSpy: MockInstance;
+  captureOpenshellSpy: MockInstance;
   runOpenshellSpy: MockInstance;
   messagingRebuildPlanSpy: MockInstance;
   prepareMcpBridgesForRebuildSpy: MockInstance;
@@ -158,25 +200,6 @@ export type RebuildFlowHarness = {
   preparedDcodeBuildContext: Record<string, unknown> & { cleanupBuildCtx: MockInstance };
   session: RebuildFlowSession;
 };
-
-// Snapshot the given env vars and return a restore fn that reinstates their
-// prior values exactly — vars that were unset stay unset, set ones are put back.
-// Branchless on purpose (filter, not conditional restore) so it both restores
-// worker state correctly and keeps the changed-test-file guardrail green.
-export function snapshotEnv(names: readonly string[]): () => void {
-  const saved = names.map((name) => [name, process.env[name]] as const);
-  return () => {
-    for (const [name] of saved) {
-      delete process.env[name];
-    }
-    Object.assign(
-      process.env,
-      Object.fromEntries(
-        saved.filter((entry): entry is [string, string] => entry[1] !== undefined),
-      ),
-    );
-  };
-}
 
 const restoreRebuildFlowEnv = snapshotEnv([
   "NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE",
@@ -198,12 +221,32 @@ function createStep(status: string): RebuildFlowStep {
   return { status, startedAt: null, completedAt: null, error: null };
 }
 
+function sourceSandboxGateway(argv: string[], verb: string): string | null {
+  const gatewayFlag = argv.indexOf("-g");
+  return argv[0] === "sandbox" && argv[1] === verb && argv.at(-1) === "alpha" && gatewayFlag > 0
+    ? (argv[gatewayFlag + 1] ?? null)
+    : null;
+}
+
 function createRebuildFlowSession(machineSnapshotVersion: number): RebuildFlowSession {
   return {
+    sessionId: "rebuild-flow-session",
+    updatedAt: "2026-06-01T00:00:00.000Z",
     sandboxName: "alpha",
+    agent: null,
     provider: "ollama-local",
     model: "nvidia/nemotron",
     credentialEnv: null,
+    checkpoint: null,
+    webSearchConfig: null,
+    resourceProfile: null,
+    messagingPlan: null,
+    sandboxPromptProgress: {
+      sandboxName: true,
+      webSearch: false,
+      messaging: false,
+      resourceProfile: false,
+    },
     metadata: {},
     hermesToolGateways: [],
     lastStepStarted: null,
@@ -265,8 +308,17 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
   const session = createRebuildFlowSession(onboardSession.MACHINE_SNAPSHOT_VERSION);
   const rebuildShieldsWindow = { relocked: false, wasLocked: false };
   const agentName = overrides.agentName ?? "openclaw";
+  const agentDisplayName =
+    agentName === "langchain-deepagents-code"
+      ? "Deep Agents Code"
+      : agentName === "hermes"
+        ? "Hermes Agent"
+        : "OpenClaw";
+  const agentBaseImageId = `sha256:${"a".repeat(64)}`;
+  const agentBaseImageRef = `nemoclaw-${agentName}-sandbox-base-local:image-${agentBaseImageId.slice("sha256:".length)}`;
   const agentDef = {
     name: agentName,
+    displayName: agentDisplayName,
     expectedVersion: "0.2.0",
     dockerfileBasePath: "/tmp/Dockerfile.base",
     runtime: { kind: "terminal" },
@@ -274,6 +326,18 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
 
   vi.spyOn(gatewayDrift, "detectOpenShellStateRpcPreflightIssue").mockReturnValue(null);
   vi.spyOn(gatewayDrift, "detectOpenShellStateRpcResultIssue").mockReturnValue(null);
+  vi.spyOn(gatewayTeardownAuthority, "resolveGatewayTeardownAuthority").mockImplementation(
+    ({ gatewayName, gatewayPort }: { gatewayName: string; gatewayPort: number }) => ({
+      gatewayName,
+      gatewayPort,
+      mode: "nemoclaw-managed",
+      source: "standalone",
+      endpoint: null,
+      stateDir: null,
+      supervisor: null,
+      requiredCapabilities: [],
+    }),
+  );
   vi.spyOn(sandboxList, "captureSandboxListWithGatewayRecovery").mockResolvedValue({
     result: { status: 0, output: overrides.sandboxListOutput ?? "alpha Ready" },
   });
@@ -283,22 +347,62 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     ok: true,
     imageTag: null,
   });
+  const imageIdsByRef = new Map([
+    [agentBaseImageRef, agentBaseImageId],
+    [agentBaseImageId, agentBaseImageId],
+  ]);
   const dcodeBaseImageIds = [...(overrides.dcodeBaseImageIds ?? [])];
-  vi.spyOn(dockerInspect, "dockerImageInspectFormat").mockImplementation((...args: unknown[]) =>
-    args[0] === "{{json .Config.Labels}}" && overrides.sandboxBaseImageLabelsOutput !== undefined
-      ? overrides.sandboxBaseImageLabelsOutput
-      : (dcodeBaseImageIds.shift() ?? "sha256:dcode-base"),
-  );
-  vi.spyOn(dockerImage, "dockerRmi").mockReturnValue({ status: 0 });
-  vi.spyOn(agentDefs, "loadAgent").mockReturnValue(agentDef);
-  const ensureAgentBaseImageSpy = vi.spyOn(agentOnboard, "ensureAgentBaseImage").mockReturnValue({
-    imageTag: `nemoclaw-${agentName}-base:test`,
-    built: true,
+  vi.spyOn(dockerInspect, "dockerImageInspectFormat").mockImplementation((...args: unknown[]) => {
+    if (
+      args[0] === "{{json .Config.Labels}}" &&
+      overrides.sandboxBaseImageLabelsOutput !== undefined
+    ) {
+      return overrides.sandboxBaseImageLabelsOutput;
+    }
+    if (args[0] === "{{.Id}}") {
+      const imageRef = String(args[1]);
+      if (imageRef === agentBaseImageRef && dcodeBaseImageIds.length > 0) {
+        return dcodeBaseImageIds.shift()!;
+      }
+      const imageId = imageIdsByRef.get(imageRef);
+      if (imageId) return imageId;
+    }
+    return dcodeBaseImageIds.shift() ?? "sha256:dcode-base";
   });
-  vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue({ name: agentName });
-  vi.spyOn(agentRuntime, "getAgentDisplayName").mockReturnValue(
-    agentName === "langchain-deepagents-code" ? "Deep Agents Code" : "OpenClaw",
+  const dockerRmiSpy = vi.spyOn(dockerImage, "dockerRmi").mockReturnValue({ status: 0 });
+  vi.spyOn(dockerImage, "dockerTag").mockImplementation((source: unknown, target: unknown) => {
+    const sourceRef = String(source);
+    const sourceId =
+      imageIdsByRef.get(sourceRef) ?? (sourceRef.startsWith("sha256:") ? sourceRef : null);
+    if (sourceId) imageIdsByRef.set(String(target), sourceId);
+    return { status: 0 };
+  });
+  vi.spyOn(agentDefs, "loadAgent").mockReturnValue(agentDef);
+  const trustedLocalOverride = {
+    ref: agentBaseImageRef,
+    provenance: `${"b".repeat(64)}.${"c".repeat(64)}`,
+  };
+  const ensureAgentBaseImageSpy = vi.spyOn(agentOnboard, "ensureAgentBaseImage").mockReturnValue({
+    imageTag: agentBaseImageRef,
+    built: true,
+    trustedLocalOverride,
+  });
+  const restoreTrustedAgentBaseImageOverrideSpy = vi.fn();
+  const pinTrustedAgentBaseImageOverrideForOperationSpy = vi
+    .spyOn(agentOnboard, "pinTrustedAgentBaseImageOverrideForOperation")
+    .mockReturnValue(restoreTrustedAgentBaseImageOverrideSpy);
+  const restoreTrustedAgentRemoteBaseImageOverrideSpy = vi.fn();
+  const pinTrustedAgentRemoteBaseImageOverrideForOperationSpy = vi
+    .spyOn(agentOnboard, "pinTrustedAgentRemoteBaseImageOverrideForOperation")
+    .mockReturnValue(restoreTrustedAgentRemoteBaseImageOverrideSpy);
+  const sessionAgentName =
+    overrides.sessionAgentName === undefined ? agentName : overrides.sessionAgentName;
+  vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(
+    sessionAgentName === null || sessionAgentName === "openclaw"
+      ? null
+      : ({ name: sessionAgentName } as never),
   );
+  vi.spyOn(agentRuntime, "getAgentDisplayName").mockReturnValue(agentDisplayName);
   vi.spyOn(gatewayRuntime, "recoverNamedGatewayRuntime").mockImplementation(
     async (...args: unknown[]) => {
       const gatewayName =
@@ -357,7 +461,7 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     ) as never;
   });
   let registryLoadCount = 0;
-  vi.spyOn(registry, "load").mockImplementation(() => {
+  vi.spyOn(registryPersistence, "load").mockImplementation(() => {
     const isPreDeleteRead = registryLoadCount > 0;
     registryLoadCount++;
     return {
@@ -372,6 +476,42 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
   });
   vi.spyOn(registry, "listSandboxes").mockReturnValue({ sandboxes: [] });
   const registryUpdateSpy = vi.spyOn(registry, "updateSandbox").mockReturnValue(true);
+  vi.spyOn(rebuildRoutePreflight, "commitRebuildRoutePreflight").mockImplementation(
+    (...args: unknown[]) => {
+      const input = args[0] as {
+        sandboxName: string;
+        gatewayName: string;
+        targetUpdate: Record<string, unknown>;
+      };
+      if (!registry.updateSandbox(input.sandboxName, input.targetUpdate)) {
+        return {
+          ok: false,
+          message: "Sandbox registry entry disappeared during rebuild route preflight.",
+        };
+      }
+      return {
+        ok: true,
+        receipt: {
+          sandboxName: input.sandboxName,
+          gatewayName: input.gatewayName,
+          route: {
+            provider: input.targetUpdate.provider ?? null,
+            model: input.targetUpdate.model ?? null,
+            endpointUrl: input.targetUpdate.endpointUrl ?? null,
+            preferredInferenceApi: input.targetUpdate.preferredInferenceApi ?? null,
+            credentialEnv: input.targetUpdate.credentialEnv ?? null,
+          },
+          migratedSandboxNames: [],
+        },
+      };
+    },
+  );
+  vi.spyOn(rebuildRoutePreflight, "revalidateRebuildRouteBeforeDelete").mockImplementation(
+    (...args: unknown[]) => {
+      const receipt = args[0] as Record<string, unknown>;
+      return overrides.revalidateRebuildRouteBeforeDelete?.(receipt) ?? { ok: true, receipt };
+    },
+  );
   const restoreSandboxEntrySpy = vi
     .spyOn(registry, "restoreSandboxEntry")
     .mockImplementation(() => undefined);
@@ -467,8 +607,43 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
           failedFiles: [],
         })),
     );
+  const captureOpenshellSpy = vi
+    .spyOn(openshellRuntime, "captureOpenshell")
+    .mockImplementation((args: unknown, options?: unknown) => {
+      const argv = Array.isArray(args) ? args.map(String) : [];
+      if (overrides.captureOpenshell) {
+        return overrides.captureOpenshell(argv, options as Record<string, unknown> | undefined);
+      }
+      const probedGateway = sourceSandboxGateway(argv, "get");
+      const liveSource = "Name: alpha\nId: sbx-alpha-source\nPhase: Ready\n";
+      return probedGateway && !deletedSourceGateways.has(probedGateway)
+        ? { status: 0, output: liveSource, stdout: liveSource, stderr: "" }
+        : {
+            status: 1,
+            output: "",
+            stdout: "",
+            stderr: "Error: sandbox alpha not found",
+          };
+    });
+  const deletedSourceGateways = new Set<string>();
   const runOpenshellSpy = vi.spyOn(openshellRuntime, "runOpenshell").mockImplementation((args) => {
     const argv = args as string[];
+    const deleteGateway = sourceSandboxGateway(argv, "delete");
+    if (deleteGateway) {
+      deletedSourceGateways.add(deleteGateway);
+      return { status: 0, output: "" };
+    }
+    if (
+      argv.join(" ") === "sandbox get alpha" ||
+      argv.join(" ") === "sandbox get -g nemoclaw alpha"
+    ) {
+      return {
+        status: 1,
+        output: "sandbox alpha not found",
+        stdout: "",
+        stderr: "sandbox alpha not found",
+      };
+    }
     return argv[0] === "provider" && argv[1] === "get"
       ? {
           status: 0,
@@ -579,6 +754,28 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     .mockImplementation(
       overrides.executeSandboxCommand ?? (() => ({ status: 0, stdout: "doctor ok", stderr: "" })),
     );
+  const checkAndRecoverSandboxProcessesSpy = vi
+    .spyOn(processRecovery, "checkAndRecoverSandboxProcesses")
+    .mockImplementation(
+      overrides.checkAndRecoverSandboxProcesses ??
+        (() => ({
+          checked: true,
+          wasRunning: true,
+          recovered: false,
+          forwardRecovered: false,
+        })),
+    );
+  const restartSandboxGatewaySpy = vi
+    .spyOn(processRecovery, "restartSandboxGateway")
+    .mockImplementation(
+      overrides.restartSandboxGateway ??
+        (() => ({
+          ok: true,
+          restarted: true,
+          healthPassed: true,
+          forwardRecovered: false,
+        })),
+    );
   vi.spyOn(shields, "repairMutableConfigPerms").mockImplementation(
     overrides.repairMutableConfigPerms ?? (() => ({ applied: true, verified: true, errors: [] })),
   );
@@ -626,9 +823,16 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     applyPresetContentSpy,
     backupSandboxStateSpy,
     disposePreparedDcodeRebuildImageSpy,
+    dockerRmiSpy,
     errorSpy,
     ensureAgentBaseImageSpy,
+    pinTrustedAgentBaseImageOverrideForOperationSpy,
+    pinTrustedAgentRemoteBaseImageOverrideForOperationSpy,
+    restoreTrustedAgentBaseImageOverrideSpy,
+    restoreTrustedAgentRemoteBaseImageOverrideSpy,
     executeSandboxCommandSpy,
+    checkAndRecoverSandboxProcessesSpy,
+    restartSandboxGatewaySpy,
     ensureMessagingHostForwardAfterRebuildSpy,
     logSpy,
     finalizeIncompleteOnboardStepSpy,
@@ -646,6 +850,7 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     restoreSandboxEntrySpy,
     restoreRegistryEntryIfMissingSpy,
     restoreSandboxStateSpy,
+    captureOpenshellSpy,
     runOpenshellSpy,
     messagingRebuildPlanSpy,
     prepareMcpBridgesForRebuildSpy,
@@ -654,24 +859,5 @@ export function createRebuildFlowHarness(overrides: RebuildFlowOverrides = {}): 
     warnUnpreservedUserManagedFilesSpy,
     preparedDcodeBuildContext,
     session,
-  };
-}
-
-export function makePreparedRecoveryManifest() {
-  return {
-    version: 1,
-    sandboxName: "alpha",
-    timestamp: "2026-07-01T06-50-42-044Z",
-    agentType: "openclaw",
-    agentVersion: "0.1.0",
-    expectedVersion: "0.2.0",
-    stateDirs: ["workspace"],
-    backedUpDirs: ["workspace"],
-    stateFiles: [],
-    dir: "/sandbox/.openclaw",
-    backupPath: "/tmp/rebuild-backups/alpha/2026-07-01T06-50-42-044Z",
-    blueprintDigest: null,
-    policyPresets: ["npm"],
-    customPolicies: [],
   };
 }

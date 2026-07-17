@@ -141,6 +141,30 @@ describe("remote dashboard bind production lifecycle", () => {
     }
   });
 
+  it("rejects config rewrites appended to checked-in metadata validation (#6024)", () => {
+    vi.stubEnv("NEMOCLAW_DASHBOARD_BIND", "0.0.0.0");
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-remote-bind-metadata-"));
+    const dockerfile = path.join(directory, "Dockerfile");
+    const stockDockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
+    const metadataTail =
+      "    && check_metadata /usr/local/lib/nemoclaw/preloads/sandbox-safety-net.js 'root:root:644'";
+    const mutatedDockerfile = stockDockerfile.replace(
+      metadataTail,
+      `${metadataTail} \\
+    && printf '{}' > /sandbox/.openclaw/openclaw.json`,
+    );
+    fs.writeFileSync(dockerfile, mutatedDockerfile);
+
+    try {
+      expect(() =>
+        patchStagedDockerfile(dockerfile, "test-model", "http://127.0.0.1:18789"),
+      ).toThrow(/preserve the generated remote dashboard output/);
+      expect(hasPreparedRemoteDashboardBind(dockerfile)).toBe(false);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("carries the audited remote-exposure signal through image and sandbox creation (#6024)", () => {
     vi.stubEnv("NEMOCLAW_DASHBOARD_BIND", "0.0.0.0");
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-remote-bind-"));
@@ -182,6 +206,7 @@ describe("remote dashboard bind production lifecycle", () => {
           credentialEnv: null,
           preferredInferenceApi: null,
           compatibleEndpointReasoning: null,
+          compatibleEndpointReasoningEffort: null,
           nimContainer: null,
         },
         runtimeFields: {

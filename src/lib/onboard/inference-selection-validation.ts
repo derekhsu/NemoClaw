@@ -3,6 +3,7 @@
 
 import { getCredential } from "../credentials/store";
 import { getCompatibleAnthropicOpenAiSurfaceBaseUrl } from "../inference/config";
+import type { TrustedPrivateEndpointCapability } from "../inference/endpoint-ssrf-preflight";
 import type { OnboardInferenceCapabilityCache } from "./inference-capability-cache";
 
 const { probeAnthropicEndpoint, probeOpenAiLikeEndpointOptimized } =
@@ -11,7 +12,11 @@ const { probeAnthropicEndpoint, probeOpenAiLikeEndpointOptimized } =
       endpointUrl: string,
       model: string,
       apiKey: string | null | undefined,
-      options?: { probeStreaming?: boolean; pinnedAddresses?: readonly string[] },
+      options?: {
+        probeStreaming?: boolean;
+        pinnedAddresses?: readonly string[];
+        trustedPrivateCapability?: TrustedPrivateEndpointCapability;
+      },
     ): any;
     probeOpenAiLikeEndpointOptimized(
       endpointUrl: string,
@@ -31,6 +36,7 @@ type OpenAiLikeProbe = (
 import {
   assertEndpointResolvesPublic,
   type EndpointDnsLookupFn,
+  parseTrustedPrivateInferenceHostsFromEnv,
 } from "../inference/endpoint-ssrf-preflight";
 import { shouldForceCompletionsApi } from "../validation";
 import { getProbeRecovery } from "../validation-recovery";
@@ -44,6 +50,8 @@ export type EndpointValidationResult =
       retry?: undefined;
       /** Public addresses approved for this custom endpoint's host probes. */
       pinnedAddresses?: string[];
+      /** Non-forgeable proof of the exact host and complete pins admitted by the operator allowlist. */
+      trustedPrivateCapability?: TrustedPrivateEndpointCapability;
     }
   | { ok: false; retry: "credential" | "selection" | "retry" | "model"; api?: undefined };
 
@@ -55,6 +63,8 @@ export interface InferenceSelectionValidationDeps {
   probeOpenAiLikeEndpoint?: OpenAiLikeProbe;
   /** Injectable DNS resolver for the custom-endpoint SSRF preflight (tests). */
   resolveEndpointHost?: EndpointDnsLookupFn;
+  /** Exact private endpoint hosts trusted by the operator (tests may inject this). */
+  trustedPrivateEndpointHosts?: readonly string[];
   promptValidationRecovery(
     label: string,
     recovery: ReturnType<typeof getProbeRecovery>,
@@ -72,6 +82,11 @@ export interface InferenceSelectionValidationHelpers {
     retryMessage?: string,
     helpUrl?: string | null,
     options?: {
+      /** In-memory credential for managed local endpoints; never read from ambient env. */
+      apiKey?: string | null;
+      /** Approved no-DNS endpoint pin; [] also disables ambient proxies for managed IP URLs. */
+      pinnedAddresses?: readonly string[];
+      trustedPrivateCapability?: TrustedPrivateEndpointCapability;
       authMode?: "bearer" | "query-param";
       extraHeaders?: readonly string[];
       requireResponsesToolCalling?: boolean;
@@ -79,6 +94,7 @@ export interface InferenceSelectionValidationHelpers {
       skipResponsesProbe?: boolean;
       probeStreaming?: boolean;
       allowHostDockerInternal?: boolean;
+      probeFromDocker?: { expectedPort: number } | null;
       capabilityCache?: OnboardInferenceCapabilityCache;
     },
   ): Promise<EndpointValidationResult>;
@@ -96,6 +112,7 @@ export interface InferenceSelectionValidationHelpers {
     model: string,
     credentialEnv: string,
     helpUrl?: string | null,
+    capabilityCache?: OnboardInferenceCapabilityCache,
   ): Promise<EndpointValidationResult>;
   validateCustomAnthropicSelection(
     label: string,
@@ -124,6 +141,8 @@ export function createInferenceSelectionValidationHelpers(
   const resolveCredential = deps.getCredential ?? getCredential;
   const runAnthropicProbe = deps.probeAnthropicEndpoint ?? probeAnthropicEndpoint;
   const runOpenAiLikeProbe = deps.probeOpenAiLikeEndpoint ?? probeOpenAiLikeEndpointOptimized;
+  const trustedPrivateEndpointHosts =
+    deps.trustedPrivateEndpointHosts ?? parseTrustedPrivateInferenceHostsFromEnv(process.env);
 
   function exitNonInteractiveValidationFailure(): never {
     process.exitCode = 1;
@@ -152,16 +171,37 @@ export function createInferenceSelectionValidationHelpers(
     endpointUrl: string,
     credentialEnv: string | null,
     helpUrl: string | null,
-  ): Promise<{ blocked: EndpointValidationResult } | { pinnedAddresses?: string[] }> {
-    // Always run the SSRF preflight. It defaults to the real dns/promises
-    // resolver; tests inject deps.resolveEndpointHost. No env-gated bypass — an
-    // ambient VITEST flag must never disable SSRF enforcement (cv review, #6293).
-    const preflight = await assertEndpointResolvesPublic(endpointUrl, deps.resolveEndpointHost);
+  ): Promise<
+    | { blocked: EndpointValidationResult }
+    | {
+        pinnedAddresses?: string[];
+        trustedPrivateCapability?: TrustedPrivateEndpointCapability;
+      }
+  > {
+    // Always run the SSRF preflight. An explicit exact-host allowlist may admit
+    // an operator-owned private endpoint, but it does not skip DNS resolution,
+    // pinning, or fail-closed resolver handling (#6861).
+    const preflight = await assertEndpointResolvesPublic(endpointUrl, deps.resolveEndpointHost, {
+      trustedPrivateHosts: trustedPrivateEndpointHosts,
+    });
     // On success, carry the validated address set forward so the probe pins its
     // connection (curl --resolve) to a checked address; a second DNS lookup at
     // the probe could otherwise rebind to a private/internal address after this
     // public preflight (TOCTOU — cv review, #6293).
-    if (preflight.ok) return { pinnedAddresses: preflight.addresses };
+    if (preflight.ok) {
+      if (preflight.trustedPrivateEndpoint) {
+        console.warn(
+          "  ⚠ Using an operator-trusted private inference endpoint; keep " +
+            "trusted-private host configuration restricted to infrastructure you control.",
+        );
+      }
+      return {
+        pinnedAddresses: preflight.addresses,
+        ...(preflight.trustedPrivateCapability
+          ? { trustedPrivateCapability: preflight.trustedPrivateCapability }
+          : {}),
+      };
+    }
     const reason = preflight.reason ?? "endpoint resolves to a private/internal address";
     // A preflight failure because the host does not resolve (an unreachable /
     // non-existent endpoint) is a transport failure, not an endpoint-policy
@@ -211,6 +251,9 @@ export function createInferenceSelectionValidationHelpers(
     retryMessage = "Please choose a provider/model again.",
     helpUrl: string | null = null,
     options: {
+      apiKey?: string | null;
+      pinnedAddresses?: readonly string[];
+      trustedPrivateCapability?: TrustedPrivateEndpointCapability;
       authMode?: "bearer" | "query-param";
       extraHeaders?: readonly string[];
       requireResponsesToolCalling?: boolean;
@@ -218,16 +261,23 @@ export function createInferenceSelectionValidationHelpers(
       skipResponsesProbe?: boolean;
       probeStreaming?: boolean;
       allowHostDockerInternal?: boolean;
+      probeFromDocker?: { expectedPort: number } | null;
       capabilityCache?: OnboardInferenceCapabilityCache;
     } = {},
   ): Promise<EndpointValidationResult> {
-    const apiKey = credentialEnv ? resolveCredential(credentialEnv) : "";
+    const { apiKey: explicitApiKey, ...probeOptions } = options;
+    const apiKey =
+      explicitApiKey !== undefined
+        ? explicitApiKey
+        : credentialEnv
+          ? resolveCredential(credentialEnv)
+          : "";
     const probe = await runOpenAiLikeProbe(endpointUrl, model, apiKey, {
-      ...options,
+      ...probeOptions,
       calibrateTimeouts: true,
     });
     if (!probe.ok) {
-      options.capabilityCache?.invalidate();
+      probeOptions.capabilityCache?.invalidate();
       printValidationFailure(label, probe);
       if (deps.isNonInteractive()) {
         exitNonInteractiveValidationFailure();
@@ -251,12 +301,14 @@ export function createInferenceSelectionValidationHelpers(
     }
     const api = probe.api ?? "openai-completions";
     if (api === "openai-completions" && probe.validated !== false) {
-      options.capabilityCache?.rememberCompletedOpenAiChat({
+      probeOptions.capabilityCache?.rememberCompletedOpenAiChat({
         endpointUrl,
         model,
-        authMode: options.authMode,
-        requireChatCompletionsToolCalling: options.requireChatCompletionsToolCalling,
-        extraHeaders: options.extraHeaders,
+        authMode: probeOptions.authMode,
+        requireChatCompletionsToolCalling: probeOptions.requireChatCompletionsToolCalling,
+        extraHeaders: probeOptions.extraHeaders,
+        pinnedAddresses: probeOptions.pinnedAddresses,
+        trustedPrivateCapability: probeOptions.trustedPrivateCapability,
       });
     }
     return { ok: true, api };
@@ -299,6 +351,7 @@ export function createInferenceSelectionValidationHelpers(
     model: string,
     credentialEnv: string,
     helpUrl: string | null = null,
+    capabilityCache?: OnboardInferenceCapabilityCache,
   ): Promise<EndpointValidationResult> {
     const preflight = await preflightCustomEndpointOrFail(
       label,
@@ -307,7 +360,7 @@ export function createInferenceSelectionValidationHelpers(
       helpUrl,
     );
     if ("blocked" in preflight) return preflight.blocked;
-    const { pinnedAddresses } = preflight;
+    const { pinnedAddresses, trustedPrivateCapability } = preflight;
     const apiKey = resolveCredential(credentialEnv);
     const reasoningEnabled = normalizeReasoningFlag(process.env.NEMOCLAW_REASONING) === "true";
     // Reasoning-only compatible endpoints often reject Responses, tool-call, and streaming probes.
@@ -318,6 +371,7 @@ export function createInferenceSelectionValidationHelpers(
         reasoningEnabled || shouldForceCompletionsApi(process.env.NEMOCLAW_PREFERRED_API),
       probeStreaming: !reasoningEnabled,
       pinnedAddresses,
+      trustedPrivateCapability,
     });
     if (probe.ok) {
       if (probe.note) {
@@ -327,7 +381,21 @@ export function createInferenceSelectionValidationHelpers(
           `  ${probe.label} available — ${deps.agentProductName()} will use ${probe.api}.`,
         );
       }
-      return { ok: true, api: probe.api ?? "openai-completions", pinnedAddresses };
+      const api = probe.api ?? "openai-completions";
+      if (api === "openai-completions" && probe.validated !== false) {
+        capabilityCache?.rememberCompletedOpenAiChat({
+          endpointUrl,
+          model,
+          pinnedAddresses,
+          trustedPrivateCapability,
+        });
+      }
+      return {
+        ok: true,
+        api,
+        pinnedAddresses,
+        ...(trustedPrivateCapability ? { trustedPrivateCapability } : {}),
+      };
     }
     printValidationFailure(label, probe);
     if (deps.isNonInteractive()) {
@@ -363,7 +431,7 @@ export function createInferenceSelectionValidationHelpers(
       helpUrl,
     );
     if ("blocked" in preflight) return preflight.blocked;
-    const { pinnedAddresses } = preflight;
+    const { pinnedAddresses, trustedPrivateCapability } = preflight;
     const apiKey = resolveCredential(credentialEnv);
     const reasoningEnabled = normalizeReasoningFlag(process.env.NEMOCLAW_REASONING) === "true";
     const intendedApi = options.intendedApi ?? "anthropic-messages";
@@ -377,13 +445,19 @@ export function createInferenceSelectionValidationHelpers(
             getCompatibleAnthropicOpenAiSurfaceBaseUrl(endpointUrl),
             model,
             apiKey,
-            { calibrateTimeouts: true, skipResponsesProbe: true, pinnedAddresses },
+            {
+              calibrateTimeouts: true,
+              skipResponsesProbe: true,
+              pinnedAddresses,
+              trustedPrivateCapability,
+            },
           )
         : runAnthropicProbe(endpointUrl, model, apiKey, {
             // Reasoning-only compatible endpoints often reject streaming probes,
             // so mirror the custom OpenAI-compatible path and skip streaming.
             probeStreaming: !reasoningEnabled,
             pinnedAddresses,
+            trustedPrivateCapability,
           });
     if (probe.ok) {
       if (probe.note) {
@@ -393,7 +467,12 @@ export function createInferenceSelectionValidationHelpers(
           `  ${probe.label} available — ${deps.agentProductName()} will use ${intendedApi}.`,
         );
       }
-      return { ok: true, api: intendedApi, pinnedAddresses };
+      return {
+        ok: true,
+        api: intendedApi,
+        pinnedAddresses,
+        ...(trustedPrivateCapability ? { trustedPrivateCapability } : {}),
+      };
     }
     printValidationFailure(label, probe);
     const recovery = getProbeRecovery(probe, { allowModelRetry: true });

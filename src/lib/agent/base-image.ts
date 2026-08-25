@@ -43,6 +43,10 @@ import {
 } from "../sandbox-base-image";
 import { createDeepAgentsCodeBaseImageResolutionOptions } from "./deep-agents-code-base-image";
 import type { AgentDefinition } from "./defs";
+import {
+  isOfficialHermesBaseImageRef,
+  readHermesPinnedBaseImageRef,
+} from "./hermes-base-image-pin";
 
 function corporateCaBuildArgs(
   env: NodeJS.ProcessEnv = process.env,
@@ -54,10 +58,6 @@ function corporateCaBuildArgs(
 }
 
 const HERMES_MCP_RUNTIME_PROBE_OK = "nemoclaw-hermes-mcp-runtime-ok";
-// Matches the official Hermes base repository for both Dockerfile manifest-list
-// pins and Docker-normalized platform manifest digests.
-const HERMES_OFFICIAL_BASE_DIGEST_REF =
-  /^ghcr\.io\/nvidia\/nemoclaw\/hermes-sandbox-base@sha256:[0-9a-f]{64}$/;
 
 export interface EnsureAgentBaseImageOptions {
   forceBaseImageRebuild?: boolean;
@@ -186,24 +186,7 @@ function getHermesPinnedRemoteBaseRef(agent: AgentDefinition): string | null {
   if (!finalDockerfile) {
     throw new Error("Hermes is missing its final sandbox Dockerfile");
   }
-  let dockerfile: string;
-  try {
-    dockerfile = fs.readFileSync(finalDockerfile, "utf8");
-  } catch (error) {
-    throw new Error(`Failed to read Hermes final Dockerfile: ${finalDockerfile}`, {
-      cause: error,
-    });
-  }
-  const declarations = [...dockerfile.matchAll(/^ARG BASE_IMAGE=(\S+)$/gm)].map(
-    (match) => match[1],
-  );
-  const pinnedRef = declarations.length === 1 ? declarations[0] : null;
-  if (!pinnedRef || !HERMES_OFFICIAL_BASE_DIGEST_REF.test(pinnedRef)) {
-    throw new Error(
-      "Hermes final Dockerfile must declare exactly one immutable official sandbox base image",
-    );
-  }
-  return pinnedRef;
+  return readHermesPinnedBaseImageRef(finalDockerfile);
 }
 
 /**
@@ -229,7 +212,7 @@ function hermesFinalDockerfileAcceptsBase(
     typeof image !== "string" &&
     image.source === "pinned" &&
     image.pinnedRemoteRef === getHermesPinnedRemoteBaseRef(agent) &&
-    HERMES_OFFICIAL_BASE_DIGEST_REF.test(imageRef)
+    isOfficialHermesBaseImageRef(imageRef)
   ) {
     return true;
   }
@@ -314,9 +297,7 @@ export function bindLocalAgentBaseImageToPinnedProvenance(
   const pinnedRepoDigests = Array.isArray(pinned?.RepoDigests)
     ? pinned.RepoDigests.map(String)
     : [];
-  const resolvedRemoteRef = pinnedRepoDigests.find((ref) =>
-    HERMES_OFFICIAL_BASE_DIGEST_REF.test(ref),
-  );
+  const resolvedRemoteRef = pinnedRepoDigests.find((ref) => isOfficialHermesBaseImageRef(ref));
   if (
     !localId ||
     localId !== pinnedId ||

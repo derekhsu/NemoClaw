@@ -3,7 +3,106 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { runImageBuild } from "./build";
+import { resolveDefaultImageBuildBaseImage, runImageBuild } from "./build";
+
+const hermesBase = "ghcr.io/nvidia/nemoclaw/hermes-sandbox-base";
+const hermesPin = `${hermesBase}@sha256:${"1".repeat(64)}`;
+const hermesPlatformRef = `${hermesBase}@sha256:${"2".repeat(64)}`;
+
+describe("resolveDefaultImageBuildBaseImage", () => {
+  it("prefers the reviewed Hermes pin and uses the Hermes base Dockerfile", async () => {
+    const resolve = vi.fn().mockReturnValue({
+      ref: hermesPlatformRef,
+      digest: `sha256:${"2".repeat(64)}`,
+      source: "pinned",
+      glibcVersion: "2.41",
+    });
+    const readPin = vi.fn().mockReturnValue(hermesPin);
+    const validate = vi.fn(() => true);
+
+    await expect(
+      resolveDefaultImageBuildBaseImage(
+        {
+          agent: "hermes",
+          dockerfilePath: "/repo/agents/hermes/Dockerfile",
+          baseDockerfilePath: "/repo/agents/hermes/Dockerfile.base",
+          baseImageName: hermesBase,
+          repoRoot: "/repo",
+        },
+        {
+          resolveSandboxBaseImage: resolve,
+          readHermesPinnedBaseImageRef: readPin,
+          validateHermesBaseImage: validate,
+        },
+      ),
+    ).resolves.toBe(hermesPlatformRef);
+
+    expect(readPin).toHaveBeenCalledWith("/repo/agents/hermes/Dockerfile");
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageName: hermesBase,
+        dockerfilePath: "/repo/agents/hermes/Dockerfile.base",
+        inputPaths: ["/repo/agents/hermes/Dockerfile"],
+        pinnedRemoteRef: hermesPin,
+        preferPinnedRemoteRef: true,
+        rootDir: "/repo",
+        validateImage: validate,
+      }),
+    );
+  });
+
+  it("keeps the OpenClaw repository and uses the OpenClaw base Dockerfile", async () => {
+    const openclawRef = "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc";
+    const resolve = vi.fn().mockReturnValue({
+      ref: openclawRef,
+      digest: "sha256:abc",
+      source: "latest",
+      glibcVersion: "2.41",
+    });
+
+    await expect(
+      resolveDefaultImageBuildBaseImage(
+        {
+          agent: "openclaw",
+          dockerfilePath: "/repo/Dockerfile",
+          baseDockerfilePath: "/repo/Dockerfile.base",
+          baseImageName: "ghcr.io/nvidia/nemoclaw/sandbox-base",
+          repoRoot: "/repo",
+        },
+        { resolveSandboxBaseImage: resolve },
+      ),
+    ).resolves.toBe(openclawRef);
+
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageName: "ghcr.io/nvidia/nemoclaw/sandbox-base",
+        dockerfilePath: "/repo/Dockerfile.base",
+        localTag: "ghcr.io/nvidia/nemoclaw/sandbox-base:local",
+        rootDir: "/repo",
+      }),
+    );
+    expect(resolve.mock.calls[0]?.[0]).not.toHaveProperty("pinnedRemoteRef");
+  });
+
+  it("rejects a missing compatible Hermes base before the final image build", async () => {
+    await expect(
+      resolveDefaultImageBuildBaseImage(
+        {
+          agent: "hermes",
+          dockerfilePath: "/repo/agents/hermes/Dockerfile",
+          baseDockerfilePath: "/repo/agents/hermes/Dockerfile.base",
+          baseImageName: hermesBase,
+          repoRoot: "/repo",
+        },
+        {
+          resolveSandboxBaseImage: vi.fn().mockReturnValue(null),
+          readHermesPinnedBaseImageRef: vi.fn().mockReturnValue(hermesPin),
+          validateHermesBaseImage: vi.fn(() => false),
+        },
+      ),
+    ).rejects.toThrow("Unable to resolve a compatible hermes base image");
+  });
+});
 
 describe("runImageBuild", () => {
   it("honors an explicit --base-image override and returns JSON metadata", async () => {
@@ -128,7 +227,14 @@ describe("runImageBuild", () => {
         dockerBuild,
       },
     );
-    expect(resolveBaseImage).toHaveBeenCalled();
+    expect(resolveBaseImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "openclaw",
+        dockerfilePath: "/repo/Dockerfile",
+        baseDockerfilePath: "/repo/Dockerfile.base",
+        baseImageName: "ghcr.io/nvidia/nemoclaw/sandbox-base",
+      }),
+    );
     expect(dockerBuild).toHaveBeenCalledWith(
       expect.objectContaining({
         baseImage: "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:abc",

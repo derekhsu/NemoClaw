@@ -3,8 +3,11 @@
 
 import path from "node:path";
 
+import { hermesBaseImageSupportsMcp } from "../agent/base-image";
+import { readHermesPinnedBaseImageRef } from "../agent/hermes-base-image-pin";
 import { dockerBuild as adapterDockerBuild, dockerImageInspectFormat } from "../adapters/docker";
-import { resolveSandboxBaseImage, OPENCLAW_SANDBOX_BASE_IMAGE } from "../sandbox-base-image";
+import { type ResolveBaseImageOptions, resolveSandboxBaseImage } from "../sandbox-base-image";
+import { resolveAgentImageDefinition } from "./agent-image-definition";
 import {
   resolveSourceCommit,
   stageImageBuildContext,
@@ -40,12 +43,20 @@ export type DockerBuildResult = {
 export type ResolveBaseImageInput = {
   agent: string;
   dockerfilePath: string;
+  baseDockerfilePath: string;
+  baseImageName: string;
   repoRoot: string;
+};
+
+export type ResolveDefaultImageBuildBaseImageDeps = {
+  resolveSandboxBaseImage?: typeof resolveSandboxBaseImage;
+  readHermesPinnedBaseImageRef?: typeof readHermesPinnedBaseImageRef;
+  validateHermesBaseImage?: typeof hermesBaseImageSupportsMcp;
 };
 
 export type ImageBuildDeps = {
   stageImageBuildContext?: typeof stageImageBuildContext;
-  resolveBaseImage?: (input: ResolveBaseImageInput) => Promise<string | null>;
+  resolveBaseImage?: (input: ResolveBaseImageInput) => Promise<string>;
   dockerBuild?: (input: DockerBuildInput) => Promise<DockerBuildResult>;
   dockerPush?: (tag: string) => Promise<string | null>;
 };
@@ -65,23 +76,27 @@ export async function runImageBuild(
   deps: ImageBuildDeps = {},
 ): Promise<ImageBuildResult> {
   const agent = String(flags.agent ?? "openclaw");
+  const repoRoot = process.cwd();
+  const imageDefinition = resolveAgentImageDefinition(agent, repoRoot);
   const stage = deps.stageImageBuildContext ?? stageImageBuildContext;
   const staged: StageImageBuildContextResult = await stage({
     agent,
-    repoRoot: process.cwd(),
+    repoRoot,
     outputDir: `/tmp/nemoclaw-image-stage/${agent}`,
-    sourceCommit: resolveSourceCommit(process.cwd()),
+    sourceCommit: resolveSourceCommit(repoRoot),
   });
 
   // Use explicit --base-image override when supplied; otherwise resolve a
   // default base image via the shared sandbox-base-image policy.
   let baseImage: string | null = flags["base-image"] ?? null;
   if (!baseImage) {
-    const resolve = deps.resolveBaseImage ?? defaultResolveBaseImage;
+    const resolve = deps.resolveBaseImage ?? resolveDefaultImageBuildBaseImage;
     baseImage = await resolve({
       agent,
       dockerfilePath: staged.dockerfile,
-      repoRoot: process.cwd(),
+      baseDockerfilePath: staged.baseDockerfile,
+      baseImageName: imageDefinition.baseImageName,
+      repoRoot,
     });
   }
 
@@ -116,14 +131,33 @@ export async function runImageBuild(
   };
 }
 
-async function defaultResolveBaseImage(input: ResolveBaseImageInput): Promise<string | null> {
-  const imageName = OPENCLAW_SANDBOX_BASE_IMAGE;
-  const resolution = resolveSandboxBaseImage({
-    imageName,
-    dockerfilePath: input.dockerfilePath,
-    localTag: `${imageName}:local`,
-  });
-  return resolution?.ref ?? null;
+export async function resolveDefaultImageBuildBaseImage(
+  input: ResolveBaseImageInput,
+  deps: ResolveDefaultImageBuildBaseImageDeps = {},
+): Promise<string> {
+  const options: ResolveBaseImageOptions = {
+    imageName: input.baseImageName,
+    dockerfilePath: input.baseDockerfilePath,
+    localTag: `${input.baseImageName}:local`,
+    requireOpenshellSandboxAbi: process.platform === "linux",
+    rootDir: input.repoRoot,
+  };
+  if (input.agent === "hermes") {
+    const readPin = deps.readHermesPinnedBaseImageRef ?? readHermesPinnedBaseImageRef;
+    const validate = deps.validateHermesBaseImage ?? hermesBaseImageSupportsMcp;
+    const pinnedRemoteRef = readPin(input.dockerfilePath);
+    options.inputPaths = [input.dockerfilePath];
+    options.pinnedRemoteRef = pinnedRemoteRef;
+    options.preferPinnedRemoteRef = true;
+    options.validateImage = validate;
+    options.validationDescription = "the required MCP Streamable HTTP runtime";
+  }
+  const resolve = deps.resolveSandboxBaseImage ?? resolveSandboxBaseImage;
+  const resolution = resolve(options);
+  if (!resolution) {
+    throw new Error(`Unable to resolve a compatible ${input.agent} base image.`);
+  }
+  return resolution.ref;
 }
 
 async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildResult> {

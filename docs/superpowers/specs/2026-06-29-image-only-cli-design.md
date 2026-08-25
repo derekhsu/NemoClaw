@@ -351,15 +351,17 @@ override.
 
 ### Default behavior
 
-When the caller does not pass an override, the CLI should reuse NemoClaw's
-existing base-image resolution policy for the selected agent. In practice this
-means:
+When the caller does not pass an override, the CLI resolves the selected agent's base image.
+OpenClaw uses `ghcr.io/nvidia/nemoclaw/sandbox-base` and the root `Dockerfile.base`.
+Hermes prefers the reviewed immutable digest from `agents/hermes/Dockerfile` and uses `agents/hermes/Dockerfile.base` for a permitted local fallback.
+The Hermes resolver verifies the required Model Context Protocol runtime before it accepts a candidate.
 
-- respect the Dockerfile family for the selected agent
-- reuse the existing digest/tag fallback chain where NemoClaw already has one
-- avoid prompting
-- log which ref was chosen in human mode
-- emit the chosen base-image ref in JSON mode
+The default path:
+
+- respects the Dockerfile family for the selected agent
+- rejects a missing or invalid Hermes pin before the final image build
+- avoids prompting
+- emits the chosen base image reference in JSON mode
 
 The image-only flow must remain non-interactive by default.
 

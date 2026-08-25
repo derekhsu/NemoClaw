@@ -32,6 +32,7 @@ describe("resolveAgentImageDefinition", () => {
     expect(def.dockerfilePath).toBe(path.join(tmpDir, "Dockerfile"));
     expect(def.baseDockerfilePath).toBe(path.join(tmpDir, "Dockerfile.base"));
     expect(def.contextRoot).toBe(tmpDir);
+    expect(def.baseImageName).toBe("ghcr.io/nvidia/nemoclaw/sandbox-base");
   });
 
   it("maps hermes to the hermes Dockerfile family", () => {
@@ -46,6 +47,7 @@ describe("resolveAgentImageDefinition", () => {
     expect(def.dockerfilePath).toBe(path.join(hermesDir, "Dockerfile"));
     expect(def.baseDockerfilePath).toBe(path.join(hermesDir, "Dockerfile.base"));
     expect(def.contextRoot).toBe(tmpDir);
+    expect(def.baseImageName).toBe("ghcr.io/nvidia/nemoclaw/hermes-sandbox-base");
   });
 
   it("throws a clear error when the selected agent sources are missing", () => {

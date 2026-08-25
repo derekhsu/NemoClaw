@@ -4,6 +4,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { HERMES_SANDBOX_BASE_IMAGE } from "../agent/hermes-base-image-pin";
+import { OPENCLAW_SANDBOX_BASE_IMAGE } from "../sandbox-base-image/types";
+
 export class MissingAgentImageSourcesError extends Error {
   constructor(agent: string, repoRoot: string) {
     super(
@@ -25,6 +28,7 @@ export type AgentImageDefinition = {
   dockerfilePath: string;
   baseDockerfilePath: string;
   contextRoot: string;
+  baseImageName: string;
 };
 
 export function resolveAgentImageDefinition(agent: string, repoRoot: string): AgentImageDefinition {
@@ -34,7 +38,13 @@ export function resolveAgentImageDefinition(agent: string, repoRoot: string): Ag
     if (!fs.existsSync(dockerfilePath) || !fs.existsSync(baseDockerfilePath)) {
       throw new MissingAgentImageSourcesError(agent, repoRoot);
     }
-    return { agent, dockerfilePath, baseDockerfilePath, contextRoot: repoRoot };
+    return {
+      agent,
+      dockerfilePath,
+      baseDockerfilePath,
+      contextRoot: repoRoot,
+      baseImageName: OPENCLAW_SANDBOX_BASE_IMAGE,
+    };
   }
   if (agent === "hermes") {
     const hermesRoot = path.join(repoRoot, "agents", "hermes");
@@ -43,7 +53,13 @@ export function resolveAgentImageDefinition(agent: string, repoRoot: string): Ag
     if (!fs.existsSync(dockerfilePath) || !fs.existsSync(baseDockerfilePath)) {
       throw new MissingAgentImageSourcesError(agent, repoRoot);
     }
-    return { agent, dockerfilePath, baseDockerfilePath, contextRoot: repoRoot };
+    return {
+      agent,
+      dockerfilePath,
+      baseDockerfilePath,
+      contextRoot: repoRoot,
+      baseImageName: HERMES_SANDBOX_BASE_IMAGE,
+    };
   }
   throw new UnknownAgentError(agent);
 }

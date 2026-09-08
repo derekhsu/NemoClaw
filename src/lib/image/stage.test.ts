@@ -151,8 +151,8 @@ describe("stageImageBuildContext", () => {
   it("stages hermes agent sources from agents/hermes/", async () => {
     const hermesRoot = path.join(repoRoot, "agents", "hermes");
     fs.mkdirSync(hermesRoot, { recursive: true });
-    fs.writeFileSync(path.join(hermesRoot, "Dockerfile"), "FROM scratch\n");
-    fs.writeFileSync(path.join(hermesRoot, "Dockerfile.base"), "FROM scratch\n");
+    fs.writeFileSync(path.join(hermesRoot, "Dockerfile"), "FROM hermes\n");
+    fs.writeFileSync(path.join(hermesRoot, "Dockerfile.base"), "FROM hermes-base\n");
     fs.writeFileSync(path.join(hermesRoot, "hermes-config.json"), "{}");
 
     const outputDir = path.join(outputBase, "hermes-ctx");
@@ -165,6 +165,12 @@ describe("stageImageBuildContext", () => {
 
     expect(fs.existsSync(path.join(result.contextPath, "agents", "hermes", "Dockerfile"))).toBe(
       true,
+    );
+    expect(fs.readFileSync(path.join(result.contextPath, "Dockerfile"), "utf8")).toBe(
+      "FROM hermes\n",
+    );
+    expect(fs.readFileSync(path.join(result.contextPath, "Dockerfile.base"), "utf8")).toBe(
+      "FROM hermes-base\n",
     );
     expect(
       fs.existsSync(path.join(result.contextPath, "agents", "hermes", "hermes-config.json")),

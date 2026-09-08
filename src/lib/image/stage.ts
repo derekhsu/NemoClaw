@@ -37,6 +37,13 @@ export async function stageImageBuildContext(
   // exclusion rules (node_modules, .git, .DS_Store, etc.).
   copyBuildContextDir(def.contextRoot, contextPath);
 
+  // Docker builds resolve the Dockerfile relative to the staged context. The
+  // repository root also contains the OpenClaw Dockerfiles, so explicitly
+  // place the selected agent's pair at the context root after copying the
+  // shared repository context.
+  fs.copyFileSync(def.dockerfilePath, path.join(contextPath, "Dockerfile"));
+  fs.copyFileSync(def.baseDockerfilePath, path.join(contextPath, "Dockerfile.base"));
+
   // Compute contentHash over the actual staged file contents so it is a
   // meaningful cache key: identical inputs produce identical hashes, and any
   // Dockerfile or source change produces a different hash.

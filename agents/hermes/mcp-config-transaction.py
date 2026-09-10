@@ -55,6 +55,7 @@ ROOT_LIFECYCLE_MARKER = "/run/nemoclaw/hermes-root-lifecycle"
 SERVICE_MANAGER_PATH = b"/usr/local/bin/nemoclaw-start"
 RELOAD_TIMEOUT_SECONDS = 300
 SERVER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 MCP_DNS_LABEL_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
@@ -99,6 +100,20 @@ TRUSTED_HERMES_GATEWAY_LAUNCHERS = {
     b"/usr/local/bin/hermes.real",
     b"/usr/local/lib/nemoclaw/hermes",
     b"/opt/hermes/.venv/bin/hermes",
+}
+LOCAL_UPLOADER_ACTION = "add-local-uploader"
+LOCAL_UPLOADER_SERVER_NAME = "sandbox-file-uploader"
+LOCAL_UPLOADER_COMMAND = "/sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server"
+LOCAL_UPLOADER_ENV_REFS = {
+    "GATEWAY_API_KEY": "${GATEWAY_API_KEY}",
+    "HTTP_PROXY": "${HTTP_PROXY}",
+    "HTTPS_PROXY": "${HTTPS_PROXY}",
+    "SSL_CERT_FILE": "${SSL_CERT_FILE}",
+    "REQUESTS_CA_BUNDLE": "${REQUESTS_CA_BUNDLE}",
+    "SSL_CERT_DIR": "${SSL_CERT_DIR}",
+    "CURL_CA_BUNDLE": "${CURL_CA_BUNDLE}",
+    "NODE_EXTRA_CA_CERTS": "${NODE_EXTRA_CA_CERTS}",
+    "DENO_CERT": "${DENO_CERT}",
 }
 
 
@@ -379,6 +394,75 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
         )
 
 
+def _validate_local_uploader_payload(action: str, payload: dict[str, object]) -> None:
+    if action != LOCAL_UPLOADER_ACTION:
+        raise ValueError("Unsupported local uploader action")
+    if set(payload) != {"gateway_url", "sandbox_id", "replace_existing"}:
+        raise ValueError("Local uploader payload has unsupported fields")
+    if payload.get("replace_existing") is not True:
+        raise ValueError("Local uploader payload must replace the managed server")
+    sandbox_id = payload.get("sandbox_id")
+    if not isinstance(sandbox_id, str) or not SANDBOX_ID_RE.fullmatch(sandbox_id):
+        raise ValueError("Local uploader payload has an invalid sandbox id")
+    gateway_url = payload.get("gateway_url")
+    if not isinstance(gateway_url, str) or len(gateway_url) > 2048:
+        raise ValueError("Local uploader payload has an invalid Gateway URL")
+    parsed = urlsplit(gateway_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Local uploader payload Gateway URL must use HTTP or HTTPS")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Local uploader payload Gateway URL contains forbidden components")
+    if not parsed.hostname.isascii() or any(
+        char in parsed.hostname for char in "*?[]{};"
+    ):
+        raise ValueError("Local uploader payload Gateway URL has an invalid hostname")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("Local uploader payload Gateway URL has an invalid port") from error
+    if port == 0:
+        raise ValueError("Local uploader payload Gateway URL port must be nonzero")
+    path = parsed.path or ""
+    if any(char in path for char in ("%", "\\", ";", "*", "?", "[", "]", "{", "}")):
+        raise ValueError("Local uploader payload Gateway URL path must be literal")
+    default_port = 80 if parsed.scheme == "http" else 443
+    authority = (
+        parsed.hostname
+        if port in {None, default_port}
+        else f"{parsed.hostname}:{port}"
+    )
+    canonical = f"{parsed.scheme}://{authority}{path}"
+    if gateway_url != canonical:
+        raise ValueError("Local uploader payload Gateway URL must be canonical")
+
+
+def _managed_local_uploader_candidate(payload: dict[str, object]) -> dict[str, object]:
+    gateway_url = payload.get("gateway_url")
+    sandbox_id = payload.get("sandbox_id")
+    if not isinstance(gateway_url, str) or not isinstance(sandbox_id, str):
+        raise ValueError("Local uploader payload is invalid")
+    return {
+        "command": LOCAL_UPLOADER_COMMAND,
+        "args": [],
+        "env": {
+            "GATEWAY_URL": gateway_url,
+            "SANDBOX_ID": sandbox_id,
+            **LOCAL_UPLOADER_ENV_REFS,
+        },
+        "enabled": True,
+        "timeout": 120,
+        "connect_timeout": 60,
+        "tools": {"resources": True, "prompts": True},
+    }
+
+
+def _validate_mutation_payload(action: str, payload: dict[str, object]) -> None:
+    if action == LOCAL_UPLOADER_ACTION:
+        _validate_local_uploader_payload(action, payload)
+        return
+    _validate_payload(action, payload)
+
+
 def _managed_candidate(payload: dict[str, object]) -> dict[str, object]:
     headers = payload.get("headers")
     if not isinstance(headers, dict):
@@ -477,9 +561,12 @@ def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
 def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict, bool]:
     if not isinstance(data, dict):
         raise ValueError("Invalid Hermes config: expected a YAML object")
-    server_name = payload.get("server")
-    if not isinstance(server_name, str) or not server_name:
-        raise ValueError("MCP mutation payload has no server name")
+    if action == LOCAL_UPLOADER_ACTION:
+        server_name = LOCAL_UPLOADER_SERVER_NAME
+    else:
+        server_name = payload.get("server")
+        if not isinstance(server_name, str) or not server_name:
+            raise ValueError("MCP mutation payload has no server name")
 
     servers = data.get("mcp_servers")
     if servers is None:
@@ -488,13 +575,17 @@ def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict
     if not isinstance(servers, dict):
         raise ValueError("Invalid Hermes config: mcp_servers must be an object")
 
-    if action == "add":
+    if action in {"add", LOCAL_UPLOADER_ACTION}:
         replace = payload.get("replace_existing") is True
         if server_name in servers and not replace:
             raise ValueError(
                 f"MCP server '{server_name}' already exists in Hermes config and is not managed by NemoClaw."
             )
-        candidate = _managed_candidate(payload)
+        candidate = (
+            _managed_local_uploader_candidate(payload)
+            if action == LOCAL_UPLOADER_ACTION
+            else _managed_candidate(payload)
+        )
         if servers.get(server_name) == candidate:
             return data, False
         servers[server_name] = candidate
@@ -617,7 +708,7 @@ def _recover_committed_apply_snapshot(
 
 
 def apply_transaction(action: str, payload: dict[str, object]) -> bool:
-    _validate_payload(action, payload)
+    _validate_mutation_payload(action, payload)
     privileged = os.geteuid() == 0
     guard = _load_guard()
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
@@ -681,7 +772,7 @@ def apply_transaction_and_reload(
     action: str, payload: dict[str, object]
 ) -> dict[str, object]:
     """Commit config+hashes and runtime reload as one recoverable operation."""
-    _validate_payload(action, payload)
+    _validate_mutation_payload(action, payload)
     privileged = os.geteuid() == 0
     guard = _load_guard()
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
@@ -1126,7 +1217,7 @@ def probe() -> dict[str, object]:
 
 
 def execute(action: str, payload: dict[str, object]) -> dict[str, object]:
-    _validate_payload(action, payload)
+    _validate_mutation_payload(action, payload)
     if os.geteuid() != 0:
         _assert_non_root_lifecycle_identity()
     return apply_transaction_and_reload(action, payload)
@@ -1134,7 +1225,10 @@ def execute(action: str, payload: dict[str, object]) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("add", "remove", "inspect", "probe"))
+    parser.add_argument(
+        "action",
+        choices=("add", "remove", "inspect", "probe", LOCAL_UPLOADER_ACTION),
+    )
     parser.add_argument("--payload")
     args = parser.parse_args()
     payload: dict[str, object] | None = None

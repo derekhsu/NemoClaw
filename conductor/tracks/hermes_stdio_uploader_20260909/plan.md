@@ -34,10 +34,10 @@
 
 ## Phase 4: Upgrade Compatibility and Release Evidence
 
-- [~] Task 4.1: Add a revision-pinning and patch-application contract that
-  identifies changes to the Hermes helper or image layout during upgrades.
-- [ ] Task 4.2: Document the required upstream rebase, image build, focused
-  contracts, and rebuilt-sandbox uploader verification sequence.
+- [x] Task 4.1: Add a revision-pinning and patch-application contract that
+  identifies changes to the Hermes helper or image layout during upgrades. `f10d07b`
+- [x] Task 4.2: Document the required upstream rebase, image build, focused
+  contracts, and rebuilt-sandbox uploader verification sequence. `f10d07b`
 - [ ] Task 4.3: With explicit approval, build the image and verify a rebuilt
   sandbox returns a valid signed download link.
 - [ ] Task: Conductor - User Manual Verification 'Upgrade Compatibility and Release Evidence' (Protocol in workflow.md)

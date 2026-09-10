@@ -1,8 +1,8 @@
 {
   "track_id": "hermes_stdio_uploader_20260909",
   "type": "feature",
-  "status": "new",
+  "status": "in_progress",
   "created_at": "2026-09-09T10:29:51Z",
-  "updated_at": "2026-09-09T10:29:51Z",
+  "updated_at": "2026-09-10T02:07:10Z",
   "description": "Fork-specific managed Hermes image support for the fixed sandbox-file-uploader local stdio MCP server, including upgrade compatibility checks."
 }

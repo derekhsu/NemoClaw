@@ -2,16 +2,16 @@
 
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Spec:** [spec.md](spec.md)
-**Status:** [ ] Not Started
+**Status:** [~] In Progress
 
 ## Phase 1: Define the Managed Local MCP Contract
 
-- [ ] Task 1.1: Add focused failing tests that define the one allowed uploader
+- [x] Task 1.1: Add focused failing tests that define the one allowed uploader
   mutation and reject arbitrary command, argument, environment, and literal
-  credential input.
-- [ ] Task 1.2: Extend the Hermes MCP transaction with the fixed uploader
-  configuration, atomic mutation, integrity update, and confirmed reload.
-- [ ] Task 1.3: Run the focused transaction and race-recovery tests.
+  credential input. `7698ba0`
+- [x] Task 1.2: Extend the Hermes MCP transaction with the fixed uploader
+  configuration, atomic mutation, integrity update, and confirmed reload. `7698ba0`
+- [x] Task 1.3: Run the focused transaction and race-recovery tests. `7698ba0`
 - [ ] Task: Conductor - User Manual Verification 'Managed Local MCP Contract' (Protocol in workflow.md)
 
 ## Phase 2: Package and Verify the Image

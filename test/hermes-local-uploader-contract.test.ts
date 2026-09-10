@@ -35,6 +35,11 @@ payload = {
 }
 module._validate_local_uploader_payload("add-local-uploader", payload)
 candidate = module._managed_local_uploader_candidate(payload)
+config, changed = module._mutate(
+    {"mcp_servers": {"sandbox-file-uploader": candidate}},
+    "add-local-uploader",
+    payload,
+)
 
 rejected = []
 for field, value in (
@@ -50,7 +55,7 @@ for field, value in (
     except ValueError:
         rejected.append(field)
 
-print(json.dumps({"candidate": candidate, "rejected": rejected}, sort_keys=True))
+print(json.dumps({"candidate": candidate, "changed": changed, "config": config, "rejected": rejected}, sort_keys=True))
 `,
         TRANSACTION,
       ],
@@ -79,6 +84,32 @@ print(json.dumps({"candidate": candidate, "rejected": rejected}, sort_keys=True)
         },
         timeout: 120,
         tools: { prompts: true, resources: true },
+      },
+      changed: false,
+      config: {
+        mcp_servers: {
+          "sandbox-file-uploader": {
+            args: [],
+            command: "/sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server",
+            connect_timeout: 60,
+            enabled: true,
+            env: {
+              CURL_CA_BUNDLE: "${CURL_CA_BUNDLE}",
+              DENO_CERT: "${DENO_CERT}",
+              GATEWAY_API_KEY: "${GATEWAY_API_KEY}",
+              GATEWAY_URL: "http://gateway.example.test:8001",
+              HTTPS_PROXY: "${HTTPS_PROXY}",
+              HTTP_PROXY: "${HTTP_PROXY}",
+              NODE_EXTRA_CA_CERTS: "${NODE_EXTRA_CA_CERTS}",
+              REQUESTS_CA_BUNDLE: "${REQUESTS_CA_BUNDLE}",
+              SANDBOX_ID: "sbx-12345678",
+              SSL_CERT_DIR: "${SSL_CERT_DIR}",
+              SSL_CERT_FILE: "${SSL_CERT_FILE}",
+            },
+            timeout: 120,
+            tools: { prompts: true, resources: true },
+          },
+        },
       },
       rejected: ["command", "args", "env", "gateway_api_key"],
     });

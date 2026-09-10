@@ -25,11 +25,11 @@
 
 ## Phase 3: Prove Runtime File Delivery
 
-- [~] Task 3.1: Add a credential-free integration fixture that invokes the
-  local uploader and proves only an allowed file becomes a signed download.
-- [ ] Task 3.2: Add negative and recovery cases for denied paths, missing
-  provider credential, failed registration, and idempotent retry.
-- [ ] Task 3.3: Run focused integration tests without live credentials.
+- [x] Task 3.1: Add a credential-free integration fixture that invokes the
+  local uploader and proves only an allowed file becomes a signed download. `cdae606`
+- [x] Task 3.2: Add negative and recovery cases for denied paths, missing
+  provider credential, failed registration, and idempotent retry. `cdae606`, `a6b3ce2`
+- [x] Task 3.3: Run focused integration tests without live credentials. `cdae606`
 - [ ] Task: Conductor - User Manual Verification 'Runtime File Delivery' (Protocol in workflow.md)
 
 ## Phase 4: Upgrade Compatibility and Release Evidence

@@ -16,11 +16,11 @@
 
 ## Phase 2: Package and Verify the Image
 
-- [~] Task 2.1: Add the versioned uploader executable to the Hermes image with
-  deterministic packaging and no runtime package download.
-- [ ] Task 2.2: Extend image layout and integrity tests to prove the executable,
-  helper, and reviewed credential-boundary manifest are present.
-- [ ] Task 2.3: Run focused image-contract tests.
+- [x] Task 2.1: Add the versioned uploader executable to the Hermes image with
+  deterministic packaging and no runtime package download. `cb2b4b9`
+- [x] Task 2.2: Extend image layout and integrity tests to prove the executable,
+  helper, and reviewed credential-boundary manifest are present. `cb2b4b9`
+- [x] Task 2.3: Run focused image-contract tests. `cb2b4b9`
 - [ ] Task: Conductor - User Manual Verification 'Image Packaging' (Protocol in workflow.md)
 
 ## Phase 3: Prove Runtime File Delivery

@@ -269,6 +269,10 @@ describe("Hermes final image layout", () => {
         ],
       },
       {
+        stage: "hermes-local-uploader-payload",
+        copies: ["COPY vendor/clawshell/sandbox-mcp-server/ /opt/nemoclaw-sandbox-mcp-server/"],
+      },
+      {
         stage: "hermes-runtime-payload",
         copies: [
           "COPY --from=mcp-tool-discovery-runtime /opt/mcp-tool-discovery-runtime/dist/ /usr/local/lib/nemoclaw/mcp-tool-discovery-runtime/",
@@ -314,6 +318,7 @@ describe("Hermes final image layout", () => {
     ] as const;
     const npmPatchCopy = "COPY --from=hermes-npm-patch-payload / /";
     const agentCopy = "COPY --from=hermes-agent-payload / /";
+    const localUploaderCopy = "COPY --from=hermes-local-uploader-payload / /";
     const runtimeCopy = "COPY --from=hermes-runtime-payload / /";
     const wrapperCopy = "COPY --from=hermes-wrapper-payload / /";
 
@@ -330,11 +335,13 @@ describe("Hermes final image layout", () => {
     expect(finalStage.match(/^COPY\b.*$/gmu)).toEqual([
       npmPatchCopy,
       agentCopy,
+      localUploaderCopy,
       runtimeCopy,
       wrapperCopy,
     ]);
     const npmPatch = indexOfRequired(finalStage, npmPatchCopy);
     const agent = indexOfRequired(finalStage, agentCopy);
+    const localUploader = indexOfRequired(finalStage, localUploaderCopy);
     const runtime = indexOfRequired(finalStage, runtimeCopy);
     const wrapper = indexOfRequired(finalStage, wrapperCopy);
     const tarPatch = requireSingleReviewedDockerfileRunCommand(
@@ -414,6 +421,8 @@ describe("Hermes final image layout", () => {
     expect(npmPatch).toBeLessThan(tarPatch);
     expect(agent).toBeGreaterThan(certifiInstall);
     expect(agent).toBeLessThan(agentChmod);
+    expect(localUploader).toBeGreaterThan(agent);
+    expect(localUploader).toBeLessThan(agentChmod);
     expect(cronRestoreDrainPatch).toBeLessThan(profilePolicyPatch);
     expect(profilePolicyPatch).toBeLessThan(neutralPlatformPatch);
     expect(neutralPlatformPatch).toBeLessThan(neutralMessagingConfig);
@@ -454,6 +463,7 @@ describe("Hermes final image layout", () => {
       "/usr/local/lib/nemoclaw/hermes-wrapper.py 'root:root 755'",
       "/usr/local/lib/nemoclaw/validate-hermes-cli-adapter.py 'root:root 755'",
       "/usr/local/share/nemoclaw/hermes-cli-adapter-v1.json 'root:root 444'",
+      "/sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server 'root:root 755'",
     ]) {
       expect(finalStage).toContain(`check_metadata ${metadataContract}`);
     }
@@ -481,6 +491,7 @@ describe("Hermes final image layout", () => {
     expect(finalStage).toContain(
       "&& check_absent /opt/nemoclaw-hermes-config/image-build-probes.py \\",
     );
+    expect(finalStage).toContain("&& check_absent /opt/nemoclaw-sandbox-mcp-server \\");
     expect(finalStage).toContain(
       "&& check_absent /sandbox/.nemoclaw/hermes-cron-restore-drain.json \\",
     );

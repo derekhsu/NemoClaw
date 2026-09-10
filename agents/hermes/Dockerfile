@@ -90,6 +90,10 @@ COPY src/lib/tool-disclosure.ts /src/lib/tool-disclosure.ts
 COPY src/lib/messaging/ /src/lib/messaging/
 COPY scripts/lib/openclaw-npm-remediation.mts /scripts/lib/openclaw-npm-remediation.mts
 
+FROM scratch AS hermes-local-uploader-payload
+
+COPY vendor/clawshell/sandbox-mcp-server/ /opt/nemoclaw-sandbox-mcp-server/
+
 FROM scratch AS hermes-runtime-payload
 
 COPY --from=mcp-tool-discovery-runtime /opt/mcp-tool-discovery-runtime/dist/ /usr/local/lib/nemoclaw/mcp-tool-discovery-runtime/
@@ -323,6 +327,20 @@ ENV HERMES_TELEGRAM_DISABLE_FALLBACK_IPS=1
 ENV HERMES_TUI_DIR="/opt/hermes/ui-tui"
 
 COPY --from=hermes-agent-payload / /
+
+# The local file uploader is a fixed, fork-managed stdio MCP server. Its
+# lockfile is part of the image input, and `uv sync` occurs only during image
+# assembly; sandbox startup never installs or resolves Python packages.
+COPY --from=hermes-local-uploader-payload / /
+RUN cd /opt/nemoclaw-sandbox-mcp-server \
+    && UV_PROJECT_ENVIRONMENT=/sandbox/.venvs/sandbox-mcp-server uv sync --frozen --no-dev --no-editable --no-cache \
+    && test -x /sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server \
+    && /sandbox/.venvs/sandbox-mcp-server/bin/python -I -c 'from sandbox_mcp_server.server import create_server; assert create_server().name == "sandbox-file-uploader"' \
+    && chown -R root:root /sandbox/.venvs/sandbox-mcp-server \
+    && chmod -R a+rX /sandbox/.venvs/sandbox-mcp-server \
+    && unsafe="$(find -L /sandbox/.venvs/sandbox-mcp-server \( ! -user root -o -perm /022 \) -print -quit)" \
+    && test -z "$unsafe" \
+    && rm -rf /opt/nemoclaw-sandbox-mcp-server
 
 # Ensure the NemoClaw plugin for Hermes is readable.
 RUN chmod -R a+rX /opt/nemoclaw-hermes-plugin/
@@ -1182,6 +1200,7 @@ RUN check_metadata() { \
     }; \
     check_absent /opt/hermes/tests \
     && check_absent /opt/nemoclaw-hermes-config/image-build-probes.py \
+    && check_absent /opt/nemoclaw-sandbox-mcp-server \
     && check_absent /root/.npm \
     && check_absent /root/.cache/electron \
     && check_absent /root/.cache/node-gyp \
@@ -1210,7 +1229,8 @@ RUN check_metadata() { \
     && check_metadata /usr/local/lib/nemoclaw/preloads/sandbox-safety-net.js 'root:root 444' \
     && check_metadata /usr/local/lib/nemoclaw/hermes-wrapper.py 'root:root 755' \
     && check_metadata /usr/local/lib/nemoclaw/validate-hermes-cli-adapter.py 'root:root 755' \
-    && check_metadata /usr/local/share/nemoclaw/hermes-cli-adapter-v1.json 'root:root 444'
+    && check_metadata /usr/local/share/nemoclaw/hermes-cli-adapter-v1.json 'root:root 444' \
+    && check_metadata /sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server 'root:root 755'
 
 # Verify the immutable security package inventory in the completed image.
 # hadolint ignore=DL4006

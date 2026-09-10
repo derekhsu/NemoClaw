@@ -4,7 +4,7 @@
 **Spec:** [spec.md](spec.md)
 **Status:** [~] In Progress
 
-## Phase 1: Define the Managed Local MCP Contract
+## Phase 1: Define the Managed Local MCP Contract [checkpoint]
 
 - [x] Task 1.1: Add focused failing tests that define the one allowed uploader
   mutation and reject arbitrary command, argument, environment, and literal
@@ -12,11 +12,11 @@
 - [x] Task 1.2: Extend the Hermes MCP transaction with the fixed uploader
   configuration, atomic mutation, integrity update, and confirmed reload. `7698ba0`
 - [x] Task 1.3: Run the focused transaction and race-recovery tests. `7698ba0`
-- [ ] Task: Conductor - User Manual Verification 'Managed Local MCP Contract' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Managed Local MCP Contract' (Protocol in workflow.md)
 
 ## Phase 2: Package and Verify the Image
 
-- [ ] Task 2.1: Add the versioned uploader executable to the Hermes image with
+- [~] Task 2.1: Add the versioned uploader executable to the Hermes image with
   deterministic packaging and no runtime package download.
 - [ ] Task 2.2: Extend image layout and integrity tests to prove the executable,
   helper, and reviewed credential-boundary manifest are present.

@@ -14,18 +14,18 @@
 - [x] Task 1.3: Run the focused transaction and race-recovery tests. `7698ba0`
 - [x] Task: Conductor - User Manual Verification 'Managed Local MCP Contract' (Protocol in workflow.md)
 
-## Phase 2: Package and Verify the Image
+## Phase 2: Package and Verify the Image [checkpoint]
 
 - [x] Task 2.1: Add the versioned uploader executable to the Hermes image with
   deterministic packaging and no runtime package download. `cb2b4b9`
 - [x] Task 2.2: Extend image layout and integrity tests to prove the executable,
   helper, and reviewed credential-boundary manifest are present. `cb2b4b9`
 - [x] Task 2.3: Run focused image-contract tests. `cb2b4b9`
-- [ ] Task: Conductor - User Manual Verification 'Image Packaging' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Image Packaging' (Protocol in workflow.md)
 
 ## Phase 3: Prove Runtime File Delivery
 
-- [ ] Task 3.1: Add a credential-free integration fixture that invokes the
+- [~] Task 3.1: Add a credential-free integration fixture that invokes the
   local uploader and proves only an allowed file becomes a signed download.
 - [ ] Task 3.2: Add negative and recovery cases for denied paths, missing
   provider credential, failed registration, and idempotent retry.

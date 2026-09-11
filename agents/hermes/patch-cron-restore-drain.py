@@ -69,10 +69,16 @@ COMPOSED_FUNCTIONS = '''def nemoclaw_cron_restore_drain_requested() -> bool:
         metadata = os.fstat(state_root_fd)
         if (
             not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_uid != 0
-            or metadata.st_gid != 0
             or stat.S_IMODE(metadata.st_mode) & 0o022
         ):
+            return True
+        # Root-managed sandboxes seal this state root as root:root. The
+        # OpenShell non-root topology owns the whole /sandbox tree as the
+        # runtime user instead, so accept that principal too; any other
+        # owner fails closed toward keeping dispatch drained.
+        if metadata.st_uid not in (0, os.geteuid()):
+            return True
+        if os.geteuid() == 0 and metadata.st_gid != 0:
             return True
         try:
             os.stat(

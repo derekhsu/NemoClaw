@@ -95,6 +95,20 @@ MAX_GATEWAY_PID_RECORD_BYTES = 4096
 MCP_RACE_RECOVERY_ATTEMPTS = 3
 GATEWAY_INTERNAL_PORT = 18642
 GATEWAY_PUBLIC_PORT = 8642
+LOCAL_UPLOADER_SERVER = "sandbox-file-uploader"
+LOCAL_UPLOADER_COMMAND = "/sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server"
+LOCAL_UPLOADER_ENV_REFERENCES = {
+    "GATEWAY_API_KEY": "${GATEWAY_API_KEY}",
+    "HTTP_PROXY": "${HTTP_PROXY}",
+    "HTTPS_PROXY": "${HTTPS_PROXY}",
+    "SSL_CERT_FILE": "${SSL_CERT_FILE}",
+    "REQUESTS_CA_BUNDLE": "${REQUESTS_CA_BUNDLE}",
+    "SSL_CERT_DIR": "${SSL_CERT_DIR}",
+    "CURL_CA_BUNDLE": "${CURL_CA_BUNDLE}",
+    "NODE_EXTRA_CA_CERTS": "${NODE_EXTRA_CA_CERTS}",
+    "DENO_CERT": "${DENO_CERT}",
+}
+LOCAL_SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 TRUSTED_HERMES_GATEWAY_LAUNCHERS = {
     b"/usr/local/bin/hermes.real",
     b"/usr/local/lib/nemoclaw/hermes",
@@ -267,7 +281,71 @@ def _sanitize_error_message(error: Exception, payload: object = None) -> str:
     return message[:MAX_ERROR_MESSAGE_LENGTH]
 
 
+def _validate_local_uploader_payload(payload: dict[str, object]) -> None:
+    allowed = {"gateway_url", "sandbox_id", "replace_existing"}
+    unexpected = sorted(set(payload) - allowed)
+    if unexpected:
+        raise ValueError(
+            "Hermes local uploader payload contains unsupported fields: "
+            + ", ".join(unexpected)
+        )
+    gateway_url = payload.get("gateway_url")
+    if not isinstance(gateway_url, str) or len(gateway_url) > 2048:
+        raise ValueError("Hermes local uploader gateway URL is invalid")
+    parsed = urlsplit(gateway_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Hermes local uploader gateway URL is invalid")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Hermes local uploader gateway URL has forbidden components")
+    if parsed.path not in {"", "/"}:
+        raise ValueError("Hermes local uploader gateway URL must not contain a path")
+    sandbox_id = payload.get("sandbox_id")
+    if not isinstance(sandbox_id, str) or not LOCAL_SANDBOX_ID_RE.fullmatch(sandbox_id):
+        raise ValueError("Hermes local uploader sandbox id is invalid")
+    if not isinstance(payload.get("replace_existing"), bool):
+        raise ValueError("Hermes local uploader replace_existing must be boolean")
+
+
+def _local_uploader_candidate(payload: dict[str, object]) -> dict[str, object]:
+    _validate_local_uploader_payload(payload)
+    gateway_url = str(payload["gateway_url"]).rstrip("/")
+    sandbox_id = str(payload["sandbox_id"])
+    return {
+        "command": LOCAL_UPLOADER_COMMAND,
+        "args": [],
+        "enabled": True,
+        "env": {
+            "GATEWAY_URL": gateway_url,
+            "SANDBOX_ID": sandbox_id,
+            **LOCAL_UPLOADER_ENV_REFERENCES,
+        },
+    }
+
+
+def _is_local_uploader_candidate(candidate: object) -> bool:
+    """Return whether persisted config is exactly the managed local uploader."""
+    if not isinstance(candidate, dict):
+        return False
+    env = candidate.get("env")
+    if not isinstance(env, dict):
+        return False
+    try:
+        expected = _local_uploader_candidate(
+            {
+                "gateway_url": env.get("GATEWAY_URL"),
+                "sandbox_id": env.get("SANDBOX_ID"),
+                "replace_existing": True,
+            }
+        )
+    except ValueError:
+        return False
+    return candidate == expected
+
+
 def _validate_payload(action: str, payload: dict[str, object]) -> None:
+    if action == "add-local-uploader":
+        _validate_local_uploader_payload(payload)
+        return
     if action not in {"add", "remove"}:
         raise ValueError("Unsupported MCP config action")
     allowed = {"server", "url", "headers"}
@@ -477,9 +555,12 @@ def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
 def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict, bool]:
     if not isinstance(data, dict):
         raise ValueError("Invalid Hermes config: expected a YAML object")
-    server_name = payload.get("server")
-    if not isinstance(server_name, str) or not server_name:
-        raise ValueError("MCP mutation payload has no server name")
+    if action == "add-local-uploader":
+        server_name = LOCAL_UPLOADER_SERVER
+    else:
+        server_name = payload.get("server")
+        if not isinstance(server_name, str) or not server_name:
+            raise ValueError("MCP mutation payload has no server name")
 
     servers = data.get("mcp_servers")
     if servers is None:
@@ -488,13 +569,17 @@ def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict
     if not isinstance(servers, dict):
         raise ValueError("Invalid Hermes config: mcp_servers must be an object")
 
-    if action == "add":
+    if action in {"add", "add-local-uploader"}:
         replace = payload.get("replace_existing") is True
         if server_name in servers and not replace:
             raise ValueError(
                 f"MCP server '{server_name}' already exists in Hermes config and is not managed by NemoClaw."
             )
-        candidate = _managed_candidate(payload)
+        candidate = (
+            _local_uploader_candidate(payload)
+            if action == "add-local-uploader"
+            else _managed_candidate(payload)
+        )
         if servers.get(server_name) == candidate:
             return data, False
         servers[server_name] = candidate
@@ -1118,10 +1203,34 @@ def _assert_non_root_lifecycle_identity() -> None:
         raise RuntimeError("Hermes gateway is not running for managed MCP reload")
 
 
-def probe() -> dict[str, object]:
-    """Prove the packaged helper is available without mutating config."""
+def probe(server: str | None = None) -> dict[str, object]:
+    """Prove lifecycle readiness, optionally including a managed local server."""
     if os.geteuid() != 0:
         _assert_non_root_lifecycle_identity()
+    if server is None:
+        return {"ok": True}
+    if server != LOCAL_UPLOADER_SERVER:
+        raise ValueError("Hermes MCP lifecycle probe has an unsupported server")
+    privileged = os.geteuid() == 0
+    guard = _load_guard()
+    hash_path = (
+        STRICT_HASH_PATH if privileged else os.path.join(HERMES_DIR, ".config-hash")
+    )
+    compatibility_hash_path = (
+        os.path.join(HERMES_DIR, ".config-hash") if privileged else None
+    )
+    integrity = guard.inspect_mcp_integrity_snapshot(
+        HERMES_DIR, hash_path, compatibility_hash_path
+    )
+    if integrity.state != "current":
+        raise RuntimeError("Hermes MCP config does not match applied gateway state")
+    parsed = yaml.safe_load(integrity.config_text) or {}
+    servers = parsed.get("mcp_servers") if isinstance(parsed, dict) else None
+    if not isinstance(servers, dict) or not _is_local_uploader_candidate(
+        servers.get(LOCAL_UPLOADER_SERVER)
+    ):
+        raise RuntimeError("Hermes local uploader is not registered")
+    guard.assert_mcp_integrity_snapshot_current(integrity)
     return {"ok": True}
 
 
@@ -1134,16 +1243,22 @@ def execute(action: str, payload: dict[str, object]) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("add", "remove", "inspect", "probe"))
+    parser.add_argument(
+        "action",
+        choices=("add", "add-local-uploader", "remove", "inspect", "probe"),
+    )
     parser.add_argument("--payload")
+    parser.add_argument("--server")
     args = parser.parse_args()
     payload: dict[str, object] | None = None
     try:
         if args.action == "probe":
             if args.payload is not None:
                 raise ValueError("Hermes MCP lifecycle probe does not accept --payload")
-            result = probe()
+            result = probe(args.server)
         elif args.action == "inspect":
+            if args.server is not None:
+                raise ValueError("Hermes MCP inspection does not accept --server")
             if args.payload is None:
                 raise ValueError("Hermes MCP inspection requires --payload")
             payload = _parse_payload(args.payload)
@@ -1151,6 +1266,8 @@ def main() -> int:
         elif args.payload is None:
             raise ValueError("Hermes MCP mutation requires --payload")
         else:
+            if args.server is not None:
+                raise ValueError("Hermes MCP mutation does not accept --server")
             payload = _parse_payload(args.payload)
             result = execute(args.action, payload)
     except Exception as error:

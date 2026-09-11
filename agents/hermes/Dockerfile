@@ -420,10 +420,10 @@ RUN test -x /usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py \
 # predicate to compose an independent root-owned marker, and hydrate that
 # predicate during GatewayRunner construction so startup cannot dispatch before
 # the asynchronous watcher gets its first tick.
-ARG NEMOCLAW_HERMES_CRON_RESTORE_DRAIN_PATCHER_SHA256=10f757140106e88133e160a62fdbf0fa971cf8edcdbba13948eb88b12a8aeb2e
+ARG NEMOCLAW_HERMES_CRON_RESTORE_DRAIN_PATCHER_SHA256=3ccaa4569167c4df90ae7b8a276625ef49595057ba0389dfd4aa7fa6f12d4360
 ARG NEMOCLAW_HERMES_DRAIN_CONTROL_SOURCE_SHA256=5436daa7807ce3e765dac084974af025c8ffd0515faca15ac455ade2595e4af7
 ARG NEMOCLAW_HERMES_GATEWAY_RUN_SOURCE_SHA256=c6e0f443772e4a8a7eac0d9ccf9a4f659de5fc5493c572a69a46e4c61a8aa966
-ARG NEMOCLAW_HERMES_DRAIN_CONTROL_PATCHED_SHA256=544da7eebee82a1de1291f1921325ec5a1f2a70ca08ad64f27f8efe868a0089b
+ARG NEMOCLAW_HERMES_DRAIN_CONTROL_PATCHED_SHA256=c401e5e0e4f6525f1beda4576773ce2bd2bec52bc7e17845bcf14073ac687f77
 ARG NEMOCLAW_HERMES_GATEWAY_RUN_DRAIN_PATCHED_SHA256=3180fe6e62ee986243c7bc85c343108075b94f3cbda42d91273a6a104ad47c1b
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
@@ -1124,19 +1124,24 @@ RUN mkdir -p /etc/nemoclaw \
     && mcp_digest="$(/opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py --guard /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py --config /sandbox/.hermes/config.yaml)" \
     && printf '# nemoclaw-hermes-mcp-state-v1 intended=%s applied=%s\n' "$mcp_digest" "$mcp_digest" \
     >> /etc/nemoclaw/hermes.config-hash \
+    && test -s /etc/nemoclaw/hermes.config-hash \
+    && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /etc/nemoclaw/hermes.config-hash \
     && chown root:root /etc/nemoclaw/hermes.config-hash \
     && chmod 444 /etc/nemoclaw/hermes.config-hash
 
 # Backward-compatible marker for host-side shields logic on older sandboxes.
 RUN cp /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash \
     && chmod 640 /sandbox/.hermes/.config-hash \
+    && test -s /sandbox/.hermes/.config-hash \
     && chown sandbox:sandbox /sandbox/.hermes/.config-hash
 
 # Keep the shared NemoClaw state root consistent across every shipped agent.
-# The root-owned sticky directory protects the managed-startup transaction
-# receipt while leaving the named plugin state directories sandbox-writable.
+# The root-owned non-writable directory protects the managed-startup
+# transaction receipt while leaving the named plugin state directories
+# sandbox-writable.  Do not set the sticky bit: the Hermes cron-restore drain
+# guard requires ordinary root-owned 0755 state-root metadata.
 RUN chown root:root /sandbox/.nemoclaw \
-    && chmod 1755 /sandbox/.nemoclaw \
+    && chmod 755 /sandbox/.nemoclaw \
     && chown -R root:root /sandbox/.nemoclaw/blueprints \
     && chmod -R 755 /sandbox/.nemoclaw/blueprints \
     && mkdir -p /sandbox/.nemoclaw/state /sandbox/.nemoclaw/migration /sandbox/.nemoclaw/snapshots /sandbox/.nemoclaw/staging \
@@ -1190,7 +1195,10 @@ RUN check_metadata() { \
     && check_absent /sandbox/.hermes/managed-policy.json \
     && check_absent /sandbox/.nemoclaw/hermes-cron-restore-drain.json \
     && check_absent /sandbox/.nemoclaw/hermes-cron-restore-release-recovery.json \
-    && check_metadata /sandbox/.nemoclaw 'root:root 1755' \
+    && test -s /etc/nemoclaw/hermes.config-hash \
+    && test -s /sandbox/.hermes/.config-hash \
+    && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /sandbox/.hermes/.config-hash \
+    && check_metadata /sandbox/.nemoclaw 'root:root 755' \
     && check_metadata /scripts/patch-bundled-npm-brace-expansion.mts 'root:root 444' \
     && check_metadata /scripts/lib/patch-bundled-npm-ip-address.mts 'root:root 444' \
     && check_metadata /scripts/patch-bundled-npm-tar.mts 'root:root 444' \

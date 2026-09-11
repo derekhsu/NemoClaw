@@ -91,7 +91,8 @@ describe("Hermes cron restore drain source patch", () => {
       expect(firstDrain).toContain("state_root_fd = os.open(state_root, flags)");
       expect(firstDrain).toContain("metadata = os.fstat(state_root_fd)");
       expect(firstDrain).toContain("dir_fd=state_root_fd");
-      expect(firstDrain).toContain("metadata.st_uid != 0");
+      expect(firstDrain).toContain("metadata.st_uid not in (0, os.geteuid())");
+      expect(firstDrain).toContain("os.geteuid() == 0 and metadata.st_gid != 0");
       expect(firstDrain).toContain("stat.S_IMODE(metadata.st_mode) & 0o022");
       expect(firstDrain).toContain(
         "nemoclaw_cron_restore_drain_requested()\n        or operator_drain_requested(home=home)",

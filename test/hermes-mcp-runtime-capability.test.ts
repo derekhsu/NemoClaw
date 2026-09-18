@@ -33,7 +33,8 @@ function runHermesMcpClientImportValidation({
     fs.writeFileSync(
       path.join(toolsDir, "mcp_tool.py"),
       `_MCP_AVAILABLE = ${mcpAvailable ? "True" : "False"}\n` +
-        `_MCP_HTTP_AVAILABLE = ${httpAvailable ? "True" : "False"}\n`,
+        `_MCP_HTTP_AVAILABLE = ${httpAvailable ? "True" : "False"}\n` +
+        `def _ensure_mcp_sdk():\n    return _MCP_AVAILABLE\n`,
     );
     return spawnSync("bash", ["-c", command], {
       encoding: "utf-8",

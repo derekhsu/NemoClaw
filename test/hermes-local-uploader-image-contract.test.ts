@@ -38,6 +38,7 @@ describe("Hermes managed local uploader image contract", () => {
       `UV_PROJECT_ENVIRONMENT=${UPLOADER_VENV} uv sync --frozen --no-dev --no-editable --no-cache`,
     );
     expect(dockerfile).toContain(`${UPLOADER_VENV}/bin/sandbox-mcp-server`);
+    expect(dockerfile).toContain(`chmod -R go-w ${UPLOADER_VENV}`);
     expect(dockerfile).toContain(`chmod -R a+rX ${UPLOADER_VENV}`);
     expect(fs.readFileSync(START_SCRIPT, "utf-8")).not.toContain("sandbox-mcp-server");
   });

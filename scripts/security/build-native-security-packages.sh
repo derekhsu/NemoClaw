@@ -8,11 +8,11 @@ readonly LIBSSH2_VERSION="1.11.1"
 readonly LIBSSH2_DEBIAN_VERSION="1.11.1-1+deb13u1"
 readonly LIBSSH2_PACKAGE_VERSION="${LIBSSH2_DEBIAN_VERSION}+nemoclaw1"
 readonly LIBSSH2_SOURCE_SHA256="9954cb54c4f548198a7cbebad248bdc87dd64bd26185708a294b2b50771e3769"
-readonly PYTHON_DEBIAN_VERSION="3.13.5-2+deb13u4"
+readonly PYTHON_DEBIAN_VERSION="3.13.5-2+deb13u5"
 readonly PYTHON_FIX_VERSION="${PYTHON_DEBIAN_VERSION}+nemoclaw1"
 readonly PYTHON_PARSER_SHA256="f91ec3de6331206bbe2ec3e54a05f646bd23d3c61a18d4a01b25164e070bacc9"
 readonly PYTHON_PARSER_FIXED_SHA256="4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7"
-readonly DEBIAN_SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/20260724T000000Z/pool/main"
+readonly DEBIAN_SNAPSHOT_URL="https://snapshot.debian.org/archive/debian/20260906T144454Z/pool/main"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
@@ -244,10 +244,10 @@ build_python_fix_package() {
 
   case "${architecture}" in
     amd64)
-      original_sha256="0def2d972310b59704ad119abee5a97f95409e14ff1359edd8cc7b8892cfd43f"
+      original_sha256="db161322a3481d2c0c3b9a3b9a03c3ab0e2b1718f54b88755fb4a3f939165b84"
       ;;
     arm64)
-      original_sha256="37cce6086b7c1ca93086f83b68761737607689e634693b6972b5dbfd6c080872"
+      original_sha256="d1178d24e4d143cc6c577d9dc0f26dd982efccc2e600d25ce86361f168a22be0"
       ;;
     *)
       printf 'Unsupported architecture: %s\n' "${architecture}" >&2

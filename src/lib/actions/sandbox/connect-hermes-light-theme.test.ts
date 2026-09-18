@@ -27,15 +27,6 @@ function execScript(call: unknown[]): string {
   return String((call[1] as { input?: string } | undefined)?.input ?? "");
 }
 
-function skinWriteCalls(harness: ConnectHarness, sandboxName = "alpha") {
-  return harness.runOpenshellSpy.mock.calls.filter(
-    (call) =>
-      Array.isArray(call[0]) &&
-      call[0].join(" ") === `sandbox exec --name ${sandboxName} -- sh -s` &&
-      execScript(call).includes('mv -f "$tmp" "$skin_dir/nemoclaw-light.yaml"'),
-  );
-}
-
 function skinRemoveCalls(harness: ConnectHarness, sandboxName = "alpha") {
   return harness.runOpenshellSpy.mock.calls.filter(
     (call) =>
@@ -81,10 +72,9 @@ describe("Hermes sandbox connect light terminal skin", () => {
     delete require.cache[requireDist.resolve(connectModulePath)];
   });
 
-  it("prepares the NemoClaw Hermes light skin inside the sandbox on light macOS Terminal.app (#6380)", async () => {
+  it("never installs or applies a skin on a light terminal; upstream Hermes remaps colors natively (#6380)", async () => {
     vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
     vi.stubEnv("COLORFGBG", "0;15");
-    vi.stubEnv("HERMES_TUI_LIGHT", "");
     const harness = createConnectHarness({
       agentName: "hermes",
       hermesConfig: { model: "test" },
@@ -100,13 +90,8 @@ describe("Hermes sandbox connect light terminal skin", () => {
       "alpha",
       expect.objectContaining({ agentName: "hermes" }),
     );
-    const skinWriteCall = skinWriteCalls(harness)[0];
-    expect(skinWriteCall).toBeDefined();
-    expect(execScript(skinWriteCall ?? [])).not.toContain("config.yaml");
-    expect(harness.writeSandboxConfigSpy).toHaveBeenCalledOnce();
-    expect(harness.writeSandboxConfigSpy.mock.calls[0][2]).toMatchObject({
-      display: { skin: NEMOCLAW_HERMES_LIGHT_SKIN_NAME },
-    });
+    expect(skinRemoveCalls(harness)).toHaveLength(0);
+    expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
 
     const connectCall = connectCalls(harness)[0];
     expect(connectCall?.[2]).toEqual(
@@ -121,7 +106,32 @@ describe("Hermes sandbox connect light terminal skin", () => {
     expectConnectSucceeded(harness, exitSpy);
   });
 
-  it("does not prepare the NemoClaw Hermes light skin when the sandbox Hermes config already sets display.skin (#6380)", async () => {
+  it("keeps a stale nemoclaw-light reference on a light terminal so older images keep working (#6380)", async () => {
+    vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
+    vi.stubEnv("COLORFGBG", "0;15");
+    const hermesConfig = {
+      display: { skin: NEMOCLAW_HERMES_LIGHT_SKIN_NAME },
+      model: "test",
+    };
+    const harness = createConnectHarness({
+      agentName: "hermes",
+      hermesConfig,
+      sessionAgent: {
+        name: "hermes",
+        runtime: { kind: "terminal", interactive_command: "hermes" },
+      },
+    });
+
+    await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
+
+    expect(harness.readSandboxConfigSpy).toHaveBeenCalledOnce();
+    expect(skinRemoveCalls(harness)).toHaveLength(0);
+    expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
+    expect(hermesConfig.display.skin).toBe(NEMOCLAW_HERMES_LIGHT_SKIN_NAME);
+    expectConnectSucceeded(harness, exitSpy);
+  });
+
+  it("does not touch the Hermes config when it already sets a user-owned display.skin (#6380)", async () => {
     vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
     vi.stubEnv("COLORFGBG", "0;15");
     const harness = createConnectHarness({
@@ -135,7 +145,7 @@ describe("Hermes sandbox connect light terminal skin", () => {
 
     await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
 
-    expect(skinWriteCalls(harness)).toHaveLength(0);
+    expect(skinRemoveCalls(harness)).toHaveLength(0);
     expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
     expect(harness.readSandboxConfigSpy).toHaveBeenCalledOnce();
     expect(harness.errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Hermes light"));
@@ -161,7 +171,6 @@ describe("Hermes sandbox connect light terminal skin", () => {
 
     expect(harness.resolveAgentConfigSpy).toHaveBeenCalledOnce();
     expect(harness.readSandboxConfigSpy).toHaveBeenCalledOnce();
-    expect(skinWriteCalls(harness)).toHaveLength(0);
     expect(skinRemoveCalls(harness)).toHaveLength(1);
     expect(harness.writeSandboxConfigSpy).toHaveBeenCalledOnce();
     expect(hermesConfig).toEqual({ model: "test" });
@@ -214,7 +223,7 @@ describe("Hermes sandbox connect light terminal skin", () => {
 
     expect(harness.resolveAgentConfigSpy).not.toHaveBeenCalled();
     expect(harness.readSandboxConfigSpy).not.toHaveBeenCalled();
-    expect(skinWriteCalls(harness)).toHaveLength(0);
+    expect(skinRemoveCalls(harness)).toHaveLength(0);
     expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
     expect(warningText(harness)).not.toContain("Could not");
     expectConnectSucceeded(harness, exitSpy);
@@ -222,8 +231,8 @@ describe("Hermes sandbox connect light terminal skin", () => {
 
   it("targets only the requested Hermes sandbox when sibling sandboxes are registered (#6380)", async () => {
     vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
-    vi.stubEnv("COLORFGBG", "0;15");
-    const alphaConfig = { model: "alpha" };
+    vi.stubEnv("COLORFGBG", "0;0");
+    const alphaConfig = { display: { skin: NEMOCLAW_HERMES_LIGHT_SKIN_NAME }, model: "alpha" };
     const betaConfig = { display: { skin: "beta-owned" }, model: "beta" };
     const harness = createConnectHarness({
       agentName: "hermes",
@@ -251,8 +260,8 @@ describe("Hermes sandbox connect light terminal skin", () => {
     expect(harness.writeSandboxConfigSpy.mock.calls.map(([name]) => String(name))).toEqual([
       "alpha",
     ]);
-    expect(skinWriteCalls(harness, "alpha")).toHaveLength(1);
-    expect(skinWriteCalls(harness, "beta")).toHaveLength(0);
+    expect(skinRemoveCalls(harness, "alpha")).toHaveLength(1);
+    expect(skinRemoveCalls(harness, "beta")).toHaveLength(0);
     expect(betaConfig).toEqual({
       display: { skin: "beta-owned" },
       model: "beta",
@@ -261,8 +270,8 @@ describe("Hermes sandbox connect light terminal skin", () => {
     expectConnectSucceeded(harness, exitSpy);
   });
 
-  it("continues connecting when Hermes config read fails during light-skin preparation (#6380)", async () => {
-    vi.stubEnv("COLORFGBG", "0;15");
+  it("continues connecting when Hermes config read fails during light-skin cleanup (#6380)", async () => {
+    vi.stubEnv("COLORFGBG", "0;0");
     const harness = createConnectHarness({
       agentName: "hermes",
       sessionAgent: {
@@ -276,115 +285,10 @@ describe("Hermes sandbox connect light terminal skin", () => {
 
     await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
 
-    expect(skinWriteCalls(harness)).toHaveLength(0);
+    expect(skinRemoveCalls(harness)).toHaveLength(0);
     expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
     expect(warningText(harness)).toContain("Could not read Hermes light terminal skin");
     expect(warningText(harness)).not.toContain("user:secret");
-    expectConnectSucceeded(harness, exitSpy);
-  });
-
-  it("continues connecting when Hermes skin file write fails before config update (#6380)", async () => {
-    vi.stubEnv("COLORFGBG", "0;15");
-    const harness = createConnectHarness({
-      agentName: "hermes",
-      hermesConfig: { model: "test" },
-      sessionAgent: {
-        name: "hermes",
-        runtime: { kind: "terminal", interactive_command: "hermes" },
-      },
-    });
-    harness.runOpenshellSpy.mockImplementation((args: unknown) =>
-      Array.isArray(args) && args.slice(0, 6).join(" ") === "sandbox exec --name alpha -- sh"
-        ? { status: 2, error: new Error(`write failed ${REDACTED_URL_CANARY}`) }
-        : { status: 0 },
-    );
-
-    await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
-
-    expect(skinWriteCalls(harness)).toHaveLength(1);
-    expect(harness.writeSandboxConfigSpy).not.toHaveBeenCalled();
-    expect(warningText(harness)).toContain("Could not write Hermes light terminal skin");
-    expect(warningText(harness)).not.toContain("user:secret");
-    expectConnectSucceeded(harness, exitSpy);
-  });
-
-  it("continues connecting when Hermes config update fails after skin write (#6380)", async () => {
-    vi.stubEnv("COLORFGBG", "0;15");
-    const harness = createConnectHarness({
-      agentName: "hermes",
-      hermesConfig: { model: "test" },
-      sessionAgent: {
-        name: "hermes",
-        runtime: { kind: "terminal", interactive_command: "hermes" },
-      },
-    });
-    harness.writeSandboxConfigSpy.mockImplementationOnce(() => {
-      throw new Error(`update failed ${REDACTED_URL_CANARY}`);
-    });
-
-    await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
-
-    expect(skinWriteCalls(harness)).toHaveLength(1);
-    expect(skinRemoveCalls(harness)).toHaveLength(1);
-    expect(harness.writeSandboxConfigSpy).toHaveBeenCalledOnce();
-    expect(warningText(harness)).toContain("Could not update Hermes light terminal skin");
-    expect(warningText(harness)).not.toContain("user:secret");
-    expectConnectSucceeded(harness, exitSpy);
-  });
-
-  it("warns when rollback cleanup fails after Hermes config update failure (#6380)", async () => {
-    vi.stubEnv("COLORFGBG", "0;15");
-    const harness = createConnectHarness({
-      agentName: "hermes",
-      hermesConfig: { model: "test" },
-      sessionAgent: {
-        name: "hermes",
-        runtime: { kind: "terminal", interactive_command: "hermes" },
-      },
-    });
-    harness.writeSandboxConfigSpy.mockImplementationOnce(() => {
-      throw new Error(`update failed ${REDACTED_URL_CANARY}`);
-    });
-    harness.runOpenshellSpy.mockImplementation((_args: unknown, opts: unknown) => {
-      const script = String((opts as { input?: string } | undefined)?.input ?? "");
-      return script.includes('rm -f "$skin_dir/nemoclaw-light.yaml"')
-        ? { status: 2, error: new Error(`remove failed ${REDACTED_URL_CANARY}`) }
-        : { status: 0 };
-    });
-
-    await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
-
-    expect(skinWriteCalls(harness)).toHaveLength(1);
-    expect(skinRemoveCalls(harness)).toHaveLength(1);
-    expect(warningText(harness)).toContain("Could not update Hermes light terminal skin");
-    expect(warningText(harness)).toContain("Could not remove Hermes light terminal skin");
-    expect(warningText(harness)).not.toContain("user:secret");
-    expectConnectSucceeded(harness, exitSpy);
-  });
-
-  it("writes the Hermes light skin over stdin so the multi-line script never rides argv (#6834)", async () => {
-    vi.stubEnv("TERM_PROGRAM", "Apple_Terminal");
-    vi.stubEnv("COLORFGBG", "0;15");
-    const harness = createConnectHarness({
-      agentName: "hermes",
-      hermesConfig: { model: "test" },
-      sessionAgent: {
-        name: "hermes",
-        runtime: { kind: "terminal", interactive_command: "hermes" },
-      },
-    });
-
-    await expect(harness.connectSandbox("alpha")).rejects.toThrow("process.exit(0)");
-
-    const skinWriteCall = skinWriteCalls(harness)[0];
-    expect(skinWriteCall?.[0]).toEqual(["sandbox", "exec", "--name", "alpha", "--", "sh", "-s"]);
-    for (const part of (skinWriteCall?.[0] ?? []) as string[]) {
-      expect(part).not.toMatch(/[\n\r]/);
-    }
-    const opts = skinWriteCall?.[1] as { input?: string; stdio?: unknown } | undefined;
-    expect(opts?.input ?? "").toContain('mv -f "$tmp" "$skin_dir/nemoclaw-light.yaml"');
-    expect(opts?.input ?? "").toContain("\n");
-    expect(opts?.stdio).toEqual(["pipe", "ignore", "ignore"]);
     expectConnectSucceeded(harness, exitSpy);
   });
 });

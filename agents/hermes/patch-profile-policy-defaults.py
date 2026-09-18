@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Pin fail-safe defaults for every Hermes v0.19.0 profile home.
+"""Pin fail-safe defaults for every Hermes v0.20.6 profile home.
 
 Fresh Hermes named profiles intentionally omit ``config.yaml``. The upstream
-v2026.7.20 defaults would therefore enable smart command approval, browser
+v2026.8.27 defaults would therefore enable smart command approval, browser
 evaluation of sensitive primitives, reasoning/commentary display, update-time
 state mutation, and indefinite gateway sessions outside NemoClaw's generated
 default home.
@@ -20,13 +20,16 @@ homes. It also fixes independent config copies and loaders that bypass
   its dataclass and ``from_dict`` fallback must retain the prior 24-hour/daily
   reset policy.
 * ``cli.CLI_CONFIG`` carries an independent display default, while
-  ``tui_gateway.server`` has two raw-YAML reasoning-display fallbacks.
+  ``tui_gateway.server`` keeps its raw-YAML reasoning-display fallback in
+  ``_load_show_reasoning`` (v2026.8.27 folded every call site into that
+  helper, so a single replacement now covers the TUI surface).
 * ``agent.agent_init`` has three commentary-visibility fallbacks for missing
   keys and config-load errors.
-* ``hermes_cli.main`` independently defaults update backups and CUA refresh
-  on when configuration is missing or unreadable.
+* ``hermes_cli.update_cmd`` (split out of ``hermes_cli.main`` in the
+  v2026.8.x CLI decomposition) independently defaults update backups and CUA
+  refresh on when configuration is missing or unreadable.
 
-Every input file is bound to the exact upstream v2026.7.20 source hash before
+Every input file is bound to the exact upstream v2026.8.27 source hash before
 any edit. A Hermes upgrade must deliberately refresh these hashes and source
 shapes instead of silently carrying the patch forward.
 
@@ -55,14 +58,17 @@ from managed_policy import (  # noqa: E402
     profile_default_values,
 )
 
+# v2026.8.27 moved the configuration defaults into ``config_defaults.py`` and
+# the update machinery into ``update_cmd.py``; both names below keep the
+# historical kind labels even though the target paths changed.
 EXPECTED_SOURCE_SHA256 = {
-    "config": "172b78ecb923048859ca177d96f5b010b44ec74bb1d13553577ff49bde1a071d",
-    "browser": "02b4a0a0c8fc8b204c8f818dff1dd64295a817e5543b8a643198bcedbfbbcba2",
-    "gateway": "7221ee05798566ca7cf570035615a9b29034cf92ce5a6eaa5eec0693040c08aa",
-    "cli": "cbcf1780174a03b225508244575915225a36502f54ad4cddf1da644d9174fec4",
-    "tui": "5d00832327e4362ac75032f95003e1fa49aead4756cf7927dcfd66447b205a59",
-    "agent": "85b7cb13d6e6306e75d5eec46f193433df680425533b7d35ee99e0f7eab9512a",
-    "main": "d6bf89a33fb708376a7ab354cff8081a3c3726dbfb91d84bbb679cd667db596c",
+    "config": "3fa2c9f02a76d77602f9b09b7b01f72ca45a40eea92dbac33cc3a1fc5071bff8",
+    "browser": "66008422f53a218dd7be5b1f5f3573a92254b75abba6f99f84e111e03a3e1b36",
+    "gateway": "d88dcda8c5a14b79d84afcc1d5784c165858ab5d6f289ba59fe421502d2c63a3",
+    "cli": "85c95927002a77602b0fb0384413357b6ee0149dfc5b31e048c29d59654a22a9",
+    "tui": "6fdeca2133b22a88c527a63764eb201c24a27fc2e894045e9bdb647f89ea7d26",
+    "agent": "883168664a89bcf8954bbe486b672ab01c96fc0c06c88acdaf21559905a60276",
+    "main": "fb4ee75ebcf12bd9bc014d212c7abc110e1afbcf0c2cb79caa7230dd58006911",
 }
 
 CONFIG_REQUIRED_UNCHANGED = ('"allow_unsafe_evaluate": False',)
@@ -201,12 +207,9 @@ def patch_tui_source(source: str, values: dict[str, object]) -> str:
             f'    return bool((_load_cfg().get("display") or {{}}).get("show_reasoning", {expected}))',
             1,
         ),
-        (
-            'if bool((cfg.get("display") or {}).get("show_reasoning", True))',
-            "# NemoClaw compatibility override: missing raw YAML stays hidden.\n"
-            f'            if bool((cfg.get("display") or {{}}).get("show_reasoning", {expected}))',
-            1,
-        ),
+        # v2026.8.27 routed every show_reasoning call site through
+        # ``_load_show_reasoning``; the former inline ``cfg.get(...)`` fallback
+        # no longer exists, so no second replacement is needed.
     )
     patched = source
     for old, new, expected_count in replacements:
@@ -285,7 +288,7 @@ def patch_file(path: Path, kind: str, values: dict[str, object]) -> None:
     expected_sha256 = EXPECTED_SOURCE_SHA256[kind]
     if actual_sha256 != expected_sha256:
         raise SystemExit(
-            f"ERROR: {path} is not the reviewed Hermes v2026.7.20 {kind} source; "
+            f"ERROR: {path} is not the reviewed Hermes v2026.8.27 {kind} source; "
             f"expected sha256 {expected_sha256}, got {actual_sha256}"
         )
 
@@ -315,8 +318,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--config",
-        default="/opt/hermes/hermes_cli/config.py",
-        help="Pinned Hermes configuration module",
+        default="/opt/hermes/hermes_cli/config_defaults.py",
+        help="Pinned Hermes configuration defaults module",
     )
     parser.add_argument(
         "--browser",
@@ -345,8 +348,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--main",
-        default="/opt/hermes/hermes_cli/main.py",
-        help="Pinned Hermes main/update module",
+        default="/opt/hermes/hermes_cli/update_cmd.py",
+        help="Pinned Hermes update module",
     )
     args = parser.parse_args()
     try:

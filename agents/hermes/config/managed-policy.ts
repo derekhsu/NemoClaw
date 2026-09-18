@@ -48,12 +48,14 @@ export const MANAGED_IMAGE_HERMES_SUPPORTED_PLATFORMS = [
   "teams",
 ] as const;
 
-// Hermes v0.19.0 also packages platform plugins and built-in adapters that are
+// Hermes v0.20.6 also packages platform plugins and built-in adapters that are
 // not yet supported by NemoClaw's messaging manifests. A neutral managed image
 // must explicitly disable the complete installed surface, while keeping this
 // list separate from the supported/activatable contract above.
 export const MANAGED_IMAGE_HERMES_NEUTRAL_PLATFORMS = [
+  "a2a",
   "bluebubbles",
+  "buzz",
   "dingtalk",
   "discord",
   "email",
@@ -182,7 +184,12 @@ export function buildHermesManagedPolicy(
   }
 
   const config: HermesManagedConfigBase = {
-    _config_version: 33,
+    // Hermes 0.20.6's current schema version. Stamping it here matters: the
+    // managed config hash covers config.yaml byte-for-byte, so a stale stamp
+    // would let startup migration rewrite the file and trip the drift guard.
+    // Migrations v34–v39 are all conditional scrubs that are no-ops on this
+    // generated shape.
+    _config_version: 39,
     approvals: {
       // Hermes 0.19 defaults an omitted mode to smart authorization.
       // Automated command authorization needs a separate product decision.

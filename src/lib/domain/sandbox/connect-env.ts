@@ -3,33 +3,12 @@
 
 import type { ConfigObject, ConfigValue } from "../../security/credential-filter";
 
+// Migration remnant: Hermes v2026.8.27 ships native light-terminal support
+// (OSC 11 detection plus a global get_color remap), so NemoClaw no longer
+// installs or applies this skin. These helpers only exist to strip the
+// `nemoclaw-light` reference from sandbox configs written by older releases
+// and to delete the skin file it pointed at.
 export const NEMOCLAW_HERMES_LIGHT_SKIN_NAME = "nemoclaw-light";
-export const NEMOCLAW_HERMES_LIGHT_SKIN_REVIEWED_HERMES_VERSIONS = [
-  "v2026.6.19",
-  "v2026.7.1",
-  "v2026.7.20",
-] as const;
-
-// Compatibility boundary: remove this NemoClaw-managed light skin once the
-// pinned Hermes version in agents/hermes/Dockerfile.base includes upstream
-// readable light-terminal defaults for assistant response and startup list text.
-// The paired unit test intentionally fails on a Hermes version bump so this
-// compatibility shim is re-reviewed instead of silently aging forward.
-export const NEMOCLAW_HERMES_LIGHT_SKIN_YAML = `name: ${NEMOCLAW_HERMES_LIGHT_SKIN_NAME}
-description: NemoClaw-managed Hermes light terminal compatibility skin
-colors:
-  banner_border: "#CD7F32"
-  banner_title: "#FFD700"
-  banner_accent: "#FFBF00"
-  banner_dim: "#B8860B"
-  banner_text: "#7A5A0F"
-  prompt: "#7A5A0F"
-  response_text: "#7A5A0F"
-  response_body: "#7A5A0F"
-  response_border: "#FFD700"
-  tool_list_text: "#7A5A0F"
-  skill_list_text: "#7A5A0F"
-`;
 
 function hasEnvValue(value: string | undefined): boolean {
   return String(value ?? "").trim().length > 0;
@@ -47,28 +26,6 @@ export function hermesConfigDisplaySkin(config: ConfigObject): string | null {
 
 export function hermesConfigUsesManagedLightSkin(config: ConfigObject): boolean {
   return hermesConfigDisplaySkin(config) === NEMOCLAW_HERMES_LIGHT_SKIN_NAME;
-}
-
-function canApplyHermesLightSkinConfig(config: ConfigObject): boolean {
-  const display = config.display;
-  if (display === undefined) return true;
-  if (!isConfigRecord(display)) return false;
-  return display.skin === undefined || display.skin === NEMOCLAW_HERMES_LIGHT_SKIN_NAME;
-}
-
-export function applyHermesLightSkinConfig(config: ConfigObject): boolean {
-  const display = config.display;
-  if (isConfigRecord(display)) {
-    if (display.skin !== undefined && display.skin !== NEMOCLAW_HERMES_LIGHT_SKIN_NAME) {
-      return false;
-    }
-    if (display.skin === NEMOCLAW_HERMES_LIGHT_SKIN_NAME) return false;
-    display.skin = NEMOCLAW_HERMES_LIGHT_SKIN_NAME;
-    return true;
-  }
-  if (display !== undefined) return false;
-  config.display = { skin: NEMOCLAW_HERMES_LIGHT_SKIN_NAME };
-  return true;
 }
 
 export function removeHermesLightSkinConfig(config: ConfigObject): boolean {
@@ -99,18 +56,6 @@ export function shouldInspectHermesLightSkinConfig(
     agent?.name === "hermes" &&
     !hasEnvValue(env.HERMES_TUI_LIGHT) &&
     !hasEnvValue(env.HERMES_TUI_THEME)
-  );
-}
-
-export function shouldApplyHermesLightSkin(
-  agent: { name?: string } | null | undefined,
-  env: NodeJS.ProcessEnv,
-  config: ConfigObject,
-): boolean {
-  return (
-    shouldInspectHermesLightSkinConfig(agent, env) &&
-    hostTerminalLooksLight(env) &&
-    canApplyHermesLightSkinConfig(config)
   );
 }
 

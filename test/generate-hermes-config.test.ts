@@ -394,7 +394,7 @@ describe("agents/hermes/generate-config.ts", () => {
     const { config, envFile } = runConfigScript();
     const configYaml = fs.readFileSync(path.join(tmpDir, ".hermes", "config.yaml"), "utf-8");
 
-    expect(config._config_version).toBe(33);
+    expect(config._config_version).toBe(39);
     expect(config.agent?.verify_on_stop).toBe(false);
     expect(config.agent?.reasoning_effort).toBeUndefined();
     expect(configYaml).not.toContain("reasoning_effort:");

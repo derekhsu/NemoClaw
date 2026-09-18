@@ -36,7 +36,7 @@ def verify_profile_policy() -> None:
     from gateway.config import SessionResetPolicy, load_gateway_config
     from hermes_cli import config as hermes_config
     from hermes_cli.config import load_config_readonly
-    from hermes_cli.main import _resolve_pre_update_backup_mode
+    from hermes_cli.update_cmd import _resolve_pre_update_backup_mode
     from managed_policy import load_managed_policy, profile_default_values
     from tools.browser_tool import (
         _allow_unsafe_browser_evaluate,
@@ -170,12 +170,24 @@ def verify_neutral_platform_inertness() -> None:
 
 
 def verify_cron_runtime_source() -> None:
-    from cron.executions import EXECUTIONS_FILE
+    import cron.executions
+    import cron.incidents
     from hermes_cli.backup import _QUICK_STATE_FILES
     from hermes_constants import get_hermes_home
 
     expected = get_hermes_home().resolve() / "runtime" / "cron-executions.db"
-    assert EXECUTIONS_FILE == expected
+    # Hermes v2026.8.27 keeps EXECUTIONS_FILE as an optional override and
+    # resolves the production path lazily so a dashboard-entered profile cannot
+    # leak executions into the import-time home. Prove the lazy resolution —
+    # in executions._connect and the shared incidents._db_path — lands under
+    # runtime/cron-executions.db rather than asserting the override constant.
+    assert cron.executions.EXECUTIONS_FILE is None
+    conn = cron.executions._connect()
+    try:
+        assert expected.exists(), expected
+    finally:
+        conn.close()
+    assert cron.incidents._db_path() == expected
     assert "runtime/cron-executions.db" in _QUICK_STATE_FILES
     assert "cron/executions.db" not in _QUICK_STATE_FILES
 

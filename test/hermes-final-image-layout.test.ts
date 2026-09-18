@@ -473,17 +473,17 @@ describe("Hermes final image layout", () => {
     expect(doctorLayer).toContain('if [ "$NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION" = "1" ]; then');
     expect(doctorLayer).toContain('assert m.version("microsoft-teams-apps") == "2.0.13.4"');
     expect(doctorLayer).toContain('assert m.version("aiohttp") == "3.14.3"');
-    expect(doctorLayer).toContain("assert len(neutral) == 30");
+    expect(doctorLayer).toContain("assert len(neutral) == 32");
     expect(finalStage).toContain("neutral-platform-inertness");
     expect(finalStage).toContain("GOOGLE_CHAT_SERVICE_ACCOUNT_JSON");
     expect(finalStage).toContain("WHATSAPP_CLOUD_ACCESS_TOKEN");
     expect(finalStage).toContain(
       "ARG NEMOCLAW_HERMES_POST_PROFILE_GATEWAY_CONFIG_SHA256=" +
-        "b50a8390311c828fa9e13084e9af0caadafe2380ae161ef36dd4bdf792b22ee6",
+        "c0080c4da9b04c4749e92561c1c68a3f4debbc62a502cd47b139180442219621",
     );
     expect(finalStage).toContain(
       "ARG NEMOCLAW_HERMES_NEUTRAL_PLATFORM_OUTPUT_SHA256=" +
-        "77ad342af30d59a5b863d9f5f817247d816fd582fb12d38e074243f88d85b9f4",
+        "47fe633d6e3117e5fd399cf99ebae464c85b66a3430949678096f50614a3b1c3",
     );
     expect(doctorLayer).toMatch(/generate-config[.]ts\s+&& if /u);
     expect(doctorLayer).toMatch(/fi\s+&& rm -rf \/sandbox\/[.]cache$/u);

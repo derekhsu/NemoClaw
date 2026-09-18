@@ -339,13 +339,13 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py provider/model merge",
     const run = runWrapper(
       ["--provider", "nvidia-prod", "--model", "nvidia/nemotron-3-super-120b-a12b"],
       {},
-      { upstreamVersion: "0.20.0" },
+      { upstreamVersion: "0.21.0" },
     );
 
     expect(run.status).toBe(2);
     expect(run.realInvoked).toBe(false);
-    expect(run.stderr).toContain("adapter targets Hermes 0.19.0");
-    expect(run.stderr).toContain("installed CLI reports 0.20.0");
+    expect(run.stderr).toContain("adapter targets Hermes 0.20.6");
+    expect(run.stderr).toContain("installed CLI reports 0.21.0");
   });
 
   it("rejects ambiguous continuation text before the Hermes 0.19 console command (#8011)", () => {

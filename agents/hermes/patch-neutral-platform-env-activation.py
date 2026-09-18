@@ -3,8 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Keep explicitly disabled Hermes platforms inert under ambient credentials.
 
-Hermes v0.19.0 honors ``enabled: false`` in its shared and plugin-driven
-environment enablement paths, but several built-in adapters still assign
+Hermes v0.20.6 honors ``enabled: false`` in its shared and plugin-driven
+environment enablement paths, and its ``_enable_from_env`` helper plus the
+WhatsApp/Slack/API-server branches now skip re-enabling platforms marked
+``_enabled_explicit``. Residual adapters (Home Assistant, email, SMS,
+webhook, msgraph, dingtalk, feishu, and friends) still assign
 ``enabled = True`` directly when credentials are present. A neutral managed
 image explicitly disables every packaged optional platform. Preserve those
 complete platform objects across environment processing so credentials cannot
@@ -21,14 +24,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-IMPORT_ANCHOR = """import logging
-import os
-import json
+IMPORT_ANCHOR = """from pathlib import Path
 """
-PATCHED_IMPORT_ANCHOR = """from copy import deepcopy
-import logging
-import os
-import json
+PATCHED_IMPORT_ANCHOR = """from pathlib import Path
+from copy import deepcopy
 """
 
 FUNCTION_ANCHOR = '''def _apply_env_overrides(config: GatewayConfig) -> None:

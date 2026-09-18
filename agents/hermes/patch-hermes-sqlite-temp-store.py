@@ -4,7 +4,7 @@
 """Patch SessionDB.__init__ to use in-memory temp store for SQLite FK processing.
 
 Source-of-truth note for this localized Hermes runtime patch:
-  - Invalid state: Hermes v0.19.0 SessionDB does not set PRAGMA temp_store=MEMORY,
+  - Invalid state: Hermes v0.20.6 SessionDB does not set PRAGMA temp_store=MEMORY,
     so SQLite falls back to file-based temp storage when processing FK constraints
     (for example, the ON DELETE CASCADE on session_model_usage -> sessions). When
     `hermes sessions delete` is invoked through OpenShell sandbox execution —
@@ -16,10 +16,17 @@ Source-of-truth note for this localized Hermes runtime patch:
     (#8301). The same command succeeds through Docker execution because that
     context allows the file-based temp store.
   - Value being patched: pinned/prebuilt `/opt/hermes/hermes_state.py`
-    `SessionDB.__init__` connection setup block; specifically, the statement
-    immediately following `apply_wal_with_fallback()` that enables FK enforcement.
-    `PRAGMA temp_store=MEMORY` is inserted before `PRAGMA foreign_keys=ON` so the
-    in-memory store is active before any FK-constrained write.
+    `SessionDB.__init__` writer-connection setup block; specifically, the
+    statement immediately following `apply_database_pragmas()` that enables FK
+    enforcement. `PRAGMA temp_store=MEMORY` is inserted before
+    `PRAGMA foreign_keys=ON` so the in-memory store is active before any
+    FK-constrained write.
+  - v0.20.6 note: upstream added ``apply_database_pragmas()``, which honors a
+    config-driven ``database.temp_store`` setting. This patch intentionally
+    stays a source pin rather than relying on config: the inserted statement
+    runs after the config pass, so a profile home whose config.yaml omits (or
+    overrides) ``database.temp_store`` still gets the in-memory store that the
+    OpenShell seccomp context requires.
   - Source-fix constraint: NemoClaw layers a sandbox image on top of the
     published Hermes runtime; the source fix belongs upstream in Hermes, not in
     NemoClaw's TypeScript or wrapper code.
@@ -41,11 +48,11 @@ import argparse
 from pathlib import Path
 
 OLD = (
-    'apply_wal_with_fallback(self._conn, db_label="state.db")\n'
+    'apply_database_pragmas(self._conn, db_label="state.db")\n'
     '                self._conn.execute("PRAGMA foreign_keys=ON")'
 )
 NEW = (
-    'apply_wal_with_fallback(self._conn, db_label="state.db")\n'
+    'apply_database_pragmas(self._conn, db_label="state.db")\n'
     '                self._conn.execute("PRAGMA temp_store=MEMORY")\n'
     '                self._conn.execute("PRAGMA foreign_keys=ON")'
 )

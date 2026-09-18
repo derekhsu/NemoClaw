@@ -19,8 +19,8 @@ export async function launchSandbox(sandboxName: string): Promise<void> {
 
   // `connect` runs this immediately before opening its SSH session. It is not
   // part of prepareInteractiveSession, so `launch` must call it too: without it
-  // a Hermes TUI on a light-background terminal keeps the default dark skin,
-  // and a switch back to a dark terminal never removes the managed skin.
+  // a sandbox configured by an older release keeps a stale nemoclaw-light skin
+  // reference after the user switches back to a dark terminal.
   prepareHermesLightTerminalSkin(sandboxName, agent, process.env);
 
   // Run the agent through a login shell. execSandbox wraps every command in

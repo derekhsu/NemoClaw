@@ -21,7 +21,7 @@ const cliAdapter = JSON.parse(
   fs.readFileSync(path.join(root, "agents", "hermes", "hermes-cli-adapter-v1.json"), "utf8"),
 );
 const review = fs.readFileSync(
-  path.join(root, "docs", "security", "hermes-0.19.0-dependency-review.md"),
+  path.join(root, "docs", "security", "hermes-0.20.6-dependency-review.md"),
   "utf8",
 );
 const securityDependenciesPatch = fs.readFileSync(
@@ -57,24 +57,24 @@ function uvVersionCheckStatus(output: string, expectedVersion: string): number |
   }).status;
 }
 
-describe("Hermes 0.19.0 dependency review", () => {
+describe("Hermes 0.20.6 dependency review", () => {
   it("binds every active source identity to the reviewed release", () => {
-    expect(arg("HERMES_VERSION")).toBe("v2026.7.20");
-    expect(arg("HERMES_SEMVER")).toBe("0.19.0");
+    expect(arg("HERMES_VERSION")).toBe("v2026.8.27");
+    expect(arg("HERMES_SEMVER")).toBe("0.20.6");
     expect(arg("HERMES_TARBALL_SHA256")).toBe(
-      "285f3fc134ff466a90065e1517801a68993733b807158ee8f32aa01613786990",
+      "e622723b5bf3cd6c1db974d92d32242f1cb63f61c1112b6f708b34d619ef0fc7",
     );
     expect(arg("HERMES_NPM_INTEGRITY")).toBe(
-      "sha512-+oVKG3lXbk2kEP+J6BXZjtmSBSaFfczIdOWQ9CUSTdTqq2uyHbk4p+kPyZ6MeGs56JU5qXzMNbqGKRVOQRGC1A==",
+      "sha512-s5q1IEBifCBb77QMwkse4MRaAaoZSxIa4IkicIO3jL7MIdq15YvnSyiNvsTOWNBi6t3shFpIg+H7+9MJsOiSkg==",
     );
-    expect(manifest).toContain('expected_version: "0.19.0"');
-    expect(review).toContain("`3ef6bbd201263d354fd83ec55b3c306ded2eb72a`");
-    expect(review).toContain("`bd0bac012aee38a60894781f4597dc29ee7bedb3448540249921f10d3bef327f`");
-    expect(review).toContain("`ac986bede64a2785436676c0ea084ec586574f8cb00a9d047e095b435d3e21c0`");
+    expect(manifest).toContain('expected_version: "0.20.6"');
+    expect(review).toContain("`fcebd62163497e77e5de00d26d2ed86cb4ef8761`");
+    expect(review).toContain("`5fc308a70719a83cccdbba4c0e39c23f5a8239d5`");
+    expect(review).toContain("`ac12be86eb06ce8ace025cb508fda4b243a5f328`");
   });
 
   it("preserves the reviewed authorization and state migrations", () => {
-    expect(config).toContain("_config_version: 33");
+    expect(config).toContain("_config_version: 39");
     expect(config).toMatch(/approvals:\s*\{\s*[\s\S]*?mode: "manual"/u);
     expect(config).toMatch(/session_reset:\s*\{\s*[\s\S]*?mode: "both"/u);
     expect(config).toMatch(/browser:\s*\{\s*[\s\S]*?restrict_evaluate: true/u);
@@ -100,7 +100,7 @@ describe("Hermes 0.19.0 dependency review", () => {
 
   it("binds the CLI adapter version and source-fix constraints to target Hermes", () => {
     expect(cliAdapter.adapter_version).toBe(1);
-    expect(cliAdapter.upstream_cli_version).toBe("0.19.0");
+    expect(cliAdapter.upstream_cli_version).toBe("0.20.6");
     expect(cliAdapter.managed_commands).toEqual(["chat"]);
     expect(cliAdapter.session_name_coalescer).toEqual({
       module: "hermes_cli.main",
@@ -150,14 +150,12 @@ describe("Hermes 0.19.0 dependency review", () => {
     expect(dockerfileBase).toContain("uv pip check --python /opt/hermes/.venv/bin/python");
     expect(arg("NODE_VERSION")).toBe("24.18.1");
     expect(arg("UV_VERSION")).toBe("0.11.33");
+    // Hermes 0.20.6 natively selects aiohttp, cryptography, mcp, Pillow,
+    // starlette, tornado, and python-multipart; the patch only needs to floor
+    // the two remaining deltas.
     for (const selection of [
-      '"aiohttp==3.14.3"',
-      '"cryptography==50.0.0"',
       '"alibabacloud-dingtalk==2.2.54"',
-      '"mcp==1.28.1"',
-      '"Pillow==12.3.0"',
-      '"starlette==1.3.1"',
-      '"tornado==6.5.7"',
+      '"httpx2==2.12.0"',
     ]) {
       expect(securityDependenciesPatch).toContain(selection);
     }
@@ -166,16 +164,17 @@ describe("Hermes 0.19.0 dependency review", () => {
       .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
       .join("\n");
     for (const supersededSelection of [
-      '"aiohttp==3.14.1"',
-      '"cryptography==48.0.1"',
       '"alibabacloud-dingtalk==2.2.42"',
+      '"httpx2==2.7.0"',
     ]) {
       expect(addedPatchLines).not.toContain(supersededSelection);
     }
     for (const installedVersion of [
       "'aiohttp': '3.14.3'",
       "'cryptography': '50.0.0'",
-      "'mcp': '1.28.1'",
+      "'mcp': '2.0.0'",
+      "'httpx2': '2.12.0'",
+      "'httpcore2': '2.12.0'",
       "'pillow': '12.3.0'",
       "'starlette': '1.3.1'",
       "'tornado': '6.5.7'",
@@ -191,6 +190,15 @@ describe("Hermes 0.19.0 dependency review", () => {
     expect(dockerfileBase).toContain(
       "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23",
     );
+    for (const advisory of [
+      "GHSA-7mj9-2mp8-4m2p",
+      "GHSA-8xx6-hgc6-gc2m",
+      "GHSA-f2fp-rgf2-35cp",
+      "GHSA-h4x7-gw46-3wm6",
+      "GHSA-pf96-p4fj-6566",
+    ]) {
+      expect(review).toContain(advisory);
+    }
     for (const advisory of ["GHSA-5rvq-cxj2-64vf", "GHSA-6jv3-5f52-599m", "GHSA-v9pg-7xvm-68hf"]) {
       expect(review).toContain(advisory);
     }
@@ -203,9 +211,11 @@ describe("Hermes 0.19.0 dependency review", () => {
     expect(review).toContain("confirms 94 unique third-party package names");
     expect(review).toContain("Tornado `6.5.7` is the lowest version");
     expect(review).toContain("source-distribution-only");
-    expect(review).toContain("`mcp==1.28.1`");
+    expect(review).toContain("`mcp==2.0.0`");
     expect(review).toContain("`Pillow==12.3.0`");
     expect(review).toContain("`starlette==1.3.1`");
+    expect(review).toContain("`httpx2==2.12.0`");
+    expect(review).toContain("`httpcore2==2.12.0`");
     expect(review).toContain("`tornado==6.5.7`");
     expect(review).toContain("checksum-pinned Node.js `24.18.1`");
     expect(review).toContain("exact uv `0.11.33`");

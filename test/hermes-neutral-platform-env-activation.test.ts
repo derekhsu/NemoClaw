@@ -15,6 +15,7 @@ const UPSTREAM_FIXTURE = `import logging
 import os
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 @dataclass
 class PlatformConfig:

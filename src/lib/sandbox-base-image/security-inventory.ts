@@ -13,7 +13,7 @@ export const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
   "vim-common=2:9.2.0782-1",
   "vim-tiny=2:9.2.0782-1",
   "libssh2-1t64=1.11.1-1+deb13u1+nemoclaw1",
-  "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u4+nemoclaw1",
+  "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u5+nemoclaw1",
   "perl-base=5.44.0-1nemoclaw1",
   "perl=5.44.0-1nemoclaw1",
 ] as const;

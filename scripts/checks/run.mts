@@ -44,11 +44,6 @@ export const CHECKS: readonly CheckCommand[] = [
     args: ["scripts/checks/local-credential-helper-pin.mts"],
   },
   {
-    name: "hermes-light-skin-boundary",
-    command: TSX,
-    args: ["scripts/checks/hermes-light-skin-boundary.mts"],
-  },
-  {
     name: "dependency-pins",
     command: TSX,
     args: ["scripts/checks/dependency-pins.mts"],

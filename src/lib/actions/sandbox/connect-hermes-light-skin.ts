@@ -4,13 +4,8 @@
 import { runOpenshell } from "../../adapters/openshell/runtime";
 import { OPENSHELL_PROBE_TIMEOUT_MS } from "../../adapters/openshell/timeouts";
 import { R, YW } from "../../cli/terminal-style";
-import { shellQuote } from "../../core/shell-quote";
 import {
-  applyHermesLightSkinConfig,
-  hermesConfigUsesManagedLightSkin,
-  NEMOCLAW_HERMES_LIGHT_SKIN_YAML,
   removeHermesLightSkinConfig,
-  shouldApplyHermesLightSkin,
   shouldInspectHermesLightSkinConfig,
   shouldRemoveHermesLightSkin,
 } from "../../domain/sandbox/connect-env";
@@ -19,38 +14,9 @@ import { redact } from "../../security/redact";
 
 type ConnectAgent = { name?: string } | null | undefined;
 
-function encodeForSandboxWrite(content: string): string {
-  return Buffer.from(content, "utf8").toString("base64");
-}
-
 function warnHermesLightSkinFailure(action: string, error: unknown): void {
   const detail = error instanceof Error && error.message ? `: ${redact(error.message)}` : "";
   console.error(`  ${YW}⚠${R} Could not ${action} Hermes light terminal skin${detail}`);
-}
-
-function writeHermesLightSkinFile(sandboxName: string): boolean {
-  const skinB64 = encodeForSandboxWrite(NEMOCLAW_HERMES_LIGHT_SKIN_YAML);
-  const script = [
-    "set -eu",
-    'hermes_home="${HERMES_HOME:-/sandbox/.hermes}"',
-    'skin_dir="$hermes_home/skins"',
-    'mkdir -p "$skin_dir"',
-    'tmp="$(mktemp "$skin_dir/.nemoclaw-light.XXXXXX")"',
-    "trap 'rm -f \"$tmp\"' EXIT",
-    `printf %s ${shellQuote(skinB64)} | base64 -d > "$tmp"`,
-    'chmod 640 "$tmp"',
-    'mv -f "$tmp" "$skin_dir/nemoclaw-light.yaml"',
-    'chown sandbox:sandbox "$skin_dir/nemoclaw-light.yaml" 2>/dev/null || true',
-  ].join("\n");
-  const result = runOpenshell(["sandbox", "exec", "--name", sandboxName, "--", "sh", "-s"], {
-    ignoreError: true,
-    input: script,
-    stdio: ["pipe", "ignore", "ignore"],
-    timeout: OPENSHELL_PROBE_TIMEOUT_MS,
-  });
-  if (result.status === 0 && !result.error && !result.signal) return true;
-  warnHermesLightSkinFailure("write", result.error ?? `exit ${result.status ?? result.signal}`);
-  return false;
 }
 
 function removeHermesLightSkinFile(sandboxName: string): boolean {
@@ -71,6 +37,11 @@ function removeHermesLightSkinFile(sandboxName: string): boolean {
   return false;
 }
 
+// Migration cleanup only. Hermes v2026.8.27 detects light terminals natively
+// and remaps skin colors, so connect no longer installs or applies the
+// NemoClaw-managed `nemoclaw-light` skin. What remains is stripping the stale
+// `display.skin` reference and deleting the skin file on dark-terminal hosts
+// for sandboxes configured by older releases.
 export function prepareHermesLightTerminalSkin(
   sandboxName: string,
   agent: ConnectAgent,
@@ -90,28 +61,13 @@ export function prepareHermesLightTerminalSkin(
     return;
   }
 
-  if (shouldRemoveHermesLightSkin(agent, env, config)) {
-    if (!removeHermesLightSkinConfig(config)) return;
-    try {
-      writeSandboxConfig(sandboxName, target, config);
-    } catch (error) {
-      warnHermesLightSkinFailure("update", error);
-      return;
-    }
-    if (!removeHermesLightSkinFile(sandboxName)) return;
-    return;
-  }
-
-  if (!shouldApplyHermesLightSkin(agent, env, config)) return;
-  const changed = applyHermesLightSkinConfig(config);
-  if (!changed && !hermesConfigUsesManagedLightSkin(config)) return;
-  if (!writeHermesLightSkinFile(sandboxName)) return;
-  if (!changed) return;
-
+  if (!shouldRemoveHermesLightSkin(agent, env, config)) return;
+  if (!removeHermesLightSkinConfig(config)) return;
   try {
     writeSandboxConfig(sandboxName, target, config);
   } catch (error) {
     warnHermesLightSkinFailure("update", error);
-    if (!removeHermesLightSkinFile(sandboxName)) return;
+    return;
   }
+  if (!removeHermesLightSkinFile(sandboxName)) return;
 }

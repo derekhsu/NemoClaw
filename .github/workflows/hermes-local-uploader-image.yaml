@@ -24,6 +24,7 @@ on:
 
 env:
   IMAGE_NAME: docker.io/derekhsu/openshell-hermes
+  BASE_IMAGE_NAME: docker.io/derekhsu/hermes-sandbox-base
 
 jobs:
   build-platform:
@@ -53,6 +54,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The managed base image is fork-local: agents/hermes/Dockerfile.base
+      # carries the security/patch layer the final image depends on and its
+      # pinned upstream digest does not track this branch. Build it per-arch in
+      # the same job and feed it to the final build through BASE_IMAGE so the
+      # source/patch SHA contract stays coherent.
+      - name: Build and push ${{ matrix.platform }} base image
+        id: base
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: agents/hermes/Dockerfile.base
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.BASE_IMAGE_NAME }}:ci-${{ github.run_id }}-${{ matrix.arch }}
+          push: true
+          cache-from: type=gha,scope=base-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=base-${{ matrix.arch }}
+
       # Push only the canonical digest. Named tags are created by the manifest
       # job after both platform digests exist.
       - name: Build and push ${{ matrix.platform }} image by digest
@@ -62,7 +80,11 @@ jobs:
           context: .
           file: agents/hermes/Dockerfile
           platforms: ${{ matrix.platform }}
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE_NAME }}:ci-${{ github.run_id }}-${{ matrix.arch }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=final-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=final-${{ matrix.arch }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

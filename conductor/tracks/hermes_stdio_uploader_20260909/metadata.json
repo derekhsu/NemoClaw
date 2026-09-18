@@ -3,6 +3,6 @@
   "type": "feature",
   "status": "in_progress",
   "created_at": "2026-09-09T10:29:51Z",
-  "updated_at": "2026-09-10T02:32:15Z",
+  "updated_at": "2026-09-10T02:33:44Z",
   "description": "Fork-specific managed Hermes image support for the fixed sandbox-file-uploader local stdio MCP server, including upgrade compatibility checks."
 }

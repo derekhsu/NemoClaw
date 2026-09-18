@@ -111,11 +111,29 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-platform
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: platform-digest-*
           path: digests
           merge-multiple: true
+
+      # Date-based tags alone do not identify the bundled Hermes Agent
+      # version, so every publish also emits hermes-<calver> derived from the
+      # pinned Dockerfile.base ARGs.
+      - name: Resolve bundled Hermes version
+        id: hermes-version
+        run: |
+          set -euo pipefail
+          version="$(grep -oP 'ARG HERMES_VERSION=\K\S+' agents/hermes/Dockerfile.base | head -n1)"
+          semver="$(grep -oP 'ARG HERMES_SEMVER=\K\S+' agents/hermes/Dockerfile.base | head -n1)"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ! "$semver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: could not parse HERMES_VERSION/HERMES_SEMVER from Dockerfile.base" >&2
+            exit 1
+          fi
+          echo "calver=${version}" >> "$GITHUB_OUTPUT"
+          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -132,6 +150,7 @@ jobs:
           docker buildx imagetools create \
             -t "${{ env.IMAGE_NAME }}:${{ inputs.tag }}" \
             -t "${{ env.IMAGE_NAME }}:latest" \
+            -t "${{ env.IMAGE_NAME }}:hermes-${{ steps.hermes-version.outputs.calver }}" \
             "$amd64_ref" "$arm64_ref"
           docker buildx imagetools create \
             -t "${{ env.IMAGE_NAME }}:${{ inputs.tag }}-amd64" "$amd64_ref"

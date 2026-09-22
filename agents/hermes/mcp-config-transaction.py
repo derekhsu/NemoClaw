@@ -55,7 +55,9 @@ ROOT_LIFECYCLE_MARKER = "/run/nemoclaw/hermes-root-lifecycle"
 SERVICE_MANAGER_PATH = b"/usr/local/bin/nemoclaw-start"
 RELOAD_TIMEOUT_SECONDS = 300
 SERVER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
-SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+# ClawShell binds the shared managed upload key to a sandbox with an HMAC
+# scope proof, sent as "<sandbox_id>.<32 lowercase hex>"; accept that claim.
+SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(\.[0-9a-f]{32})?$")
 MCP_DNS_LABEL_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )

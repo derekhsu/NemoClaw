@@ -55,7 +55,26 @@ for field, value in (
     except ValueError:
         rejected.append(field)
 
-print(json.dumps({"candidate": candidate, "changed": changed, "config": config, "rejected": rejected}, sort_keys=True))
+scoped = dict(payload)
+scoped["sandbox_id"] = "sbx-12345678." + "a" * 32
+module._validate_local_uploader_payload("add-local-uploader", scoped)
+
+rejected_ids = []
+for bad_id in (
+    "sbx-12345678.",
+    "sbx-12345678." + "a" * 31,
+    "sbx-12345678." + "a" * 33,
+    "sbx-12345678." + "A" * 32,
+    "sbx-12345678." + "a" * 32 + ".extra",
+):
+    bad = dict(payload)
+    bad["sandbox_id"] = bad_id
+    try:
+        module._validate_local_uploader_payload("add-local-uploader", bad)
+    except ValueError:
+        rejected_ids.append(bad_id)
+
+print(json.dumps({"candidate": candidate, "changed": changed, "config": config, "rejected": rejected, "rejectedIds": rejected_ids}, sort_keys=True))
 `,
         TRANSACTION,
       ],
@@ -112,6 +131,13 @@ print(json.dumps({"candidate": candidate, "changed": changed, "config": config, 
         },
       },
       rejected: ["command", "args", "env", "gateway_api_key"],
+      rejectedIds: [
+        "sbx-12345678.",
+        "sbx-12345678." + "a".repeat(31),
+        "sbx-12345678." + "a".repeat(33),
+        "sbx-12345678." + "A".repeat(32),
+        "sbx-12345678." + "a".repeat(32) + ".extra",
+      ],
     });
   });
 });

@@ -77,6 +77,33 @@ for payload in [
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("accepts a scoped sandbox id claim and rejects malformed claims", () => {
+    const result = runPython(`
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("mcp_tx", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+base = {"gateway_url": "http://10.206.110.59:8001", "replace_existing": True}
+# ClawShell issues sandbox ids as "<id>.<32-hex HMAC proof>" scope claims.
+module._validate_local_uploader_payload({**base, "sandbox_id": "sbx-c84c5391." + "a" * 32})
+for sandbox_id in [
+    "sbx-c84c5391.",
+    "sbx-c84c5391." + "a" * 31,
+    "sbx-c84c5391." + "a" * 33,
+    "sbx-c84c5391." + "A" * 32,
+    "sbx-c84c5391." + "a" * 32 + ".extra",
+]:
+    try:
+        module._validate_local_uploader_payload({**base, "sandbox_id": sandbox_id})
+    except ValueError:
+        continue
+    raise SystemExit(1)
+`);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("recognizes only the exact persisted local uploader candidate", () => {
     const result = runPython(`
 import importlib.util, json, sys

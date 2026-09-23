@@ -108,7 +108,9 @@ LOCAL_UPLOADER_ENV_REFERENCES = {
     "NODE_EXTRA_CA_CERTS": "${NODE_EXTRA_CA_CERTS}",
     "DENO_CERT": "${DENO_CERT}",
 }
-LOCAL_SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+LOCAL_SANDBOX_ID_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(\.[0-9a-f]{32})?$"
+)
 TRUSTED_HERMES_GATEWAY_LAUNCHERS = {
     b"/usr/local/bin/hermes.real",
     b"/usr/local/lib/nemoclaw/hermes",

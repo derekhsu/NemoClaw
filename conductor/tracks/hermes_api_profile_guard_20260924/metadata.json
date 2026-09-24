@@ -1,0 +1,8 @@
+{
+  "track_id": "hermes_api_profile_guard_20260924",
+  "type": "feature",
+  "status": "pending",
+  "created_at": "2026-09-24T07:15:52Z",
+  "updated_at": "2026-09-24T07:15:52Z",
+  "description": "Fork-specific root-controlled Hermes API profile bootstrap and guarded configuration for ClawShell."
+}

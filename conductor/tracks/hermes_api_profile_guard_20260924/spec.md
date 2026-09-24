@@ -59,9 +59,16 @@ end-to-end provisioning. The dependent ClawShell track is
    can read it. ClawShell may retrieve it through its existing authenticated
    sandbox transport for an API request. ClawShell must not log or persist it
    on the host. A verified retry preserves the key; deleting the sandbox
-   removes it with the profile.
+   removes it with the profile. If the profile survives its anchor — for
+   example a rebuild recreates the container layer while `/sandbox` persists —
+   the bootstrap must not adopt the existing files. It either verifies them
+   against a surviving root-owned record or re-seals the profile with a fresh
+   key; otherwise it fails with a recovery condition.
 3. The API profile has a root-controlled strict hash anchor and a separate
-   restart-seal state. Neither can alias the default profile's files.
+   restart-seal state. Neither can alias the default profile's files. The api
+   transaction resolves both paths from fixed image constants and verifies
+   root ownership; it accepts no caller-selected anchor or state path and runs
+   only against the fixed `api` profile directory.
 4. The sandbox user cannot edit or replace the API profile's config, `.env`,
    `.config-hash`, `.clawshell-tool-policy.json`, or protected path entries.
    Hermes can still write the runtime state it needs in a separate writable
@@ -86,6 +93,12 @@ end-to-end provisioning. The dependent ClawShell track is
   transaction.
 - Protect the parent path as well as the files. File ownership alone does not
   prevent a sandbox user from replacing an entry in a writable parent.
+- The protected-path mechanism must work on the backend ClawShell verifies
+  (the container-runtime privileged exec path). Where a backend cannot
+  prevent sandbox-user replacement — for example the
+  `NEMOCLAW_DARWIN_VM_COMPAT` build widens `/sandbox/.hermes` permissions and
+  the macOS VM backend remaps rootfs ownership — the anchor and seal checks
+  must still detect the change and fail closed.
 - Expose one allowlisted bootstrap action and the existing guard transaction
   through the ClawShell privileged caller. Do not add a general root shell.
 - Keep the current image tag unchanged until focused tests, image contracts,
@@ -99,6 +112,11 @@ end-to-end provisioning. The dependent ClawShell track is
   reach RUNNING without changing the default profile.
 - [ ] The sandbox user cannot modify or replace the protected API config,
   credential, hash, tool policy, or parent path.
+- [ ] The api transaction refuses a caller-supplied anchor or state path and
+  a non-root-owned anchor.
+- [ ] A restart or rebuild that loses the root anchor either re-verifies or
+  re-seals the API profile with a rotated key; it never adopts unverifiable
+  profile files.
 - [ ] Guard tests cover altered files, altered hashes, path replacement,
   interrupted bootstrap, retry, and rollback.
 - [ ] Existing default-profile and uploader image contracts pass.

@@ -14,12 +14,21 @@
 ## Phase 1: Guard contract and adversarial tests
 
 - [ ] Task 1.1: Record the image's current default-profile hash, restart-seal,
-  ownership, and gateway startup contracts.
+  ownership, and gateway startup contracts. Record which locations survive
+  container restart, rebuild, and deletion: `/sandbox` persists, `/run` is
+  tmpfs, the `/etc` anchor lives in the container layer, and
+  `/sandbox/.nemoclaw` is the existing root-owned sticky directory.
 - [ ] Task 1.2: Add a failing test for the observed API-profile hash mismatch.
 - [ ] Task 1.3: Add failing tests for a sandbox user changing files, hashes,
-  or path entries before and during bootstrap.
+  or path entries before and during bootstrap, and for a caller-supplied or
+  non-root-owned strict anchor.
 - [ ] Task 1.4: Decide the protected parent-path mechanism from a live image
-  probe. Verify that Hermes still writes required runtime state.
+  probe. Confirm uid-0 ownership and sticky-parent protection are meaningful
+  on the verification backend, check whether the `NEMOCLAW_DARWIN_VM_COMPAT`
+  remap defeats them, and pick the persistent anchor location (for example
+  under root-owned `/sandbox/.nemoclaw`). Decide whether the api seal state
+  shares the `/run/nemoclaw` mutation lock with the default profile or gets
+  its own directory. Verify that Hermes still writes required runtime state.
 
 Verification: tests fail for the known defect and demonstrate that the chosen
 path mechanism rejects sandbox-user replacement.
@@ -28,17 +37,25 @@ path mechanism rejects sandbox-user replacement.
 
 - [ ] Task 2.1: Add a fixed root-only bootstrap action in
   `agents/hermes/runtime-config-guard.py`. Generate or preserve the key without
-  returning it. Write the fixed tool policy. Create the strict anchor and
-  restart state for `api` only.
+  returning it. Write the fixed tool policy and include
+  `.clawshell-tool-policy.json` in the api profile's sealed file set. Create
+  the strict anchor at a fixed root-owned path and the restart state for `api`
+  only. When the profile exists but its anchor is missing or unverifiable,
+  re-seal the profile with a rotated key or fail; never adopt the existing
+  files.
 - [ ] Task 2.2: Make bootstrap atomic, idempotent, and recoverable. Refuse
   untrusted existing profile files and path aliases.
 - [ ] Task 2.3: Extend the profile-scoped `write-config` path and its tests so
-  it uses the API anchor and state. Keep the default path unchanged.
+  it uses the API anchor and state. Resolve both paths from fixed image
+  constants, verify the anchor is root-owned, and reject caller-supplied
+  anchor or state paths for the `api` profile. Keep the default path
+  unchanged.
 - [ ] Task 2.4: Give ClawShell an explicit
   `NEMOCLAW_REQUIRE_API_PROFILE=1` startup signal. When set, the managed
-  entrypoint verifies the root-owned API profile marker and compares the
-  strict anchor's digests with the current config and `.env` before starting
-  the gateway. It fails if any check fails.
+  entrypoint verifies the root-owned API profile marker, compares the
+  strict anchor's digests with the current config and `.env`, and refuses to
+  start when the api seal state records an interrupted transaction. It fails
+  if any check fails.
   ClawShell invokes bootstrap before it starts the managed gateway;
   unrelated NemoClaw deployments do not set the signal or create the profile.
 
@@ -56,8 +73,12 @@ Inspect the profile and default hashes after a config write and restart.
 - [ ] Task 3.3: Build a local arm64 candidate from `feat/image-only-cli` plus
   this branch. Verify the candidate's guard behavior inside OpenShell.
 - [ ] Task 3.4: Coordinate ClawShell caller changes under its existing
-  `hermes_api_profile_20260916` track. Do not treat NemoClaw-only success as
-  ClawShell end-to-end success.
+  `hermes_api_profile_20260916` track. ClawShell replaces the sandbox-user
+  bootstrap transaction (`hermes profile create`, `tools disable`, and the
+  stdin config write) with one fixed-argv privileged bootstrap call, and
+  readiness accepts the root-owned anchor while still reading the key through
+  the group-readable `.env`. Do not treat NemoClaw-only success as ClawShell
+  end-to-end success.
 
 Verification: focused tests, image contracts, and a local candidate pass.
 Record the image digest and the ClawShell commit used in the probe.

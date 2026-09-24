@@ -9,11 +9,11 @@
 
 **Created:** 2026-09-24
 
-**Status:** [ ] Not Started
+**Status:** [~] In Progress
 
 ## Phase 1: Guard contract and adversarial tests
 
-- [ ] Task 1.1: Record the image's current default-profile hash, restart-seal,
+- [~] Task 1.1: Record the image's current default-profile hash, restart-seal,
   ownership, and gateway startup contracts. Record which locations survive
   container restart, rebuild, and deletion: `/sandbox` persists, `/run` is
   tmpfs, the `/etc` anchor lives in the container layer, and

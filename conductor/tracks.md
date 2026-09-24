@@ -10,7 +10,7 @@ local stdio MCP server, with upgrade compatibility evidence.
 
 ---
 
-## [ ] Track: Hermes API Profile Guard
+## [~] Track: Hermes API Profile Guard
 *Link: [./conductor/tracks/hermes_api_profile_guard_20260924/](./conductor/tracks/hermes_api_profile_guard_20260924/)*
 
 Fork-specific guard support for the ClawShell-managed Hermes `api` profile.

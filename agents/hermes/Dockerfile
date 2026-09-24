@@ -1286,6 +1286,19 @@ RUN set -eu; \
     test -z "$(dpkg --audit)"
 # End completed-image security package verification.
 
+# The Landlock POC patched these two files in a separate image lineage. Keep
+# the local-uploader release independent even if a cached or caller-supplied
+# base image accidentally contains those POC changes.
+RUN set -eu; \
+    if grep -Fq 'tmp_dir = Path(os.path.realpath(str(path))).parent' /opt/hermes/utils.py; then \
+        echo 'ERROR: Landlock POC atomic JSON patch leaked into the Hermes image' >&2; \
+        exit 1; \
+    fi; \
+    if grep -Fq 'compat hash anchor refresh skipped without write access' /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py; then \
+        echo 'ERROR: Landlock POC config guard patch leaked into the Hermes image' >&2; \
+        exit 1; \
+    fi
+
 # start.sh handles privilege separation: runs as root initially, then drops
 # to the 'gateway' user via setpriv for the agent process. See start.sh.
 ENTRYPOINT ["/usr/local/bin/nemoclaw-start"]

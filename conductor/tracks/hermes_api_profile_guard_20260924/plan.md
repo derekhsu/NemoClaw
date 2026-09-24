@@ -43,10 +43,18 @@ api profile runs as dedicated user `hermesapi` in its own process; the
 default side (`sandbox`) keeps full control of api `config.yaml`/`.env`;
 the fixed policy, anchor, and structure stay root-sealed.
 
-- [ ] Task 2.0 (spike): Verify a dedicated api-profile process. Add the
-  `hermesapi` user in `agents/hermes/Dockerfile`, confirm a gateway launched
-  with `HERMES_HOME=/sandbox/.hermes/profiles/api` serves that profile, and
-  route `/p/api` to it (socat) while `/v1` stays on the main gateway.
+- [x] Task 2.0 (spike): Verify a dedicated api-profile process in the
+  published image. `HERMES_HOME=<root>/profiles/api hermes gateway run`
+  serves `/health`, `/v1/*`, and self-referential `/p/api/*` under a
+  stepped-down uid; `socat` cannot split by path, so the front layer is a
+  small supervised `aiohttp` prefix proxy. Findings recorded in
+  contract-inventory.md.
+- [ ] Task 2.0a: Add the `hermesapi` user (uid 997, group `api`) in
+  `agents/hermes/Dockerfile` and a third `STEP_DOWN_PREFIX_API` in
+  `scripts/lib/sandbox-init.sh`. In `agents/hermes/start.sh`, supervise the
+  api gateway (`HERMES_HOME=profiles/api`, fixed internal port) behind
+  `NEMOCLAW_REQUIRE_API_PROFILE`, and add the aiohttp prefix proxy on the
+  public port: `/p/api/*` → api gateway, everything else → main gateway.
   Decide whether `profiles/api` needs a `writableSubpaths` entry in
   `state-lock-plan.json` so the api runtime keeps state writes during
   locked shields transitions.

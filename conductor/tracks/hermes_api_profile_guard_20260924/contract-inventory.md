@@ -208,3 +208,37 @@ tools; owns and fully manages api profile contents), `gateway` uid 999
 **Superseded**: the earlier single-uid decision (`profiles/` root-owned,
 sealed files `root:sandbox 0640`) predates the operator requirement that
 the default side can modify api config; it is recorded in git history.
+
+## Dedicated-process spike (published image ea54c5ff, 2026-09-24)
+
+Verified live inside the published image:
+
+- `HERMES_HOME=<root>/profiles/api hermes gateway run` under a stepped-down
+  uid serves the profile standalone: `/health` → 200, `/v1/models` without
+  key → 401, with the home's `API_SERVER_KEY` → 200.
+- The same process natively answers the `/p/api/` prefix:
+  `profile_matches_home("api")` resolves `get_profile_dir("api")` to
+  `<root>/profiles/api` == `HERMES_HOME` (the `profiles/<name>` parent rule
+  in `get_default_hermes_root`). Verified: `/p/api/health` → 200,
+  `/p/api/v1/models` + key → 200, `/p/other/*` → 404 (fails closed).
+- A minimal standalone home needs only `config.yaml` + `.env`; Hermes
+  creates runtime state under `HERMES_HOME` itself.
+- The api profile's `config.yaml` must carry
+  `platforms.api_server.enabled: true` with a fixed internal port — the
+  inverse of the multiplexed model, where ClawShell pins
+  `api_server.enabled: false` because the main gateway owns the listener.
+  This is a Phase 3 caller-contract change: the image bootstrap and the
+  ClawShell config template must both emit the enabled, fixed-port form.
+- Public-port split: `socat` is a TCP forwarder and cannot split by path.
+  No proxy binary ships in the image; `aiohttp` 3.14.3 is already in the
+  hermes venv, so a small supervised prefix proxy (`/p/api/*` → api port,
+  everything else → main gateway port, prefix preserved, streaming
+  responses) is the front layer.
+- Defense in depth for free: `profiles/api/` owned `sandbox:api` is not
+  traversable by the main-gateway uid (not in group `api`), so the main
+  gateway cannot multiplex the api profile even if `multiplex_profiles`
+  is enabled by operator config — `profiles_to_serve` cannot read the
+  home.
+- Step-down reuses the existing pattern:
+  `setpriv --reuid=hermesapi --regid=api --init-groups` with the same
+  bounding-set drop the gateway prefix uses.

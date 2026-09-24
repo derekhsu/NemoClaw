@@ -154,27 +154,57 @@ Probed on the published image `sha256:ea54c5ff…` (docker driver, overlayfs;
   must decide whether `profiles/api` needs a `writableSubpaths` entry so
   the api runtime can keep state during locked shields transitions.
 
-**Decision**
+**Decision (revised 2026-09-24 — three-uid model)**
 
-- `profiles/` → `root:sandbox 0750`; `profiles/api/` → `root:sandbox 1770`.
-- Sealed api files (`config.yaml`, `.env`, `.config-hash`,
-  `.clawshell-tool-policy.json`) → `root:sandbox 0640`: group-readable for
-  the gateway and ClawShell key pickup, not writable, not removable.
-- Prevention is backed by mandatory detection: every api transaction and
-  startup verifies `st_uid == 0` (and group `sandbox`) on `profiles`,
-  `api`, and each sealed file, plus digests against the anchor. A forged
-  sandbox-owned copy always fails the ownership check — sandbox has no
-  `cap_chown`.
+The operator's requirement: api config/env are modifiable by the default
+side but never by api-server-driven operations — which may include a
+terminal tool. Same-uid tool contexts make that boundary impossible at the
+FS or policy layer, so the api profile gets its own uid and process.
+
+Actors: `root` (guard only), `sandbox` uid 998 (default side — operator
+tools; owns and fully manages api profile contents), `gateway` uid 999
+(main gateway: default + dashboard-home profiles, unchanged),
+`hermesapi` uid 997 (new user; dedicated api-profile gateway process).
+
+- `profiles/` → `sandbox:sandbox 0771`: 998 keeps profile management;
+  997 traverses (other-x) but cannot list or create.
+- `profiles/api/` → `sandbox:api 3770` (sticky+setgid): 998 is dir owner —
+  full control including atomic-replace edits; 997 creates/manages only its
+  own runtime files and cannot unlink or rename files it does not own.
+- `config.yaml`, `.env` → `sandbox:api 0640`: 998 writes (the
+  operator-modifiable surface); 997 reads (its own config and key);
+  999 has no access (api is a separate process — the main gateway never
+  reads it).
+- `.clawshell-tool-policy.json`, `.config-hash` → `root:api 0440`:
+  997/998 read; only the root guard writes. The policy is the enforcement
+  keystone and stays root-sealed.
+- Runtime files (`state.db`, `sessions/`, uploads) are created by 997
+  inside the profile dir; setgid keeps them group-`api`.
+- `.hermes` stays `sandbox:sandbox 3770` — 997 is not in the `sandbox`
+  group and cannot even traverse the default profile home.
 - Persistent api anchor + bootstrap record live under root-owned sticky
-  `/sandbox/.nemoclaw/` (e.g. `hermes-api.config-hash`,
-  `hermes-api-profile.json`) so anchor and profile share `/sandbox`'s
-  lifecycle — they persist or vanish together; a mismatch means tamper and
-  fails closed.
+  `/sandbox/.nemoclaw/` (`hermes-api.config-hash`,
+  `hermes-api-profile.json`) — anchor and profile share `/sandbox`'s
+  lifecycle. The anchor pins the fixed policy digest and the structural
+  contract (ownership, modes, path identity); `config.yaml`/`.env` content
+  digests are not pinned because operator edits are legitimate.
 - Ephemeral api seal state uses `/run/nemoclaw/hermes-api-restart-seal.json`
   and deliberately shares the `/run/nemoclaw` mutation lock with the
-  default profile — one multiplexer restart domain, so config mutations
-  serialize across profiles.
-- `NEMOCLAW_DARWIN_VM_COMPAT` / macOS ownership remap: prevention cannot be
-  assumed there; the ownership-chain verification still runs and fails
-  closed if uid-0 is not meaningful. Prevention guarantee is scoped to the
-  container-runtime backend — matches the spec's detect-and-refuse clause.
+  default profile — one restart domain, so config mutations serialize.
+- Detection remains mandatory: every api transaction and startup verifies
+  the uid/mode matrix on `profiles`, `api`, and each managed file plus the
+  policy digest against the anchor. A forged or re-owned copy always fails
+  the check — no sandbox uid has `cap_chown`.
+- `NEMOCLAW_DARWIN_VM_COMPAT` / macOS ownership remap collapses the uid
+  distinction, so prevention cannot be assumed there; the ownership
+  verification still runs and fails closed. The boundary guarantee is
+  scoped to the container-runtime backend — matches the spec's
+  detect-and-refuse clause.
+- The existing state-lock plan lists `profiles` under `readOnlyRoots` with
+  `profiles/dashboard-home` writable. Phase 2 decides whether
+  `profiles/api` needs a `writableSubpaths` carve-out so the 997 runtime
+  keeps state writes during locked shields transitions.
+
+**Superseded**: the earlier single-uid decision (`profiles/` root-owned,
+sealed files `root:sandbox 0640`) predates the operator requirement that
+the default side can modify api config; it is recorded in git history.

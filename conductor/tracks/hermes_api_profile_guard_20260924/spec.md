@@ -55,35 +55,50 @@ end-to-end provisioning. The dependent ClawShell track is
    including its fixed ClawShell tool policy, before the managed gateway
    starts. It accepts no caller-selected profile name or arbitrary path.
 2. The command generates or preserves `API_SERVER_KEY` inside the sandbox. It
-   never prints the key or places it in a command argument. The gateway user
-   can read it. ClawShell may retrieve it through its existing authenticated
-   sandbox transport for an API request. ClawShell must not log or persist it
-   on the host. A verified retry preserves the key; deleting the sandbox
-   removes it with the profile. If the profile survives its anchor — for
-   example a rebuild recreates the container layer while `/sandbox` persists —
-   the bootstrap must not adopt the existing files. It either verifies them
-   against a surviving root-owned record or re-seals the profile with a fresh
-   key; otherwise it fails with a recovery condition.
-3. The API profile has a root-controlled strict hash anchor and a separate
+   never prints the key or places it in a command argument. The api runtime
+   user can read it. ClawShell may retrieve it through its existing
+   authenticated sandbox transport for an API request. ClawShell must not log
+   or persist it on the host. A verified retry preserves the key; deleting
+   the sandbox removes it with the profile. If the profile survives its
+   anchor — for example a rebuild recreates the container layer while
+   `/sandbox` persists — the bootstrap must not adopt the existing files. It
+   either verifies them against a surviving root-owned record or re-seals the
+   profile with a fresh key; otherwise it fails with a recovery condition.
+3. The API profile has a root-controlled anchor record and a separate
    restart-seal state. Neither can alias the default profile's files. The api
    transaction resolves both paths from fixed image constants and verifies
    root ownership; it accepts no caller-selected anchor or state path and runs
-   only against the fixed `api` profile directory.
-4. The sandbox user cannot edit or replace the API profile's config, `.env`,
-   `.config-hash`, `.clawshell-tool-policy.json`, or protected path entries.
-   Hermes can still write the runtime state it needs in a separate writable
-   location. The policy file is a ClawShell contract artifact written by the
-   image bootstrap; its presence alone does not prove the active toolset.
-5. A profile-scoped config transaction compares the expected config digest,
-   verifies the strict anchor, changes only the API profile, and advances its
-   hash state. It leaves the default profile's config, key, hash, and restart
-   state unchanged.
-6. Missing anchors, malformed metadata, unexpected ownership, symlinks,
-   path replacement, races, and interrupted transactions fail closed. A retry
-   either verifies the same completed state or reports a recovery condition;
-   it does not adopt sandbox-user edits as a new baseline.
-7. The existing default-profile guard contract and single gateway/multiplexer
-   behavior remain valid. This track must not include Landlock POC patches.
+   only against the fixed `api` profile directory. The anchor pins the fixed
+   policy bytes and the structural contract (path identity, ownership, modes);
+   `config.yaml` and `.env` content is operator-mutable and is not pinned.
+4. The api profile's execution context runs as a dedicated non-root user
+   (`hermesapi`) in its own gateway process, routed at `/p/api`. The image
+   enforces the boundary by uid, not by tool policy alone:
+   - The api runtime user cannot edit, replace, or delete the api profile's
+     `config.yaml`, `.env`, `.config-hash`, `.clawshell-tool-policy.json`, or
+     protected path entries, and cannot traverse the default profile's home —
+     this holds even if the api profile enables the terminal tool.
+   - The default-side user (`sandbox`) can modify the api profile's
+     `config.yaml` and `.env` — the default profile manages itself and the
+     api profile.
+   - Only the root guard transaction can alter the fixed policy, the anchor
+     record, or the protected directory structure.
+   - The api runtime still writes its runtime state (`state.db`, `sessions/`,
+     uploads) inside the profile home.
+5. A profile-scoped config transaction compares the expected config digest as
+   a compare-and-swap precondition, verifies the root-owned anchor record and
+   structure, changes only the API profile, and advances its seal state. It
+   leaves the default profile's config, key, hash, and restart state
+   unchanged.
+6. Missing anchors, malformed metadata, unexpected ownership or modes,
+   symlinks, path replacement, races, and interrupted transactions fail
+   closed. A retry either verifies the same completed state or reports a
+   recovery condition; it does not adopt changes to the root-sealed set
+   (policy, anchor, structure) as a new baseline.
+7. The existing default-profile guard contract remains valid. The api profile
+   is served by a dedicated `hermesapi`-uid process — the single in-process
+   multiplexer shape changes only in that `/p/api` is delegated to it. This
+   track must not include Landlock POC patches.
 
 ## Design constraints
 
@@ -106,26 +121,30 @@ end-to-end provisioning. The dependent ClawShell track is
 
 ## Acceptance criteria
 
-- [ ] A fresh sandbox starts the managed gateway with one `/p/api` route and
-  no second gateway process.
+- [ ] A fresh sandbox serves `/p/api` from a dedicated `hermesapi`-uid
+  process; the default profile's gateway behavior is unchanged.
 - [ ] ClawShell can update inference.local through the API profile guard and
   reach RUNNING without changing the default profile.
-- [ ] The sandbox user cannot modify or replace the protected API config,
-  credential, hash, tool policy, or parent path.
+- [ ] The api runtime uid cannot modify, replace, or delete the protected api
+  config, credential, hash, tool policy, or parent path entries — including
+  through a terminal tool — and cannot traverse the default profile home.
+- [ ] The default-side uid can modify the api profile's `config.yaml` and
+  `.env` content.
 - [ ] The api transaction refuses a caller-supplied anchor or state path and
   a non-root-owned anchor.
 - [ ] A restart or rebuild that loses the root anchor either re-verifies or
   re-seals the API profile with a rotated key; it never adopts unverifiable
-  profile files.
-- [ ] Guard tests cover altered files, altered hashes, path replacement,
-  interrupted bootstrap, retry, and rollback.
+  root-sealed state.
+- [ ] Guard tests cover altered policy, altered structure, path replacement,
+  interrupted bootstrap, retry, rollback, and the uid ownership matrix.
 - [ ] Existing default-profile and uploader image contracts pass.
 - [ ] The published candidate image is multi-architecture, has an immutable
   digest, and contains no Landlock POC patch layer.
 
 ## Out of scope
 
-- A new gateway listener or public ClawShell API.
+- A new public ingress or ClawShell API — the dedicated api process stays
+  behind the existing socat front.
 - Arbitrary Hermes profile names or a generic profile manager.
 - OpenClaw behavior changes.
 - Landlock policy changes.

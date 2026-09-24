@@ -38,29 +38,44 @@ path mechanism rejects sandbox-user replacement.
 
 ## Phase 2: Image-owned API profile transaction
 
+The boundary is uid-based (three-uid model in contract-inventory.md): the
+api profile runs as dedicated user `hermesapi` in its own process; the
+default side (`sandbox`) keeps full control of api `config.yaml`/`.env`;
+the fixed policy, anchor, and structure stay root-sealed.
+
+- [ ] Task 2.0 (spike): Verify a dedicated api-profile process. Add the
+  `hermesapi` user in `agents/hermes/Dockerfile`, confirm a gateway launched
+  with `HERMES_HOME=/sandbox/.hermes/profiles/api` serves that profile, and
+  route `/p/api` to it (socat) while `/v1` stays on the main gateway.
+  Decide whether `profiles/api` needs a `writableSubpaths` entry in
+  `state-lock-plan.json` so the api runtime keeps state writes during
+  locked shields transitions.
 - [ ] Task 2.1: Add a fixed root-only bootstrap action in
-  `agents/hermes/runtime-config-guard.py`. Generate or preserve the key without
-  returning it. Write the fixed tool policy and include
-  `.clawshell-tool-policy.json` in the api profile's sealed file set. Create
-  the strict anchor at a fixed root-owned path and the restart state for `api`
-  only. When the profile exists but its anchor is missing or unverifiable,
-  re-seal the profile with a rotated key or fail; never adopt the existing
-  files.
+  `agents/hermes/runtime-config-guard.py`. Generate or preserve the key
+  without returning it. Write the fixed tool policy
+  (`root:api 0440`). Apply the ownership matrix: `profiles/` `sandbox:sandbox
+  0771`, `profiles/api/` `sandbox:api 3770`, `config.yaml`/`.env`
+  `sandbox:api 0640`, `.config-hash` `root:api 0440`. Create the root-owned
+  anchor record under `/sandbox/.nemoclaw/` (pins the policy digest and the
+  structural contract, not config/env content) and the restart state for
+  `api` only. When the profile exists but its anchor is missing or
+  unverifiable, re-seal the profile with a rotated key or fail; never adopt
+  the existing root-sealed state.
 - [ ] Task 2.2: Make bootstrap atomic, idempotent, and recoverable. Refuse
   untrusted existing profile files and path aliases.
 - [ ] Task 2.3: Extend the profile-scoped `write-config` path and its tests so
   it uses the API anchor and state. Resolve both paths from fixed image
-  constants, verify the anchor is root-owned, and reject caller-supplied
-  anchor or state paths for the `api` profile. Keep the default path
-  unchanged.
+  constants, verify the anchor is root-owned, treat the expected digest as a
+  compare-and-swap precondition, and reject caller-supplied anchor or state
+  paths for the `api` profile. Keep the default path unchanged.
 - [ ] Task 2.4: Give ClawShell an explicit
   `NEMOCLAW_REQUIRE_API_PROFILE=1` startup signal. When set, the managed
-  entrypoint verifies the root-owned API profile marker, compares the
-  strict anchor's digests with the current config and `.env`, and refuses to
-  start when the api seal state records an interrupted transaction. It fails
-  if any check fails.
-  ClawShell invokes bootstrap before it starts the managed gateway;
-  unrelated NemoClaw deployments do not set the signal or create the profile.
+  entrypoint verifies the root-owned API profile marker, the fixed policy
+  digest, and the ownership/mode matrix, and refuses to start when the api
+  seal state records an interrupted transaction. It fails if any check
+  fails. ClawShell invokes bootstrap before it starts the managed gateway;
+  unrelated NemoClaw deployments do not set the signal or create the
+  profile.
 
 Verification: run the focused guard, startup, hash, and restart-seal tests.
 Inspect the profile and default hashes after a config write and restart.
@@ -93,8 +108,10 @@ Record the image digest and the ClawShell commit used in the probe.
 - [ ] Task 4.2: Create a fresh ClawShell sandbox from the immutable candidate.
   Verify provider update, `/p/api` authentication, default-route denial,
   Dashboard access, restart, and rebuild.
-- [ ] Task 4.3: Verify sandbox-user write and path-replacement attempts fail.
-  Confirm the default profile and API profile hashes remain independent.
+- [ ] Task 4.3: Verify api-runtime-uid write and path-replacement attempts
+  fail — including through a terminal tool — while default-side writes to
+  api `config.yaml`/`.env` succeed. Confirm the default profile and API
+  profile hashes remain independent.
 - [ ] Task 4.4: Review the exact candidate digest and validation evidence
   before publication. Publish only after the release gate passes.
 

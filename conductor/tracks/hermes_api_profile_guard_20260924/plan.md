@@ -13,22 +13,25 @@
 
 ## Phase 1: Guard contract and adversarial tests
 
-- [~] Task 1.1: Record the image's current default-profile hash, restart-seal,
+- [x] Task 1.1: Record the image's current default-profile hash, restart-seal,
   ownership, and gateway startup contracts. Record which locations survive
   container restart, rebuild, and deletion: `/sandbox` persists, `/run` is
   tmpfs, the `/etc` anchor lives in the container layer, and
   `/sandbox/.nemoclaw` is the existing root-owned sticky directory.
-- [ ] Task 1.2: Add a failing test for the observed API-profile hash mismatch.
-- [ ] Task 1.3: Add failing tests for a sandbox user changing files, hashes,
+  `5b7991c`
+- [x] Task 1.2: Add a failing test for the observed API-profile hash mismatch.
+  `c23fe8a`
+- [x] Task 1.3: Add failing tests for a sandbox user changing files, hashes,
   or path entries before and during bootstrap, and for a caller-supplied or
-  non-root-owned strict anchor.
-- [ ] Task 1.4: Decide the protected parent-path mechanism from a live image
+  non-root-owned strict anchor. `c23fe8a`
+- [x] Task 1.4: Decide the protected parent-path mechanism from a live image
   probe. Confirm uid-0 ownership and sticky-parent protection are meaningful
   on the verification backend, check whether the `NEMOCLAW_DARWIN_VM_COMPAT`
   remap defeats them, and pick the persistent anchor location (for example
   under root-owned `/sandbox/.nemoclaw`). Decide whether the api seal state
   shares the `/run/nemoclaw` mutation lock with the default profile or gets
   its own directory. Verify that Hermes still writes required runtime state.
+  `102b5eb`
 
 Verification: tests fail for the known defect and demonstrate that the chosen
 path mechanism rejects sandbox-user replacement.

@@ -54,7 +54,7 @@ Task 1.1 record. Sources: `agents/hermes/runtime-config-guard.py`,
 | `/sandbox/.hermes/profiles` | `sandbox:sandbox` | `0770` | restart, rebuild |
 | `/sandbox/.hermes/profiles/dashboard-home` | `sandbox:sandbox` | `0770` | restart, rebuild |
 | `/etc/nemoclaw/` | `root:root` | `0755` | restart; lost on recreate |
-| `/run/nemoclaw/` | `root:root` | `0711` | nothing (tmpfs) |
+| `/run/nemoclaw/` | `root:root` | `0755` | nothing (tmpfs) |
 | `/sandbox/.nemoclaw` | `root:root` | `1755` sticky | restart, rebuild (on `/sandbox`) |
 | `/sandbox/.nemoclaw/blueprints` | `root:root` | `0755` | restart, rebuild |
 
@@ -116,3 +116,65 @@ delete. Both precedents apply to protecting `profiles/api` and its parent.
   sandbox-writable children.
 - Decide: api seal state shares the `/run/nemoclaw` mutation lock, or a
   dedicated `/run/nemoclaw/api/` directory.
+
+## Parent-path protection decision (Task 1.4)
+
+Probed on the published image `sha256:ea54c5ff…` (docker driver, overlayfs;
+`sandbox` is uid 998 / gid 999; `su`/`runuser` present).
+
+**Findings**
+
+- `chattr +i` is unavailable — `cap_linux_immutable` is not in the
+  container's bounding set. File immutability is not a mechanism.
+- A root-owned file inside a sandbox-writable directory can be unlinked and
+  replaced — file ownership alone is not enough.
+- A `root:sandbox 1770` (sticky, group-writable) directory gives exactly the
+  required split: the sandbox group can create its runtime files and unlink
+  its own entries, but cannot edit, unlink, or rename root-owned sealed
+  files. `/sandbox/.hermes` already uses `sandbox:sandbox 3770`; the api
+  profile flips the owner to root.
+- A `root:sandbox 0750` `profiles/` directory lets the sandbox group
+  traverse and read profile homes but not create, rename, or delete profile
+  directories. Runtime `hermes profile create/delete/rename` as the sandbox
+  user is blocked — intended: the image contract fixes the profile set
+  (default, `api`, `dashboard-home`).
+- Hermes treats `profiles/<name>` as that profile's `HERMES_HOME` — the api
+  runtime writes `state.db`, `sessions/`, and similar at the profile root,
+  so `profiles/api` itself must stay group-writable (hence sticky).
+- `/sandbox/.hermes` must remain `sandbox:sandbox` — the default profile's
+  gateway writes `state.db`, `gateway.lock`, `sessions/`, `logs/` there.
+  A sandbox user can still swap `profiles` beneath it on a writable backend;
+  on overlayfs an image-layer directory rename returns EXDEV and `mv`'s
+  copy fallback cannot displace root-owned contents. Either way the
+  ownership+digest checks below detect a forged replacement.
+- The existing state-lock plan (`/usr/local/share/nemoclaw/
+  state-lock-plan.json`) already lists `profiles` under `readOnlyRoots` with
+  `profiles/dashboard-home` as the writable carve-out — root-owning
+  `profiles` is consistent with the established shields-lock model. Phase 2
+  must decide whether `profiles/api` needs a `writableSubpaths` entry so
+  the api runtime can keep state during locked shields transitions.
+
+**Decision**
+
+- `profiles/` → `root:sandbox 0750`; `profiles/api/` → `root:sandbox 1770`.
+- Sealed api files (`config.yaml`, `.env`, `.config-hash`,
+  `.clawshell-tool-policy.json`) → `root:sandbox 0640`: group-readable for
+  the gateway and ClawShell key pickup, not writable, not removable.
+- Prevention is backed by mandatory detection: every api transaction and
+  startup verifies `st_uid == 0` (and group `sandbox`) on `profiles`,
+  `api`, and each sealed file, plus digests against the anchor. A forged
+  sandbox-owned copy always fails the ownership check — sandbox has no
+  `cap_chown`.
+- Persistent api anchor + bootstrap record live under root-owned sticky
+  `/sandbox/.nemoclaw/` (e.g. `hermes-api.config-hash`,
+  `hermes-api-profile.json`) so anchor and profile share `/sandbox`'s
+  lifecycle — they persist or vanish together; a mismatch means tamper and
+  fails closed.
+- Ephemeral api seal state uses `/run/nemoclaw/hermes-api-restart-seal.json`
+  and deliberately shares the `/run/nemoclaw` mutation lock with the
+  default profile — one multiplexer restart domain, so config mutations
+  serialize across profiles.
+- `NEMOCLAW_DARWIN_VM_COMPAT` / macOS ownership remap: prevention cannot be
+  assumed there; the ownership-chain verification still runs and fails
+  closed if uid-0 is not meaningful. Prevention guarantee is scoped to the
+  container-runtime backend — matches the spec's detect-and-refuse clause.

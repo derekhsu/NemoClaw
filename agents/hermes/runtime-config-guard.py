@@ -4690,6 +4690,68 @@ HERMES_API_CONFIG_TEMPLATE = (
     "  default: hermes-agent\n"
 )
 
+# The dashboard seeder mirrors the api profile's config into the dashboard
+# profile and refuses when the gateway's managed sections diverge from the
+# image policy. The api profile therefore carries those sections verbatim:
+# policy parity is part of the sealed contract, not caller-controlled bytes.
+HERMES_MANAGED_POLICY_PATH = "/usr/local/share/nemoclaw/hermes-managed-policy.json"
+
+
+def _api_managed_sections() -> dict:
+    """Return the image policy's managed top-level config sections.
+
+    Fails closed when the managed policy is unreadable or structurally
+    unexpected — bootstrap and write-config cannot seal a profile whose
+    policy parity cannot be proven.
+    """
+    try:
+        with open(HERMES_MANAGED_POLICY_PATH, "r", encoding="utf-8") as handle:
+            policy = json.load(handle)
+        managed_paths = policy["managed_paths"]
+        config = policy["config"]
+        if not isinstance(managed_paths, list) or not isinstance(config, dict):
+            raise ValueError("managed policy shape is unexpected")
+        sections: dict = {}
+        for path in managed_paths:
+            top = str(path).split(".", 1)[0]
+            sections[top] = copy.deepcopy(config[top])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise UnsafePathError(
+            f"managed policy is unavailable for the api profile: {exc}"
+        ) from exc
+    return sections
+
+
+def _api_config_bytes() -> bytes:
+    """Render the api profile config: fixed template plus managed sections."""
+    return (
+        HERMES_API_CONFIG_TEMPLATE
+        + yaml.safe_dump(_api_managed_sections(), sort_keys=True)
+    ).encode("utf-8")
+
+
+def _api_overlay_managed_sections(config_bytes: bytes) -> bytes:
+    """Pin the managed policy sections inside a caller-supplied api config.
+
+    The caller owns model routing and providers; the image owns the managed
+    policy posture. Overwriting those sections here keeps the api profile
+    sealed against policy weakening regardless of the submitted document.
+    """
+    try:
+        text = config_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnsafePathError("refusing non-UTF-8 Hermes api config input") from exc
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise UnsafePathError("refusing malformed Hermes api config input") from exc
+    if not isinstance(document, dict):
+        raise UnsafePathError("refusing non-mapping Hermes api config input")
+    document.update(_api_managed_sections())
+    rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    header = "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
+    return (header + rendered).encode("utf-8")
+
 
 def _api_identities() -> tuple[int, int, int]:
     """Return (admin_uid, admin_gid, api_gid) for the api profile contract.
@@ -4879,7 +4941,7 @@ def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
 
     _api_write_file(
         config_path,
-        HERMES_API_CONFIG_TEMPLATE.encode("utf-8"),
+        _api_config_bytes(),
         0o640,
         admin_uid,
         api_gid,
@@ -5099,6 +5161,7 @@ def write_api_config_transaction(
             raise UnsafePathError(
                 "non-MCP config transaction cannot change Hermes mcp_servers"
             )
+        config_bytes = _api_overlay_managed_sections(config_bytes)
 
         _write_restart_state(
             state_file,

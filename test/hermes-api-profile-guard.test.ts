@@ -45,6 +45,22 @@ const RUNTIME_CONFIG_GUARD = path.join(
 const POLICY_VERSION = "clawshell-api-minimal-v1";
 const DEFAULT_CONFIG = "model:\n  default: trusted-model\n";
 const DEFAULT_ENV = "API_SERVER_PORT=18642\nSAFE_SETTING=trusted\n";
+// Mirrors the image's hermes-managed-policy.json shape: managed_paths name
+// leaf paths, and the guard must carry their whole top-level sections into
+// the api profile config verbatim (the dashboard seeder deep-compares them).
+const MANAGED_POLICY = JSON.stringify(
+  {
+    schema_version: 1,
+    managed_paths: ["approvals.mode", "session_reset.mode"],
+    config: {
+      approvals: { mode: "manual" },
+      session_reset: { mode: "both", at_hour: 4 },
+    },
+    dashboard: { routing_keys: ["model"], env_keys: [] },
+  },
+  null,
+  2,
+);
 
 interface ApiFixture {
   root: string;
@@ -66,6 +82,7 @@ interface ApiFixture {
   apiRecordPath: string;
   defaultStatePath: string;
   apiStatePath: string;
+  managedPolicyPath: string;
 }
 
 function sha256File(target: string): string {
@@ -118,6 +135,7 @@ function createFixture(): ApiFixture {
     apiRecordPath: path.join(nemoclawDir, "hermes-api-profile.json"),
     defaultStatePath: path.join(runDir, "hermes-restart-seal.json"),
     apiStatePath: path.join(runDir, "hermes-api-restart-seal.json"),
+    managedPolicyPath: path.join(root, "usr", "share", "nemoclaw", "hermes-managed-policy.json"),
   };
   fs.mkdirSync(profilesDir, { recursive: true });
   fs.mkdirSync(path.join(profilesDir, "dashboard-home"));
@@ -132,6 +150,8 @@ function createFixture(): ApiFixture {
   const defaultAnchor = anchorText(fixture.defaultConfigPath, fixture.defaultEnvPath);
   fs.writeFileSync(fixture.defaultHashPath, defaultAnchor, { mode: 0o444 });
   fs.writeFileSync(fixture.defaultCompatHashPath, defaultAnchor, { mode: 0o640 });
+  fs.mkdirSync(path.dirname(fixture.managedPolicyPath), { recursive: true });
+  fs.writeFileSync(fixture.managedPolicyPath, MANAGED_POLICY, { mode: 0o444 });
   return fixture;
 }
 
@@ -164,6 +184,7 @@ module.HERMES_API_PROFILE_DIR = os.environ["FIXTURE_API_DIR"]
 module.HERMES_API_ANCHOR_FILE = os.environ["FIXTURE_API_HASH"]
 module.HERMES_API_RECORD_FILE = os.environ["FIXTURE_API_RECORD"]
 module.HERMES_API_STATE_FILE = os.environ["FIXTURE_API_STATE"]
+module.HERMES_MANAGED_POLICY_PATH = os.environ["FIXTURE_MANAGED_POLICY"]
 module.HERMES_API_OWNER_UID = int(os.environ["FIXTURE_OWNER_UID"])
 module.HERMES_API_OWNER_GID = int(os.environ["FIXTURE_OWNER_GID"])
 admin_uid = int(os.environ["FIXTURE_ADMIN_UID"])
@@ -193,6 +214,7 @@ raise SystemExit(module.main())
       FIXTURE_API_HASH: fixture.apiHashPath,
       FIXTURE_API_RECORD: fixture.apiRecordPath,
       FIXTURE_API_STATE: fixture.apiStatePath,
+      FIXTURE_MANAGED_POLICY: fixture.managedPolicyPath,
       FIXTURE_OWNER_UID: String(options.ownerUid ?? process.getuid!()),
       FIXTURE_OWNER_GID: String(options.ownerGid ?? process.getgid!()),
       FIXTURE_ADMIN_UID: String(options.adminUid ?? process.getuid!()),
@@ -292,6 +314,11 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(envText).toMatch(/^API_SERVER_KEY=[0-9a-f]{64}$/m);
     const policy = JSON.parse(fs.readFileSync(fixture.apiPolicyPath, "utf-8"));
     expect(policy.version).toBe(POLICY_VERSION);
+    // The config carries the image managed-policy sections verbatim so the
+    // dashboard seeder's policy-parity check can pass.
+    const configText = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    expect(configText).toContain("mode: manual");
+    expect(configText).toContain("at_hour: 4");
     // The anchor pins the fixed policy bytes and the structural contract; it
     // does not pin the operator-mutable config/env content.
     const anchor = fs.readFileSync(fixture.apiHashPath, "utf-8");
@@ -405,17 +432,68 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const updated = `${fs.readFileSync(fixture.apiConfigPath, "utf-8")}\n# managed update\n`;
     const result = writeApiConfig(fixture, sha256File(fixture.apiConfigPath), updated);
     expect(result.status, result.stderr).toBe(0);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).toBe(updated);
+    // The write re-renders the document (managed policy sections are pinned
+    // by the image), so assert semantics rather than byte equality.
+    const written = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    expect(written).toContain("default: hermes-agent");
+    expect(written).toContain("mode: manual");
     expect(fs.readFileSync(fixture.apiEnvPath, "utf-8")).toBe(envBefore);
     // The compat hash snapshot advances to the last written state; the strict
     // anchor keeps pinning the policy and structure.
-    expect(fs.readFileSync(fixture.apiCompatHashPath, "utf-8")).toContain(sha256Text(updated));
+    expect(fs.readFileSync(fixture.apiCompatHashPath, "utf-8")).toContain(
+      sha256File(fixture.apiConfigPath),
+    );
     expect(fs.readFileSync(fixture.apiHashPath, "utf-8")).toContain(
       sha256File(fixture.apiPolicyPath),
     );
     expect(fs.readFileSync(fixture.defaultHashPath, "utf-8")).toBe(defaultAnchorBefore);
     expect(fs.readFileSync(fixture.defaultConfigPath, "utf-8")).toBe(DEFAULT_CONFIG);
     expect(fs.existsSync(fixture.defaultStatePath)).toBe(false);
+  });
+
+  it("write-config --profile api pins managed sections regardless of caller bytes", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    // Caller omits managed sections and tries to weaken one the template
+    // carried — the overlay must restore the image policy values verbatim.
+    const callerConfig = [
+      "platforms:",
+      "  api_server:",
+      "    enabled: true",
+      "    extra:",
+      "      port: 18699",
+      "      host: 127.0.0.1",
+      "platform_toolsets:",
+      "  api_server:",
+      "    - file",
+      "model:",
+      "  default: caller-model",
+      "approvals:",
+      "  mode: auto",
+      "custom_field: preserved",
+      "",
+    ].join("\n");
+    const result = writeApiConfig(
+      fixture,
+      sha256File(fixture.apiConfigPath),
+      callerConfig,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const written = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    expect(written).toContain("default: caller-model");
+    expect(written).toContain("custom_field: preserved");
+    // Caller-supplied weaker value was overwritten by the policy.
+    expect(written).toContain("mode: manual");
+    expect(written).not.toContain("mode: auto");
+    expect(written).toContain("at_hour: 4");
+  });
+
+  it("bootstrap fails closed when the managed policy is missing", () => {
+    const fixture = createFixture();
+    fs.rmSync(fixture.managedPolicyPath);
+    const result = bootstrap(fixture);
+    expect(result.status, "missing managed policy must fail bootstrap").not.toBe(0);
+    expect(fs.existsSync(fixture.apiConfigPath)).toBe(false);
   });
 
   it("write-config --profile api rejects caller-supplied anchor and state paths", () => {

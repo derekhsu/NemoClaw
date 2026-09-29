@@ -12,6 +12,7 @@
 # the managed entrypoint.
 #
 #   nemoclaw-api-runtime start    — ensure the api runtime is running
+#   nemoclaw-api-runtime stop     — stop the supervisor and its children
 #   nemoclaw-api-runtime replace  — stop the current supervisor and children,
 #                                   then start fresh (post-config-write restart)
 #
@@ -28,9 +29,9 @@ fi
 
 ACTION="${1:-start}"
 case "$ACTION" in
-  start | replace) ;;
+  start | stop | replace) ;;
   *)
-    echo "[api-runtime] usage: nemoclaw-api-runtime [start|replace]" >&2
+    echo "[api-runtime] usage: nemoclaw-api-runtime [start|stop|replace]" >&2
     exit 1
     ;;
 esac
@@ -387,6 +388,27 @@ _api_supervise() {
 # ── Supervisor singleton ─────────────────────────────────────────
 # The lock serializes start/replace across concurrent privileged exec calls.
 exec 9>"$SUPERVISOR_LOCK_FILE"
+if [ "$ACTION" = "stop" ]; then
+  if [ -r "$SUPERVISOR_PID_FILE" ]; then
+    old_pid="$(cat "$SUPERVISOR_PID_FILE" 2>/dev/null || true)"
+    case "$old_pid" in
+      '' | *[!0-9]*) ;;
+      *)
+        if kill -0 "$old_pid" 2>/dev/null; then
+          log "stopping api runtime supervisor (pid ${old_pid})"
+          kill "$old_pid" 2>/dev/null || true
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            kill -0 "$old_pid" 2>/dev/null || break
+            sleep 0.25
+          done
+        fi
+        ;;
+    esac
+  fi
+  # Belt-and-braces: reap any api children the supervisor did not own.
+  _api_kill_stale_children
+  exit 0
+fi
 if [ "$ACTION" = "replace" ]; then
   if [ -r "$SUPERVISOR_PID_FILE" ]; then
     old_pid="$(cat "$SUPERVISOR_PID_FILE" 2>/dev/null || true)"

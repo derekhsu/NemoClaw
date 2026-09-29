@@ -4643,7 +4643,9 @@ def write_config_transaction(
 # group, mode, directory identity). It deliberately does not pin config.yaml
 # or .env content: the default-side operator legitimately modifies them, and
 # --expected-config-sha256 on write-config is a compare-and-swap precondition,
-# not a trust baseline.
+# not a trust baseline. Directory identity is pinned by inode alone: st_dev
+# changes when the container's overlay filesystem is remounted across a
+# sandbox stop/start, while st_ino survives and still catches replacement.
 
 HERMES_API_PROFILE_DIR = "/sandbox/.hermes-api/profiles/api"
 HERMES_API_ANCHOR_FILE = "/sandbox/.nemoclaw/hermes-api.config-hash"
@@ -4827,11 +4829,7 @@ def _verify_api_contract() -> dict[str, object]:
         raise UnsafePathError("refusing unsupported api profile record")
     if record.get("profile_dir") != HERMES_API_PROFILE_DIR:
         raise UnsafePathError("refusing api profile record for a different directory")
-    if (
-        api_dir_stat is None
-        or record.get("dir_dev") != api_dir_stat.st_dev
-        or record.get("dir_ino") != api_dir_stat.st_ino
-    ):
+    if api_dir_stat is None or record.get("dir_ino") != api_dir_stat.st_ino:
         raise UnsafePathError("api profile directory identity does not match its record")
     policy_sha = record.get("policy_sha256")
     if not isinstance(policy_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", policy_sha):
@@ -4977,7 +4975,6 @@ def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
     record = {
         "version": 1,
         "profile_dir": api_dir,
-        "dir_dev": dir_stat.st_dev,
         "dir_ino": dir_stat.st_ino,
         "policy_sha256": policy_sha,
     }

@@ -608,6 +608,21 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(result.stdout).toContain("verified=1");
   });
 
+  it("verify-api-profile survives a container restart remount (st_dev drift)", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    // A sandbox stop/start remounts the overlay filesystem under a new device
+    // id while preserving inodes. A record carrying a stale dir_dev must not
+    // fail closed — inode identity plus the sealed contract still holds.
+    const record = JSON.parse(fs.readFileSync(fixture.apiRecordPath, "utf-8"));
+    record.dir_dev = 999999;
+    fs.chmodSync(fixture.apiRecordPath, 0o600);
+    fs.writeFileSync(fixture.apiRecordPath, `${JSON.stringify(record)}\n`);
+    fs.chmodSync(fixture.apiRecordPath, 0o440);
+    const result = verifyApiProfile(fixture);
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("verify-api-profile rejects caller-supplied selectors", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);

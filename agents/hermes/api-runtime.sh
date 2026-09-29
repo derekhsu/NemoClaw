@@ -248,13 +248,23 @@ _api_wait_owned_listener() {
 
 _api_wait_backend_listener() {
   # Wait until a port has any LISTEN socket (main-gateway backend readiness).
+  # The main gateway's first boot runs config migrations and platform init for
+  # minutes, and the api-profile contract can restart it once for auxiliary
+  # validation, so the budget spans a slow first boot. Bail early only when
+  # our freshly spawned api gateway is already gone — nothing below us is
+  # worth keeping then.
   local port="$1" label="$2" attempts=0
-  while [ "$attempts" -lt 360 ]; do
+  while [ "$attempts" -lt 1200 ]; do
     _api_port_owner_pid "$port" >/dev/null 2>&1 && return 0
-    sleep 0.25
+    if ! gateway_control_pid_matches_start_identity \
+      "$API_GATEWAY_PID" "$API_GATEWAY_START"; then
+      log "api gateway exited while waiting for ${label} on ${port}"
+      return 1
+    fi
+    sleep 0.5
     attempts=$((attempts + 1))
   done
-  log "${label} did not bind port ${port}"
+  log "${label} did not bind port ${port} within the startup window"
   return 1
 }
 
@@ -414,6 +424,47 @@ _api_supervise() {
     sleep 2 || true
   done
 }
+
+# ── Payload network namespace ────────────────────────────────────
+# docker exec lands in the OpenShell supervisor's network namespace (PID 1's),
+# whose loopback cannot see payload listeners: sandbox payload processes —
+# nemoclaw-start, the main gateway, and everything OpenShell exec spawns —
+# run in a dedicated netns. The api stack must live there too: the prefix
+# proxy fallthrough targets the main gateway's 127.0.0.1:18642, and
+# ClawShell's readiness probes arrive through OpenShell exec, which joins
+# the payload netns. Re-exec into it once before any listener work so every
+# /proc/net/tcp check and spawned child resolves the right loopback.
+#
+# The anchor is the pinned nemoclaw-start pid — the same supervised process
+# the guard requires for bootstrap — verified live and by cmdline before its
+# namespace is borrowed. In non-OpenShell topologies nemoclaw-start already
+# shares the only netns, and the self-comparison skips the re-exec.
+_api_resolve_payload_ns_pid() {
+  local pid_file="/sandbox/.hermes/runtime/nemoclaw-start.pid" pid cmdline
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  gateway_control_pid_is_live "$pid" || return 1
+  cmdline="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+  case "$cmdline" in
+    *nemoclaw-start*) ;;
+    *) return 1 ;;
+  esac
+  PAYLOAD_NS_PID="$pid"
+}
+PAYLOAD_NS_PID=""
+if [ "$ACTION" != "stop" ]; then
+  if ! _api_resolve_payload_ns_pid; then
+    echo "[api-runtime] cannot resolve the payload network namespace anchor (nemoclaw-start pid)" >&2
+    exit 1
+  fi
+  if [ "$(readlink /proc/self/ns/net)" != "$(readlink "/proc/${PAYLOAD_NS_PID}/ns/net")" ]; then
+    command -v nsenter >/dev/null 2>&1 || {
+      echo "[api-runtime] nsenter is required to join the payload network namespace" >&2
+      exit 1
+    }
+    exec nsenter -t "$PAYLOAD_NS_PID" -n -- "$0" "$ACTION"
+  fi
+fi
 
 # ── Supervisor singleton ─────────────────────────────────────────
 # The lock serializes start/replace across concurrent privileged exec calls.

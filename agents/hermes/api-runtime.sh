@@ -36,6 +36,36 @@ case "$ACTION" in
     ;;
 esac
 
+# docker exec children inherit the container-level environment, which carries
+# OpenShell supervisor-only identity material (TLS paths, sandbox token file)
+# and other names the Hermes env boundary reads as secret-shaped. The api
+# profile stack consumes none of it, so scrub every variable matching the
+# boundary's secret pattern minus its explicit nonsecret allowlist — mirroring
+# validate-env-secret-boundary.py's runtime contract rather than enumerating
+# today's variable names.
+_api_scrub_supervisor_env() {
+  local name
+  while IFS='=' read -r name _; do
+    case "$name" in
+      # OpenShell supervisor-only identity variables (canonical deny list in
+      # validate-env-secret-boundary.py) and the boundary's nonsecret
+      # allowlist respectively.
+      OPENSHELL_TLS_CA | OPENSHELL_TLS_CERT | OPENSHELL_TLS_KEY)
+        unset "$name"
+        ;;
+      API_SERVER_HOST | API_SERVER_PORT | GPG_KEY \
+        | NEMOCLAW_INFERENCE_API | NEMOCLAW_INFERENCE_PROVIDER_ID \
+        | NEMOCLAW_PROVIDER_KEY | NEMOCLAW_REQUIRE_API_PROFILE)
+        continue
+        ;;
+      *TOKEN* | *KEY* | *SECRET* | *PASSWORD* | *CREDENTIAL* | *API*)
+        unset "$name" 2>/dev/null || true
+        ;;
+    esac
+  done < <(env)
+}
+_api_scrub_supervisor_env
+
 _SANDBOX_INIT="/usr/local/lib/nemoclaw/sandbox-init.sh"
 if [ ! -f "$_SANDBOX_INIT" ]; then
   _SANDBOX_INIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../scripts/lib/sandbox-init.sh"

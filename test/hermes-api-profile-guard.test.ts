@@ -18,10 +18,12 @@ import { describe, expect, it } from "vitest";
 //   bootstrap-api-profile                      (no path arguments)
 //   write-config --profile api                 (fixed paths; path flags rejected)
 //
-// Ownership matrix under test:
-//   profiles/api/            sandbox:api 3770  — admin owns dir, runtime only
-//   config.yaml, .env        sandbox:api 0640  — admin writes, runtime reads
-//   .config-hash, policy     root:api 0440     — only the guard writes
+// Ownership matrix under test (the api home lives outside /sandbox/.hermes so
+// the api runtime uid never enters the default profile's tree):
+//   .hermes-api/, profiles/  root:root 0711   — traverse-only chain
+//   profiles/api/            sandbox:api 3770 — admin owns dir, runtime only
+//   config.yaml, .env        sandbox:api 0640 — admin writes, runtime reads
+//   .config-hash, policy     root:api 0440    — only the guard writes
 //   anchor + record          /sandbox/.nemoclaw (root-owned sticky parent)
 //
 // Ownership cannot be faked inside an unprivileged fixture: the wrapper binds
@@ -43,15 +45,13 @@ const RUNTIME_CONFIG_GUARD = path.join(
 const POLICY_VERSION = "clawshell-api-minimal-v1";
 const DEFAULT_CONFIG = "model:\n  default: trusted-model\n";
 const DEFAULT_ENV = "API_SERVER_PORT=18642\nSAFE_SETTING=trusted\n";
-const ADMIN_UID = 12345;
-const ADMIN_GID = 12345;
-const API_UID = 12346;
-const API_GID = 12346;
 
 interface ApiFixture {
   root: string;
   hermesDir: string;
   profilesDir: string;
+  apiRootDir: string;
+  apiProfilesDir: string;
   apiDir: string;
   nemoclawDir: string;
   apiConfigPath: string;
@@ -92,7 +92,9 @@ function createFixture(): ApiFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-api-profile-guard-"));
   const hermesDir = path.join(root, "sandbox", ".hermes");
   const profilesDir = path.join(hermesDir, "profiles");
-  const apiDir = path.join(profilesDir, "api");
+  const apiRootDir = path.join(root, "sandbox", ".hermes-api");
+  const apiProfilesDir = path.join(apiRootDir, "profiles");
+  const apiDir = path.join(apiProfilesDir, "api");
   const etcDir = path.join(root, "etc", "nemoclaw");
   const runDir = path.join(root, "run", "nemoclaw");
   const nemoclawDir = path.join(root, "sandbox", ".nemoclaw");
@@ -100,6 +102,8 @@ function createFixture(): ApiFixture {
     root,
     hermesDir,
     profilesDir,
+    apiRootDir,
+    apiProfilesDir,
     apiDir,
     nemoclawDir,
     apiConfigPath: path.join(apiDir, "config.yaml"),
@@ -121,7 +125,7 @@ function createFixture(): ApiFixture {
   fs.mkdirSync(runDir, { recursive: true });
   fs.mkdirSync(nemoclawDir, { recursive: true });
   fs.chmodSync(hermesDir, 0o3770);
-  fs.chmodSync(profilesDir, 0o771);
+  fs.chmodSync(profilesDir, 0o770);
   fs.chmodSync(nemoclawDir, 0o1755);
   fs.writeFileSync(fixture.defaultConfigPath, DEFAULT_CONFIG, { mode: 0o640 });
   fs.writeFileSync(fixture.defaultEnvPath, DEFAULT_ENV, { mode: 0o600 });
@@ -191,10 +195,10 @@ raise SystemExit(module.main())
       FIXTURE_API_STATE: fixture.apiStatePath,
       FIXTURE_OWNER_UID: String(options.ownerUid ?? process.getuid!()),
       FIXTURE_OWNER_GID: String(options.ownerGid ?? process.getgid!()),
-      FIXTURE_ADMIN_UID: String(options.adminUid ?? ADMIN_UID),
-      FIXTURE_ADMIN_GID: String(ADMIN_GID),
-      FIXTURE_API_UID: String(options.apiUid ?? API_UID),
-      FIXTURE_API_GID: String(API_GID),
+      FIXTURE_ADMIN_UID: String(options.adminUid ?? process.getuid!()),
+      FIXTURE_ADMIN_GID: String(process.getgid!()),
+      FIXTURE_API_UID: String(options.apiUid ?? process.getuid!()),
+      FIXTURE_API_GID: String(process.getgid!()),
     },
   });
 }
@@ -216,6 +220,10 @@ function writeApiConfig(
   );
 }
 
+function verifyApiProfile(fixture: ApiFixture, extraArgs: string[] = [], options: GuardRunOptions = {}) {
+  return runApiGuard(fixture, ["verify-api-profile", ...extraArgs], options);
+}
+
 function apiEnvKey(fixture: ApiFixture): string {
   const match = fs.readFileSync(fixture.apiEnvPath, "utf-8").match(/^API_SERVER_KEY=(.+)$/m);
   expect(match, "api profile .env must carry API_SERVER_KEY").not.toBeNull();
@@ -227,7 +235,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     // Regression pin for the 2026-09-24 production refusal (op-16c864769b09):
     // passing the default anchor with a profile hermes dir must stay fail-closed.
     const fixture = createFixture();
-    fs.mkdirSync(fixture.apiDir);
+    fs.mkdirSync(fixture.apiDir, { recursive: true });
     fs.writeFileSync(fixture.apiConfigPath, "model:\n  default: api-model\n", { mode: 0o600 });
     fs.writeFileSync(fixture.apiEnvPath, "API_SERVER_KEY=placeholder\n", { mode: 0o600 });
     fs.writeFileSync(
@@ -275,8 +283,11 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(fs.statSync(fixture.apiPolicyPath).mode & 0o777).toBe(0o440);
     expect(fs.statSync(fixture.apiCompatHashPath).mode & 0o777).toBe(0o440);
     // Sticky+setgid profile dir: the runtime creates its own files but cannot
-    // unlink or rename files it does not own.
+    // unlink or rename files it does not own. The traverse chain above it is
+    // root-owned and grants execute-only to non-owners.
     expect(fs.statSync(fixture.apiDir).mode & 0o7777).toBe(0o3770);
+    expect(fs.statSync(fixture.apiProfilesDir).mode & 0o777).toBe(0o711);
+    expect(fs.statSync(fixture.apiRootDir).mode & 0o777).toBe(0o711);
     const envText = fs.readFileSync(fixture.apiEnvPath, "utf-8");
     expect(envText).toMatch(/^API_SERVER_KEY=[0-9a-f]{64}$/m);
     const policy = JSON.parse(fs.readFileSync(fixture.apiPolicyPath, "utf-8"));
@@ -354,7 +365,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     // The existing files cannot be trusted, so bootstrap must re-seal rather
     // than adopt them.
     const fixture = createFixture();
-    fs.mkdirSync(fixture.apiDir);
+    fs.mkdirSync(fixture.apiDir, { recursive: true });
     const forgedKey = "f".repeat(64);
     fs.writeFileSync(fixture.apiConfigPath, "model:\n  default: forged\n", { mode: 0o600 });
     fs.writeFileSync(fixture.apiEnvPath, `API_SERVER_KEY=${forgedKey}\n`, { mode: 0o600 });
@@ -367,7 +378,11 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   it("fails closed when the sealed policy drifts from a live anchor", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
+    // Simulate a forged policy while keeping the sealed mode intact, so the
+    // digest check — not the mode check — is what must catch the drift.
+    fs.chmodSync(fixture.apiPolicyPath, 0o600);
     fs.writeFileSync(fixture.apiPolicyPath, JSON.stringify({ version: "forged" }));
+    fs.chmodSync(fixture.apiPolicyPath, 0o440);
     const result = bootstrap(fixture);
     expect(result.status, "policy drift under a live anchor must fail").not.toBe(0);
     expect(fs.readFileSync(fixture.apiPolicyPath, "utf-8")).toContain("forged");
@@ -449,7 +464,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   it("fails closed when the api profile directory was replaced", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
-    const forgedDir = path.join(fixture.profilesDir, "api-forged");
+    const forgedDir = path.join(fixture.apiProfilesDir, "api-forged");
     fs.mkdirSync(forgedDir);
     fs.writeFileSync(path.join(forgedDir, "config.yaml"), "model:\n  default: forged\n", {
       mode: 0o600,
@@ -457,7 +472,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     fs.writeFileSync(path.join(forgedDir, ".env"), `API_SERVER_KEY=${"e".repeat(64)}\n`, {
       mode: 0o600,
     });
-    fs.renameSync(fixture.apiDir, path.join(fixture.profilesDir, "api.orig"));
+    fs.renameSync(fixture.apiDir, path.join(fixture.apiProfilesDir, "api.orig"));
     fs.renameSync(forgedDir, fixture.apiDir);
     const result = writeApiConfig(
       fixture,
@@ -492,7 +507,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   it("refuses a symlinked api profile directory", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
-    const realDir = path.join(fixture.profilesDir, "api-real");
+    const realDir = path.join(fixture.apiProfilesDir, "api-real");
     fs.renameSync(fixture.apiDir, realDir);
     fs.symlinkSync(realDir, fixture.apiDir);
     const result = writeApiConfig(
@@ -501,5 +516,58 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
       "model: {}\n",
     );
     expect(result.status).not.toBe(0);
+  });
+
+  it("verify-api-profile passes on a sealed profile and tolerates operator edits", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    expect(verifyApiProfile(fixture).status).toBe(0);
+    // Operator-mutable content must not trip the structural verify.
+    fs.writeFileSync(fixture.apiConfigPath, "model:\n  default: operator-chosen\n");
+    fs.writeFileSync(fixture.apiEnvPath, `API_SERVER_KEY=${"c".repeat(64)}\n`);
+    const result = verifyApiProfile(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("verified=1");
+  });
+
+  it("verify-api-profile rejects caller-supplied selectors", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    for (const extra of [
+      ["--hermes-dir", fixture.apiDir],
+      ["--hash-file", fixture.apiHashPath],
+      ["--state-file", fixture.apiStatePath],
+      ["--profile", "api"],
+      ["api"],
+    ]) {
+      const result = verifyApiProfile(fixture, extra);
+      expect(result.status, `verify must reject args: ${extra.join(" ")}`).not.toBe(0);
+    }
+  });
+
+  it("verify-api-profile fails closed without a profile or anchor", () => {
+    const fixture = createFixture();
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
+    expect(bootstrap(fixture).status).toBe(0);
+    fs.unlinkSync(fixture.apiHashPath);
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
+  });
+
+  it("verify-api-profile refuses an interrupted api transaction journal", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    fs.writeFileSync(
+      fixture.apiStatePath,
+      JSON.stringify({ version: 1, phase: "config-write-prepared", hermes_dir: fixture.apiDir }),
+      { mode: 0o600 },
+    );
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
+  });
+
+  it("verify-api-profile refuses a profile without a readable generated key", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    fs.writeFileSync(fixture.apiEnvPath, "API_SERVER_KEY=not-generated\n");
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
   });
 });

@@ -42,6 +42,8 @@ const RUNTIME_CONFIG_GUARD = path.join(
   "runtime-config-guard.py",
 );
 
+const START_SCRIPT = path.join(import.meta.dirname, "..", "agents", "hermes", "start.sh");
+
 const POLICY_VERSION = "clawshell-api-minimal-v1";
 const DEFAULT_CONFIG = "model:\n  default: trusted-model\n";
 const DEFAULT_ENV = "API_SERVER_PORT=18642\nSAFE_SETTING=trusted\n";
@@ -747,5 +749,13 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     fs.chmodSync(fixture.apiPolicyPath, 0o440);
     const result = runApiGuard(fixture, ["normalize-api-profile"]);
     expect(result.status).not.toBe(0);
+  });
+
+  it("keeps dashboard routing on the dedicated api profile after managed restarts", () => {
+    const src = fs.readFileSync(START_SCRIPT, "utf-8");
+    expect(src).toContain('HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"');
+    expect(src).toContain('HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"');
+    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml"');
+    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"');
   });
 });

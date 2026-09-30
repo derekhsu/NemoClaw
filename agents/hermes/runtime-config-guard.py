@@ -848,6 +848,7 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
         "write-config",
         "bootstrap-api-profile",
         "verify-api-profile",
+        "normalize-api-profile",
         "begin-shields-transition",
         "apply-shields-transition",
         "finish-shields-transition",
@@ -4633,8 +4634,8 @@ def write_config_transaction(
 #   /sandbox/.hermes-api/               root:root    0711 (traverse only)
 #   /sandbox/.hermes-api/profiles/      root:root    0711 (traverse only)
 #   .../profiles/api/                   sandbox:api  3770 (sticky+setgid)
-#   config.yaml, .env                   sandbox:api  0640 (admin writes,
-#                                                        runtime reads)
+#   config.yaml, .env, SOUL.md          sandbox:api  0640 (admin writes,
+#   skills/                             sandbox:api  2750    runtime reads)
 #   .config-hash, .clawshell-tool-policy.json
 #                                       root:api     0440 (guard writes only)
 #   anchor + record                     under root-owned /sandbox/.nemoclaw
@@ -4676,6 +4677,20 @@ HERMES_API_POLICY_BYTES = (
         separators=(",", ":"),
     )
     + "\n"
+).encode("utf-8")
+# The stock Hermes default soul (hermes_cli/default_soul.py DEFAULT_SOUL_MD),
+# the same bytes the image writes to /sandbox/.hermes/SOUL.md. Duplicated here
+# because the guard seals the api profile before the gateway ever runs — and
+# the runtime must never own it, or the api agent could rewrite its own soul.
+HERMES_API_SOUL_BYTES = (
+    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+    "range of tasks including answering questions, writing and editing code, "
+    "analyzing information, creative work, and executing actions via your "
+    "tools. You communicate clearly, admit uncertainty when appropriate, and "
+    "prioritize being genuinely useful over being verbose unless otherwise "
+    "directed below. Be targeted and efficient in your exploration and "
+    "investigations.\n"
 ).encode("utf-8")
 HERMES_API_CONFIG_TEMPLATE = (
     "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
@@ -4781,6 +4796,12 @@ def _api_contract_checks() -> list[tuple[str, int, int, int, bool]]:
         (api_dir, admin_uid, api_gid, 0o3770, True),
         (os.path.join(api_dir, "config.yaml"), admin_uid, api_gid, 0o640, False),
         (os.path.join(api_dir, ".env"), admin_uid, api_gid, 0o640, False),
+        # The agent-design surface is admin-owned too: the default side edits
+        # SOUL.md and installs skills, while the api runtime group can only
+        # read them. skills/ keeps setgid so admin-added skill files stay
+        # group-readable for the runtime.
+        (os.path.join(api_dir, "SOUL.md"), admin_uid, api_gid, 0o640, False),
+        (os.path.join(api_dir, "skills"), admin_uid, api_gid, 0o2750, True),
         (
             os.path.join(api_dir, ".clawshell-tool-policy.json"),
             HERMES_API_OWNER_UID,
@@ -4919,6 +4940,52 @@ def _api_compat_hash_text(api_dir: str) -> str:
     )
 
 
+def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
+    """Bring the admin-owned design files up to the sealed contract.
+
+    SOUL.md and skills/ shape what the api agent is; they must stay
+    admin-owned so the hermesapi runtime can read but never edit them.
+    Profiles sealed before this contract existed carry runtime-owned copies:
+    their content is adopted (the operator reviews it anyway) while ownership
+    and mode are restored. Missing entries are created — SOUL.md from the
+    stock default, skills/ as an empty setgid dir. A non-regular SOUL.md
+    (symlink, fifo) is never followed or rewritten — it fails closed.
+    """
+    api_dir = HERMES_API_PROFILE_DIR
+    soul_path = os.path.join(api_dir, "SOUL.md")
+    skills_dir = os.path.join(api_dir, "skills")
+    try:
+        soul_stat = os.lstat(soul_path)
+    except FileNotFoundError:
+        soul_stat = None
+    if soul_stat is None:
+        _api_write_file(soul_path, HERMES_API_SOUL_BYTES, 0o640, admin_uid, api_gid)
+    elif not stat.S_ISREG(soul_stat.st_mode):
+        raise UnsafePathError("refusing non-regular api profile SOUL.md")
+    else:
+        # lchown: on a pre-contract profile the runtime uid owned this file
+        # and could race a symlink swap; never follow the final component.
+        os.lchown(soul_path, admin_uid, api_gid)
+        os.chmod(soul_path, 0o640)
+    _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
+    # Skills installed before the contract change remain runtime-owned inside
+    # the now admin-owned dir; re-own the whole tree so installed skill
+    # content is read-only to the api runtime as well.
+    for parent, dirs, files in os.walk(skills_dir):
+        for name in dirs + files:
+            entry = os.path.join(parent, name)
+            try:
+                entry_stat = os.lstat(entry)
+            except FileNotFoundError:
+                continue
+            # lchown never follows the final component, so a symlink planted
+            # by the runtime uid cannot redirect the ownership repair.
+            os.lchown(entry, admin_uid, api_gid)
+            if stat.S_ISLNK(entry_stat.st_mode):
+                continue
+            os.chmod(entry, 0o750 if stat.S_ISDIR(entry_stat.st_mode) else 0o640)
+
+
 def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
     """(Re)write the complete api profile contract with a fresh key.
 
@@ -4958,6 +5025,7 @@ def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
         HERMES_API_OWNER_UID,
         api_gid,
     )
+    _api_ensure_design_surface(admin_uid, api_gid)
 
     policy_sha = hashlib.sha256(HERMES_API_POLICY_BYTES).hexdigest()
     anchor_text_value = (
@@ -5010,6 +5078,27 @@ def verify_api_profile() -> None:
     print("verified=1")
 
 
+def normalize_api_profile() -> None:
+    """Restore the design-surface contract, then verify. Root-only.
+
+    The api runtime supervisor calls this instead of a bare verify before
+    every launch and respawn: admin edits land through ordinary file writes
+    and can drop the pinned owner/mode (umask 644, a replaced skills file),
+    so respawns repair the structure before asserting it. Sealed bytes —
+    the policy, anchor, record — are still only verified, never rewritten.
+    """
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError(
+            "normalize-api-profile requires the privileged executor identity"
+        )
+    if not os.path.isdir(HERMES_API_PROFILE_DIR):
+        raise UnsafePathError("api profile is not provisioned")
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    _api_ensure_design_surface(admin_uid, api_gid)
+    _verify_api_contract()
+    print("normalized=1")
+
+
 def bootstrap_api_profile() -> None:
     """Create or verify the fixed image-owned api profile. Root-only."""
     if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
@@ -5025,6 +5114,10 @@ def bootstrap_api_profile() -> None:
         HERMES_API_PROFILE_DIR
     )
     if anchor_present and profile_present:
+        # Design files predate the sealed contract on older profiles; restore
+        # their admin ownership before verifying so the upgrade does not fail
+        # closed on entries the runtime used to own.
+        _api_ensure_design_surface(admin_uid, api_gid)
         # Verified retry: the structure must match the sealed contract exactly;
         # drift fails closed rather than re-sealing over a live anchor.
         _verify_api_contract()
@@ -5587,6 +5680,7 @@ def main() -> int:
             "run-state-dir-transition",
             "bootstrap-api-profile",
             "verify-api-profile",
+            "normalize-api-profile",
         ),
     )
     parser.add_argument("--hermes-dir", default="")
@@ -5617,7 +5711,11 @@ def main() -> int:
             raise UnsafePathError(
                 "--mcp-state-exit-code requires inspect-mcp-integrity"
             )
-        if args.action in ("bootstrap-api-profile", "verify-api-profile"):
+        if args.action in (
+            "bootstrap-api-profile",
+            "verify-api-profile",
+            "normalize-api-profile",
+        ):
             # The fixed api-profile actions resolve every path and identity
             # from image constants; any caller-supplied selector is rejected.
             if (
@@ -5809,6 +5907,8 @@ def main() -> int:
             bootstrap_api_profile()
         elif args.action == "verify-api-profile":
             verify_api_profile()
+        elif args.action == "normalize-api-profile":
+            normalize_api_profile()
         elif args.action == "recover-prestate-lock":
             if not args.state_file:
                 raise UnsafePathError(

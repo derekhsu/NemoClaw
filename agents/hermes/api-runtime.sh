@@ -18,7 +18,10 @@
 #
 # The supervisor verifies the root-sealed api profile contract before launch
 # and before every respawn; a drifted anchor, replaced path, missing key, or
-# interrupted config-write journal fails closed.
+# interrupted config-write journal fails closed. It also fingerprints the
+# admin-owned design surface (config.yaml, .env, SOUL.md, skills/) each poll
+# and restarts the gateway once an edit burst settles, so dashboard-side
+# changes take effect without a manual replace.
 
 set -euo pipefail
 
@@ -123,6 +126,7 @@ API_GATEWAY_PID=""
 API_GATEWAY_START=""
 API_PROXY_PID=""
 API_PROXY_START=""
+DESIGN_FP_APPLIED=""
 
 install -d -m 0755 -o root -g root "$RUNTIME_STATE_DIR"
 if [ ! -f "$RUNTIME_LOG" ]; then
@@ -135,7 +139,12 @@ log() {
 }
 
 _api_verify_contract() {
-  "$_HERMES_PYTHON" -I "$_GUARD" verify-api-profile >/dev/null 2>>"$RUNTIME_LOG"
+  # normalize-api-profile repairs the admin-owned design surface (SOUL.md,
+  # skills/) before asserting the sealed contract: operator edits arrive via
+  # ordinary file writes and can drop the pinned mode/owner, and a respawn
+  # must heal that drift rather than refuse to launch over it. Sealed bytes
+  # (policy, anchor, record) are still verified, never rewritten.
+  "$_HERMES_PYTHON" -I "$_GUARD" normalize-api-profile >/dev/null 2>>"$RUNTIME_LOG"
 }
 
 # A child is only reaped or signaled after its /proc start identity matches the
@@ -273,6 +282,14 @@ _api_prepare_log() {
   install -o hermesapi -g api -m 0640 /dev/null "$path"
 }
 
+_api_design_fingerprint() {
+  # Covers the admin-owned design surface the gateway reads at boot. A change
+  # here is the signal to restart the gateway so edits take effect.
+  gateway_control_tree_fingerprint \
+    "$API_PROFILE_HOME/config.yaml" "$API_PROFILE_HOME/.env" \
+    "$API_PROFILE_HOME/SOUL.md" "$API_PROFILE_HOME/skills"
+}
+
 _api_spawn_gateway() {
   _api_prepare_log "$GATEWAY_LOG" || return 1
   # The profile dir is sandbox:api 3770; hermesapi creates runtime state there
@@ -312,6 +329,9 @@ _api_launch_stack() {
     log "api profile contract verification failed; refusing launch"
     return 1
   }
+  # Sample the design fingerprint before the gateway reads the files, so an
+  # edit landing during the boot wait still registers as a change.
+  DESIGN_FP_APPLIED="$(_api_design_fingerprint)"
   _api_spawn_gateway || return 1
   if ! _api_wait_owned_listener \
     "$API_GATEWAY_PID" "$API_GATEWAY_START" "$API_INTERNAL_PORT" "api profile gateway"; then
@@ -361,7 +381,32 @@ _api_prune_exits() {
 
 _api_supervise() {
   local -a gateway_exits=() proxy_exits=()
+  local design_fp_applied design_fp_pending="" design_fp_now
+  design_fp_applied="$DESIGN_FP_APPLIED"
   while :; do
+    # The admin side edits the api profile's design files through ordinary
+    # writes; the gateway only reads them at boot, so a stable fingerprint
+    # change restarts it. The one-tick debounce lets a write burst settle
+    # instead of restarting once per touched file.
+    design_fp_now="$(_api_design_fingerprint)"
+    if [ "$design_fp_now" != "$design_fp_applied" ]; then
+      if [ "$design_fp_now" = "$design_fp_pending" ]; then
+        log "api design files changed; restarting api profile gateway"
+        _api_stop_child "$API_GATEWAY_PID" "$API_GATEWAY_START" "api-gateway"
+        API_GATEWAY_PID="" API_GATEWAY_START=""
+        design_fp_applied="$design_fp_now"
+        design_fp_pending=""
+        # A SIGKILLed child can leave its listener socket mid-teardown; wait
+        # for the port to release before the respawn path binds it again.
+        _api_wait_port_free "$API_INTERNAL_PORT" || {
+          log "api gateway port did not release after design restart"
+          _api_shutdown
+          return 1
+        }
+      else
+        design_fp_pending="$design_fp_now"
+      fi
+    fi
     if [ -n "$API_GATEWAY_PID" ] \
       && ! gateway_control_pid_matches_start_identity \
         "$API_GATEWAY_PID" "$API_GATEWAY_START"; then

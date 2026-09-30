@@ -663,4 +663,89 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     fs.writeFileSync(fixture.apiEnvPath, "API_SERVER_KEY=not-generated\n");
     expect(verifyApiProfile(fixture).status).not.toBe(0);
   });
+
+  it("bootstrap seals SOUL.md and skills/ on the admin side", () => {
+    // The design surface is part of the sealed contract: admin-owned so the
+    // default side can edit it, group-readable for the api runtime, and never
+    // runtime-writable.
+    const fixture = createFixture();
+    const result = bootstrap(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    const soulPath = path.join(fixture.apiDir, "SOUL.md");
+    const skillsDir = path.join(fixture.apiDir, "skills");
+    expect(fs.existsSync(soulPath)).toBe(true);
+    expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
+    expect(fs.readFileSync(soulPath, "utf-8")).toContain("Hermes Agent");
+    expect(fs.statSync(skillsDir).isDirectory()).toBe(true);
+    expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
+  });
+
+  it("verify-api-profile fails closed when a design file drifts from the contract", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    fs.chmodSync(path.join(fixture.apiDir, "SOUL.md"), 0o666);
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
+    fs.chmodSync(path.join(fixture.apiDir, "skills"), 0o777);
+    expect(verifyApiProfile(fixture).status).not.toBe(0);
+  });
+
+  it("bootstrap retry restores the contract on runtime-owned design files", () => {
+    // Profiles sealed before SOUL.md/skills joined the contract have them
+    // runtime-owned (the gateway creates them at first boot). A retry must
+    // re-own them — preserving content — rather than fail closed on drift.
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const soulPath = path.join(fixture.apiDir, "SOUL.md");
+    const skillsDir = path.join(fixture.apiDir, "skills");
+    fs.chmodSync(soulPath, 0o660);
+    fs.writeFileSync(soulPath, "operator-tuned soul\n");
+    fs.chmodSync(skillsDir, 0o700);
+    fs.mkdirSync(path.join(skillsDir, "demo"), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, "demo", "SKILL.md"), "x\n", { mode: 0o600 });
+    const result = bootstrap(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
+    expect(fs.readFileSync(soulPath, "utf-8")).toBe("operator-tuned soul\n");
+    expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
+    expect(fs.statSync(path.join(skillsDir, "demo")).mode & 0o777).toBe(0o750);
+    expect(fs.statSync(path.join(skillsDir, "demo", "SKILL.md")).mode & 0o777).toBe(0o640);
+  });
+
+  it("normalize-api-profile repairs design drift and re-verifies the contract", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    fs.chmodSync(path.join(fixture.apiDir, "SOUL.md"), 0o666);
+    const result = runApiGuard(fixture, ["normalize-api-profile"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("normalized=1");
+    expect(fs.statSync(path.join(fixture.apiDir, "SOUL.md")).mode & 0o777).toBe(0o640);
+  });
+
+  it("normalize-api-profile rejects selectors and non-owner callers", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    for (const extra of [
+      ["--profile", "api"],
+      ["--hermes-dir", fixture.apiDir],
+      ["api"],
+    ]) {
+      const result = runApiGuard(fixture, ["normalize-api-profile", ...extra]);
+      expect(result.status, `normalize must reject args: ${extra.join(" ")}`).not.toBe(0);
+    }
+    expect(
+      runApiGuard(fixture, ["normalize-api-profile"], { ownerUid: 0 }).status,
+    ).not.toBe(0);
+  });
+
+  it("normalize-api-profile refuses sealed-anchor drift it cannot repair", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    // Forging the policy must stay fatal: normalization repairs only the
+    // operator-owned design surface, never the sealed bytes.
+    fs.chmodSync(fixture.apiPolicyPath, 0o600);
+    fs.writeFileSync(fixture.apiPolicyPath, JSON.stringify({ version: "forged" }));
+    fs.chmodSync(fixture.apiPolicyPath, 0o440);
+    const result = runApiGuard(fixture, ["normalize-api-profile"]);
+    expect(result.status).not.toBe(0);
+  });
 });

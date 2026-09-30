@@ -335,6 +335,26 @@ gateway_control_reap_port_listener() {
   return 1
 }
 
+gateway_control_tree_fingerprint() {
+  # Print one checksum covering every argument path. Regular files contribute
+  # their path and a content checksum; directories contribute every entry
+  # path beneath them plus each regular file's content. Missing paths and
+  # unreadable entries contribute nothing. Content — not metadata — is the
+  # signal: an atomic rewrite with identical bytes needs no reload.
+  local path
+  {
+    for path in "$@"; do
+      if [ -d "$path" ]; then
+        find "$path" -mindepth 1 -print 2>/dev/null
+        find "$path" -mindepth 1 -type f -exec cksum {} + 2>/dev/null
+      elif [ -e "$path" ]; then
+        printf '%s\n' "$path"
+        cksum "$path" 2>/dev/null
+      fi
+    done
+  } | LC_ALL=C sort | cksum
+}
+
 NEMOCLAW_MANAGED_EXPECTED_EXIT_DIR="/run/nemoclaw"
 NEMOCLAW_MANAGED_EXPECTED_EXIT_MARKER="managed-gateway-expected-exit"
 NEMOCLAW_MANAGED_CONTROLLER_PATH="/usr/local/lib/nemoclaw/managed-gateway-control.py"

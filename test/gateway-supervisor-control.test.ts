@@ -446,3 +446,67 @@ describe("root-only gateway control helper", () => {
     expect(result.stderr.trim()).toBe("PRIVILEGED_CONTROL_UNAVAILABLE");
   });
 });
+
+describe("gateway_control_tree_fingerprint", () => {
+  function fingerprint(...paths: string[]): string {
+    const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
+    const result = runSupervisorLibrary(
+      `gateway_control_tree_fingerprint ${quoted}`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  it("is stable for unchanged paths and moves when a file is edited", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "config.yaml");
+    writeFileSync(file, "model: a\n");
+    const before = fingerprint(file);
+    expect(fingerprint(file)).toBe(before);
+    writeFileSync(file, "model: b\n");
+    expect(fingerprint(file)).not.toBe(before);
+  });
+
+  it("moves when a watched directory gains or loses an entry", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const skills = join(dir, "skills");
+    mkdirSync(skills);
+    writeFileSync(join(skills, "one"), "x\n");
+    const before = fingerprint(skills);
+    writeFileSync(join(skills, "two"), "y\n");
+    const added = fingerprint(skills);
+    expect(added).not.toBe(before);
+    rmSync(join(skills, "two"));
+    expect(fingerprint(skills)).toBe(before);
+  });
+
+  it("moves when file content changes but ignores unchanged paths", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "SOUL.md");
+    writeFileSync(file, "one\n");
+    const before = fingerprint(file);
+    writeFileSync(file, "two\n");
+    expect(fingerprint(file)).not.toBe(before);
+  });
+
+  it("does not move when identical bytes are rewritten in place", () => {
+    // Content is the fingerprint signal: rewriting the same design bytes —
+    // for example an idempotent seeding pass — must not force a reload.
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "SOUL.md");
+    writeFileSync(file, "same\n");
+    const before = fingerprint(file);
+    const tmp = join(dir, "SOUL.md.tmp");
+    writeFileSync(tmp, "same\n");
+    spawnSync("mv", [tmp, file]);
+    expect(fingerprint(file)).toBe(before);
+  });
+
+  it("ignores missing paths without failing", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const missing = join(dir, "absent");
+    const present = join(dir, "present");
+    writeFileSync(present, "x\n");
+    expect(fingerprint(missing, present)).toBe(fingerprint(present));
+  });
+});

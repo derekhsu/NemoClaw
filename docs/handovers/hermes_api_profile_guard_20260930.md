@@ -73,8 +73,24 @@ Confirmed this gap predates this work — image `.2` had it too; only
   (all changes EXCEPT the proxy-env fix — still fails inference upstream).
 - `2026.9.30.3` = `derekhsu/openshell-hermes@sha256:a53f3b52d44bc2cf88f648f8b0304aa4a95b50e3f4853c92b4c5b4d8a2795e88`
   (run `36697497695` at `6168230`) — the first image with working inference
-  through the api profile. Pin the ClawShell blueprint `sandbox_source` to
-  this digest.
+  through the api profile. ClawShell blueprint `hermes-api-profile-verify-0924`
+  `sandbox_source` was repointed to this digest (PUT via control API).
+
+## Real ClawShell-path validation (sandbox `sbx-2f48f6a3` / `api-prof-0930g`)
+
+Provisioned through `POST /api/sandboxes` on the live backend (`:8001`), ~90s
+to `running`, container image verified as `a53f3b52d44b`:
+
+- External OpenAI flow: `POST /api/sandboxes/sbx-2f48f6a3/v1/chat/completions`
+  with a `csg_live_` API key + `x-thread-id` header → real `chat.completion`
+  reply (`gpt-5.6-luna`, `finish_reason: stop`). Requires `x-thread-id`.
+- Design-change loop on the .3 supervisor: `sandbox`-uid append to api
+  `SOUL.md` → api gateway pid changed (4305→34905).
+- Contract on the fresh image: `SOUL.md` `sandbox:api 0640`, `skills/`
+  `sandbox:api 2750`, dashboard `SOUL.md` seeded with the design-surface note.
+- Control-UI session issuance works (`POST .../control-ui/session` → iframe
+  URL `?profile=dashboard-home`); the literal dashboard-chat edit was not
+  exercised (needs a browser session).
 
 ## Known caveats / remaining
 
@@ -87,7 +103,4 @@ Confirmed this gap predates this work — image `.2` had it too; only
   during the multi-minute first boot registers as a change on the next tick.
 - 5 unrelated test failures on this branch were reproduced with changes
   stashed — pre-existing environment issues (Linux scripts on macOS).
-- ClawShell blueprint `sandbox_source` still needs pinning to the `.3` digest
-  (`a53f3b52d44b…`); it lives in the blueprints DB row, not a repo file.
-- Fresh-sandbox validation through the real ClawShell provisioning path (not
-  manual openshell exec) remains open.
+- Dashboard-chat edit itself remains the only unexercised step (browser UI).

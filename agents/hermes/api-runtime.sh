@@ -290,8 +290,49 @@ _api_design_fingerprint() {
     "$API_PROFILE_HOME/SOUL.md" "$API_PROFILE_HOME/skills"
 }
 
+_api_apply_proxy_env() {
+  # inference.local resolves only through the OpenShell egress proxy and its
+  # L7 CA. nemoclaw-start publishes the same values for connect sessions in
+  # the proxy-env file; read only the whitelisted export lines and never eval
+  # the file — it is owned by the sandbox user while this script runs as root.
+  local file="/tmp/nemoclaw-proxy-env.sh" name value
+  if [ -f "$file" ]; then
+    while IFS='=' read -r name value; do
+      name="${name#export }"
+      case "$name" in
+        HTTP_PROXY | HTTPS_PROXY | NO_PROXY | http_proxy | https_proxy | no_proxy | \
+          SSL_CERT_FILE | CURL_CA_BUNDLE | REQUESTS_CA_BUNDLE | GIT_SSL_CAINFO | \
+          NODE_EXTRA_CA_CERTS)
+          value="${value%\"}"
+          value="${value#\"}"
+          value="${value%\'}"
+          value="${value#\'}"
+          printf -v "$name" '%s' "$value"
+          export "${name?}"
+          ;;
+      esac
+    done <"$file"
+  fi
+  local proxy_host="${NEMOCLAW_PROXY_HOST:-10.200.0.1}"
+  local proxy_port="${NEMOCLAW_PROXY_PORT:-3128}"
+  : "${HTTP_PROXY:=http://${proxy_host}:${proxy_port}}"
+  : "${HTTPS_PROXY:=$HTTP_PROXY}"
+  : "${NO_PROXY:=localhost,127.0.0.1,::1,${proxy_host}}"
+  : "${http_proxy:=$HTTP_PROXY}" "${https_proxy:=$HTTPS_PROXY}" "${no_proxy:=$NO_PROXY}"
+  local ca_bundle="/etc/openshell-tls/ca-bundle.pem"
+  if [ -f "$ca_bundle" ]; then
+    : "${SSL_CERT_FILE:=$ca_bundle}" "${CURL_CA_BUNDLE:=$ca_bundle}"
+    : "${REQUESTS_CA_BUNDLE:=$ca_bundle}" "${GIT_SSL_CAINFO:=$ca_bundle}"
+    : "${NODE_EXTRA_CA_CERTS:=$ca_bundle}"
+  fi
+  export HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+  export SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE GIT_SSL_CAINFO \
+    NODE_EXTRA_CA_CERTS
+}
+
 _api_spawn_gateway() {
   _api_prepare_log "$GATEWAY_LOG" || return 1
+  _api_apply_proxy_env
   # The profile dir is sandbox:api 3770; hermesapi creates runtime state there
   # through the api group. Clean its stale pid/lock files as root first.
   rm -f "${API_PROFILE_HOME}/runtime/gateway.pid" "${API_PROFILE_HOME}/runtime/gateway.lock"

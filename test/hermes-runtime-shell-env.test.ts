@@ -15,9 +15,10 @@ const START_SCRIPT = path.join(import.meta.dirname, "..", "agents", "hermes", "s
 function extractRuntimeShellEnvBlock(src: string): string {
   const start = src.indexOf("write_runtime_shell_env() {");
   const end = src.indexOf("\nwrite_runtime_shell_env\n", start);
-  if (start < 0 || end < 0) {
-    throw new Error("Expected write_runtime_shell_env block in agents/hermes/start.sh");
-  }
+  expect(
+    start >= 0 && end >= 0,
+    "Expected write_runtime_shell_env block in agents/hermes/start.sh",
+  ).toBe(true);
   return src.slice(start, end).trimEnd();
 }
 

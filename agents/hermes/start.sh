@@ -299,6 +299,13 @@ truthy_env() {
   esac
 }
 
+HERMES_DASHBOARD_SOURCE_CONFIG="${HERMES_DIR}/config.yaml"
+HERMES_DASHBOARD_SOURCE_ENV="${HERMES_DIR}/.env"
+if truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"; then
+  HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"
+  HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"
+fi
+
 validate_tcp_port() {
   local name="$1"
   local value="$2"
@@ -1484,6 +1491,8 @@ prepare_hermes_dashboard_home() {
       _HERMES_PYTHON="$_HERMES_PYTHON" \
       _HERMES_DASHBOARD_CONFIG_SEEDER="$_HERMES_DASHBOARD_CONFIG_SEEDER" \
       _HERMES_MANAGED_POLICY="$_HERMES_MANAGED_POLICY" \
+      HERMES_DASHBOARD_SOURCE_CONFIG="$HERMES_DASHBOARD_SOURCE_CONFIG" \
+      HERMES_DASHBOARD_SOURCE_ENV="$HERMES_DASHBOARD_SOURCE_ENV" \
       "${STEP_DOWN_PREFIX_SANDBOX[@]}" sh -c '
         if [ -L "$HERMES_DASHBOARD_HOME" ]; then
           echo "[SECURITY] Refusing Hermes dashboard startup because ${HERMES_DASHBOARD_HOME} is a symlink" >&2
@@ -1502,8 +1511,8 @@ prepare_hermes_dashboard_home() {
         rm -f "${HERMES_DASHBOARD_HOME}/gateway_state.json" 2>/dev/null || true
         exec "$_HERMES_PYTHON" "$_HERMES_DASHBOARD_CONFIG_SEEDER" \
           "$_HERMES_MANAGED_POLICY" \
-          "${HERMES_DIR}/config.yaml" "${HERMES_DASHBOARD_HOME}/config.yaml" \
-          "${HERMES_DIR}/.env" "${HERMES_DASHBOARD_HOME}/.env"
+          "$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml" \
+          "$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"
       ' || rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "[dashboard] ERROR: config seed exited ${rc}; refusing dashboard startup" >&2
@@ -1543,8 +1552,8 @@ seed_hermes_dashboard_config() {
   rm -f "${HERMES_DASHBOARD_HOME}/gateway_state.json" 2>/dev/null || true
   env "$_HERMES_PYTHON" "$_HERMES_DASHBOARD_CONFIG_SEEDER" \
     "$_HERMES_MANAGED_POLICY" \
-    "${HERMES_DIR}/config.yaml" "$dst" \
-    "${HERMES_DIR}/.env" "$env_dst" || rc=$?
+    "$HERMES_DASHBOARD_SOURCE_CONFIG" "$dst" \
+    "$HERMES_DASHBOARD_SOURCE_ENV" "$env_dst" || rc=$?
 
   if [ "$rc" -ne 0 ]; then
     echo "[dashboard] ERROR: config seed exited ${rc}; refusing dashboard startup" >&2
@@ -1782,7 +1791,7 @@ export NO_PROXY="$_NO_PROXY_VAL"
 export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
-export HERMES_HOME="${HERMES_DIR}"
+export HERMES_HOME="\${HERMES_HOME:-${HERMES_DIR}}"
 PROXYEOF
     cat <<'TUIENVEOF'
 if [ -f /opt/hermes/ui-tui/dist/entry.js ]; then

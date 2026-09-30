@@ -769,6 +769,16 @@ function runRuntimeShellEnvBootstrap() {
       timeout: 5000,
       env: { ...process.env, PATH: "/usr/bin:/bin" },
     });
+    const preservedHomeResult = spawnSync(
+      "bash",
+      ["-c", `HERMES_HOME=/sandbox/.hermes/profiles/dashboard-home; . ${shellQuote(envFile)}; printf '%s' "$HERMES_HOME"`],
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const defaultHomeResult = spawnSync(
+      "bash",
+      ["-c", `unset HERMES_HOME; . ${shellQuote(envFile)}; printf '%s' "$HERMES_HOME"`],
+      { encoding: "utf-8", timeout: 5000 },
+    );
 
     return {
       src,
@@ -776,6 +786,8 @@ function runRuntimeShellEnvBootstrap() {
       envFileContent,
       envFileMode,
       guardResult,
+      preservedHomeResult,
+      defaultHomeResult,
       hermesHome,
       caFile,
     };
@@ -801,7 +813,9 @@ describe("agents/hermes/start.sh runtime shell env", () => {
 
     expect(run.result.status).toBe(0);
     expect(run.envFileMode).toBe("444");
-    expect(run.envFileContent).toContain(`export HERMES_HOME="${run.hermesHome}"`);
+    expect(run.envFileContent).toContain(`export HERMES_HOME="\${HERMES_HOME:-${run.hermesHome}}"`);
+    expect(run.preservedHomeResult.stdout).toBe("/sandbox/.hermes/profiles/dashboard-home");
+    expect(run.defaultHomeResult.stdout).toBe(run.hermesHome);
     expect(run.envFileContent).toContain('export HERMES_TUI_DIR="/opt/hermes/ui-tui"');
     expect(run.envFileContent).not.toContain("AWS_EC2_METADATA_DISABLED");
     expect(run.envFileContent).not.toContain('HERMES_TUI_DIR="${HERMES_TUI_DIR:-');
@@ -856,6 +870,14 @@ describe("agents/hermes/start.sh port validation", () => {
     const optInArgs = runHermesDashboardArgs("1");
     expect(optInArgs.status).toBe(0);
     expect(optInArgs.stdout.split("\n")).toEqual(expect.arrayContaining(["--isolated", "--tui"]));
+  });
+
+  it("keeps dashboard routing on the dedicated api profile after managed restarts", () => {
+    const src = fs.readFileSync(START_SCRIPT, "utf-8");
+    expect(src).toContain('HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"');
+    expect(src).toContain('HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"');
+    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml"');
+    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"');
   });
 
   it("rejects cross-collisions between API and dashboard ports", () => {

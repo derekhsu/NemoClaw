@@ -1,0 +1,93 @@
+# Hermes API-Profile Guard — 2026-09-30 handover
+
+## Goal (unchanged)
+
+ClawShell's externally exposed OpenAI-compatible v1 API runs on the restricted
+`api` Hermes profile instead of `default`, so API callers get a reduced toolset
+and cannot administer the sandbox. Hermes Agent source is not modified.
+
+Confirmed architecture (option A): filesystem-isolated sibling home
+`/sandbox/.hermes-api/profiles/api`, `hermesapi` runtime uid, `sandbox` admin
+uid owns the design surface. The `api` profile intentionally does not appear in
+default-home profile enumeration; the admin reaches it by fixed path.
+
+## This session's changes (branch `codex/hermes-api-profile-guard`)
+
+- `e7446e826` feat(hermes): api design surface becomes admin-editable
+  - `runtime-config-guard.py`: `SOUL.md`/`skills/` sealed `sandbox:api`
+    (0640/2750); seal creates a default `SOUL.md`; new `normalize-api-profile`
+    action (repair design surface, then verify + key/journal checks);
+    bootstrap retry normalizes old profiles instead of failing closed.
+  - `api-runtime.sh`: supervisor fingerprints
+    `config.yaml`/`.env`/`SOUL.md`/`skills/` every ~2s; after a stable debounce
+    tick it waits for the port to free, then respawns only the api gateway
+    (proxy untouched — it never reads design files).
+  - `scripts/lib/gateway-supervisor.sh`: `gateway_control_tree_fingerprint`
+    (path + `cksum` content, portable across GNU/BSD).
+  - `seed-dashboard-config.py`: appends a one-time "API profile design
+    surface" section to the dashboard-home `SOUL.md` (rejects symlinked paths,
+    preserves content, non-blocking on failure). Tells the dashboard agent the
+    fixed path, traverse-only parent dirs, auto-restart behavior, and the
+    `bin/` placement rule for api-side helpers/MCP servers.
+- `373a8fed5` fix(hermes): `normalize-api-profile` also runs the env-key and
+  interrupted-transaction readiness checks (respawn path no longer weakens the
+  contract).
+- `6168230` fix(hermes): `_api_apply_proxy_env` — api gateway gets
+  `HTTP(S)_PROXY`, `NO_PROXY` (+lowercase) and the CA bundle vars
+  (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`). Whitelist-parses `/tmp/nemoclaw-proxy-env.sh` without
+  eval (sandbox-owned file, root script), falls back to
+  `10.200.0.1:3128` + `/etc/openshell-tls/ca-bundle.pem`.
+
+## Why the proxy-env fix matters
+
+`inference.local` does not resolve via sandbox DNS — all egress goes through
+the OpenShell L7 proxy (`10.200.0.1:3128`). The api gateway (clean env under
+`hermesapi`) never had proxy vars, so `/p/api/v1/chat/completions` returned a
+valid envelope but failed upstream with "can't reach the model provider".
+Confirmed this gap predates this work — image `.2` had it too; only
+`/v1/models` (no upstream call) had been verified before.
+
+## Validation evidence (sandbox `api-prof-0930e`, image .2 + hot-patched runtime)
+
+- Readiness: `/p/api/health` 200; api key → 200 on `/p/api/v1/models`; same key
+  → 401 on bare `/v1/models` (credential binding preserved).
+- E2E-1 isolation: as `hermesapi`, writes to `SOUL.md`, `config.yaml`, `.env`,
+  `skills/` all DENIED; dir write allowed but sticky bit blocks replacing
+  sealed files.
+- E2E-2 admin edit loop: `sandbox` uid wrote a marker into api `SOUL.md` →
+  supervisor detected fingerprint change → api gateway pid changed
+  (4369→52740+), default gateway untouched; normalize preserved the admin edit.
+- E2E-3 toolset: api enabled `['file']`; default has the full set
+  (web/browser/terminal/skills/cronjob/delegation/nemoclaw/…).
+- E2E-4 dashboard SOUL: `dashboard-home/SOUL.md` contains the API-profile
+  design-surface guidance (fixed path, traverse-only parents, auto-restart,
+  `bin/` rule).
+- Inference: after the proxy-env fix, `/p/api/v1/chat/completions` returns a
+  real model reply (`finish_reason: stop`, usage populated) via
+  `gpt-5.6-luna` → `https://inference.local/v1`.
+
+## Images
+
+- `2026.9.30.2` = `derekhsu/openshell-hermes@sha256:993190697abe7444740e6ceaca4ee1d6ee002374940d51ed4114c52028c9fba0`
+  (all changes EXCEPT the proxy-env fix — still fails inference upstream).
+- `2026.9.30.3` = `derekhsu/openshell-hermes@sha256:a53f3b52d44bc2cf88f648f8b0304aa4a95b50e3f4853c92b4c5b4d8a2795e88`
+  (run `36697497695` at `6168230`) — the first image with working inference
+  through the api profile. Pin the ClawShell blueprint `sandbox_source` to
+  this digest.
+
+## Known caveats / remaining
+
+- `SOUL.md` writes through the dashboard agent trigger Hermes' protected-file
+  approval prompt each time (by design).
+- MCP/helper binaries for the api profile must live inside the profile dir
+  (e.g. `bin/`) or another `hermesapi`-executable path — `/home/sandbox` and
+  `/sandbox/.hermes` are unreachable for the api uid.
+- The fingerprint baseline is sampled before gateway spawn; an edit landing
+  during the multi-minute first boot registers as a change on the next tick.
+- 5 unrelated test failures on this branch were reproduced with changes
+  stashed — pre-existing environment issues (Linux scripts on macOS).
+- ClawShell blueprint `sandbox_source` still needs pinning to the `.3` digest
+  (`a53f3b52d44b…`); it lives in the blueprints DB row, not a repo file.
+- Fresh-sandbox validation through the real ClawShell provisioning path (not
+  manual openshell exec) remains open.

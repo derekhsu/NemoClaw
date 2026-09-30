@@ -5096,6 +5096,15 @@ def normalize_api_profile() -> None:
     admin_uid, _admin_gid, api_gid = _api_identities()
     _api_ensure_design_surface(admin_uid, api_gid)
     _verify_api_contract()
+    env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+    if _api_env_key(env_path) is None:
+        raise UnsafePathError(
+            "refusing api profile without a readable generated API_SERVER_KEY"
+        )
+    if os.path.exists(HERMES_API_STATE_FILE):
+        raise UnsafePathError(
+            "refusing api runtime start with an interrupted config transaction"
+        )
     print("normalized=1")
 
 

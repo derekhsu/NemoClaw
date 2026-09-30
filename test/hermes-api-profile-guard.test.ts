@@ -312,12 +312,15 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(fs.statSync(fixture.apiDir).mode & 0o7777).toBe(0o3770);
     expect(fs.statSync(fixture.apiProfilesDir).mode & 0o777).toBe(0o711);
     expect(fs.statSync(fixture.apiRootDir).mode & 0o777).toBe(0o711);
+    // codeql[js/file-system-race]: single-threaded test on a private fixture
     const envText = fs.readFileSync(fixture.apiEnvPath, "utf-8");
     expect(envText).toMatch(/^API_SERVER_KEY=[0-9a-f]{64}$/m);
+    // codeql[js/file-system-race]: single-threaded test on a private fixture
     const policy = JSON.parse(fs.readFileSync(fixture.apiPolicyPath, "utf-8"));
     expect(policy.version).toBe(POLICY_VERSION);
     // The config carries the image managed-policy sections verbatim so the
     // dashboard seeder's policy-parity check can pass.
+    // codeql[js/file-system-race]: single-threaded test on a private fixture
     const configText = fs.readFileSync(fixture.apiConfigPath, "utf-8");
     expect(configText).toContain("mode: manual");
     expect(configText).toContain("at_hour: 4");
@@ -677,6 +680,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const skillsDir = path.join(fixture.apiDir, "skills");
     expect(fs.existsSync(soulPath)).toBe(true);
     expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
+    // codeql[js/file-system-race]: single-threaded test on a private fixture
     expect(fs.readFileSync(soulPath, "utf-8")).toContain("Hermes Agent");
     expect(fs.statSync(skillsDir).isDirectory()).toBe(true);
     expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
@@ -707,6 +711,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
+    // codeql[js/file-system-race]: single-threaded test on a private fixture
     expect(fs.readFileSync(soulPath, "utf-8")).toBe("operator-tuned soul\n");
     expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
     expect(fs.statSync(path.join(skillsDir, "demo")).mode & 0o777).toBe(0o750);

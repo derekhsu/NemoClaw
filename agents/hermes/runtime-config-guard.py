@@ -4898,7 +4898,9 @@ def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:
         raise UnsafePathError(f"refusing non-directory api profile path: {path}")
     os.chown(path, uid, gid)
     if stat.S_IMODE(st.st_mode) != mode:
-        os.chmod(path, mode)
+        # Group read/traverse is the contract: the api runtime gid must read
+        # admin-owned design files without write access.
+        os.chmod(path, mode)  # codeql[py/overly-permissive-file]
 
 
 def _api_write_file(path: str, data: bytes, mode: int, uid: int, gid: int) -> None:
@@ -4966,7 +4968,7 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
         # lchown: on a pre-contract profile the runtime uid owned this file
         # and could race a symlink swap; never follow the final component.
         os.lchown(soul_path, admin_uid, api_gid)
-        os.chmod(soul_path, 0o640)
+        os.chmod(soul_path, 0o640)  # codeql[py/overly-permissive-file]
     _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
     # Skills installed before the contract change remain runtime-owned inside
     # the now admin-owned dir; re-own the whole tree so installed skill
@@ -4983,7 +4985,9 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
             os.lchown(entry, admin_uid, api_gid)
             if stat.S_ISLNK(entry_stat.st_mode):
                 continue
-            os.chmod(entry, 0o750 if stat.S_ISDIR(entry_stat.st_mode) else 0o640)
+            os.chmod(  # codeql[py/overly-permissive-file]
+                entry, 0o750 if stat.S_ISDIR(entry_stat.st_mode) else 0o640
+            )
 
 
 def _seal_api_profile(admin_uid: int, api_gid: int) -> None:

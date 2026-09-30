@@ -1360,6 +1360,35 @@ hermes_tracked_service_owns_listener() {
   esac
 }
 
+hermes_reap_stray_service_listener() {
+  # Identity-pinned stop cannot reach children orphaned outside the tracked
+  # set, such as a service left bound by a previous supervisor. Reap whatever
+  # still owns the service port before the relaunch loses the bind race.
+  local port="$1" service_user="$2"
+
+  if [ "$(id -u)" -ne 0 ] || [ "$service_user" = "current" ]; then
+    gateway_control_reap_port_listener "$port"
+    return $?
+  fi
+  case "$service_user" in
+    gateway)
+      # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
+      "${STEP_DOWN_PREFIX_GATEWAY[@]}" env -u BASH_ENV \
+        bash --noprofile --norc -c \
+        'source "$1"; gateway_control_reap_port_listener "$2"' \
+        bash "$_GATEWAY_SUPERVISOR" "$port"
+      ;;
+    sandbox)
+      # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
+      "${STEP_DOWN_PREFIX_SANDBOX[@]}" env -u BASH_ENV \
+        bash --noprofile --norc -c \
+        'source "$1"; gateway_control_reap_port_listener "$2"' \
+        bash "$_GATEWAY_SUPERVISOR" "$port"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 start_socat_forwarder() {
   local public_port="$1"
   local internal_port="$2"
@@ -2624,6 +2653,7 @@ ensure_hermes_supervised_auxiliaries() {
     if ! hermes_socat_bridge_healthy api-socat "${SOCAT_PID:-}" "$PUBLIC_PORT"; then
       hermes_stop_tracked_role api-socat "${SOCAT_PID:-0}" current "$PUBLIC_PORT" || return 1
       SOCAT_PID=""
+      hermes_reap_stray_service_listener "$PUBLIC_PORT" current || return 1
       start_socat_forwarder \
         "$PUBLIC_PORT" "$INTERNAL_PORT" "API" SOCAT_PID "$GATEWAY_PID" "$gateway_user" || return 1
     fi
@@ -2637,6 +2667,7 @@ ensure_hermes_supervised_auxiliaries() {
     DASHBOARD_SOCAT_PID=""
     hermes_stop_tracked_role dashboard "${DASHBOARD_PID:-0}" "$dashboard_user" "$DASHBOARD_INTERNAL_PORT" || return 1
     DASHBOARD_PID=""
+    hermes_reap_stray_service_listener "$DASHBOARD_INTERNAL_PORT" "$dashboard_user" || return 1
     if [ "$(id -u)" -eq 0 ]; then
       start_hermes_dashboard_sandbox_user || return 1
     else
@@ -2645,6 +2676,7 @@ ensure_hermes_supervised_auxiliaries() {
   elif ! hermes_socat_bridge_healthy dashboard-socat "${DASHBOARD_SOCAT_PID:-}" "$DASHBOARD_PUBLIC_PORT"; then
     hermes_stop_tracked_role dashboard-socat "${DASHBOARD_SOCAT_PID:-0}" current "$DASHBOARD_PUBLIC_PORT" || return 1
     DASHBOARD_SOCAT_PID=""
+    hermes_reap_stray_service_listener "$DASHBOARD_PUBLIC_PORT" current || return 1
     start_socat_forwarder \
       "$DASHBOARD_PUBLIC_PORT" "$DASHBOARD_INTERNAL_PORT" "dashboard" DASHBOARD_SOCAT_PID \
       "$DASHBOARD_PID" "$dashboard_user" || return 1

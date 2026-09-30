@@ -243,6 +243,7 @@ describe("Hermes gateway relay convergence", () => {
       'hermes_socat_bridge_healthy() { [ "$1:$2" != "api-socat:101" ]; }',
       'curl() { printf "503"; }',
       'hermes_stop_tracked_role() { trace "stop:$2"; return 0; }',
+      "hermes_reap_stray_service_listener() { return 0; }",
       'start_socat_forwarder() { trace "start:$*"; printf -v "$4" 111; return 0; }',
       "hermes_dashboard_healthy() { trace unexpected-dashboard; return 0; }",
       "ensure_gateway_log_stream() { trace unexpected-log; }",

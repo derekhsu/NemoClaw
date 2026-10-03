@@ -274,6 +274,75 @@ describe("gateway supervisor listener ownership", () => {
   });
 });
 
+describe("gateway supervisor stray listener reap", () => {
+  it("reaps every fd holder until the service port frees", () => {
+    const procRoot = join(temporaryDirectory("nemoclaw-gateway-proc-"), "proc");
+    const result = runSupervisorLibrary(
+      [
+        `PROC_ROOT=${JSON.stringify(procRoot)}`,
+        'mkdir -p "$PROC_ROOT/net" "$PROC_ROOT/5555/fd" "$PROC_ROOT/5556/fd"',
+        ': >"$PROC_ROOT/net/tcp6"',
+        "printf '%s\\n' '0: 0100007F:4AAF 00000000:0000 0A 00000000:00000000 00:00000000 00000000 999 0 77777' >\"$PROC_ROOT/net/tcp\"",
+        "ln -s 'socket:[77777]' \"$PROC_ROOT/5555/fd/9\"",
+        "ln -s 'socket:[77777]' \"$PROC_ROOT/5556/fd/3\"",
+        "ln -s 'socket:[1]' \"$PROC_ROOT/5556/fd/4\"",
+        'kill() { printf "kill:%s\\n" "$*"; : >"$PROC_ROOT/net/tcp"; }',
+        "sleep() { :; }",
+        'rc=0; gateway_control_reap_port_listener 19119 "$PROC_ROOT" || rc=$?',
+        'printf "rc:%s\\n" "$rc"',
+      ].join("\n"),
+    );
+
+    expect(result).toMatchObject({
+      status: 0,
+      stdout: ["kill:-TERM 5555", "kill:-TERM 5556", "rc:0"].join("\n"),
+    });
+    expect(result.stderr).toContain("reaping stray listener on port 19119 (pid 5555)");
+    expect(result.stderr).toContain("reaping stray listener on port 19119 (pid 5556)");
+  });
+
+  it("escalates to SIGKILL and fails when the stray listener never frees", () => {
+    const procRoot = join(temporaryDirectory("nemoclaw-gateway-proc-"), "proc");
+    const result = runSupervisorLibrary(
+      [
+        `PROC_ROOT=${JSON.stringify(procRoot)}`,
+        'mkdir -p "$PROC_ROOT/net" "$PROC_ROOT/5555/fd"',
+        ': >"$PROC_ROOT/net/tcp6"',
+        "printf '%s\\n' '0: 0100007F:4AAF 00000000:0000 0A 00000000:00000000 00:00000000 00000000 999 0 77777' >\"$PROC_ROOT/net/tcp\"",
+        "ln -s 'socket:[77777]' \"$PROC_ROOT/5555/fd/9\"",
+        'kill() { printf "kill:%s\\n" "$*"; }',
+        "sleep() { :; }",
+        'rc=0; gateway_control_reap_port_listener 19119 "$PROC_ROOT" || rc=$?',
+        'printf "rc:%s\\n" "$rc"',
+      ].join("\n"),
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const lines = result.stdout.trim().split("\n");
+    expect(lines.at(-1)).toBe("rc:1");
+    expect(lines.filter((line) => line === "kill:-TERM 5555")).toHaveLength(20);
+    expect(lines.filter((line) => line === "kill:-KILL 5555")).toHaveLength(20);
+  });
+
+  it("returns immediately when the service port is already free", () => {
+    const procRoot = join(temporaryDirectory("nemoclaw-gateway-proc-"), "proc");
+    const result = runSupervisorLibrary(
+      [
+        `PROC_ROOT=${JSON.stringify(procRoot)}`,
+        'mkdir -p "$PROC_ROOT/net"',
+        ': >"$PROC_ROOT/net/tcp"',
+        ': >"$PROC_ROOT/net/tcp6"',
+        'kill() { printf "unexpected-kill:%s\\n" "$*"; }',
+        "sleep() { :; }",
+        'rc=0; gateway_control_reap_port_listener 19119 "$PROC_ROOT" || rc=$?',
+        'printf "rc:%s\\n" "$rc"',
+      ].join("\n"),
+    );
+
+    expect(result).toMatchObject({ status: 0, stdout: "rc:0", stderr: "" });
+  });
+});
+
 describe("root-only gateway control helper", () => {
   it.each([
     "restart",
@@ -375,5 +444,69 @@ describe("root-only gateway control helper", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("PRIVILEGED_CONTROL_UNAVAILABLE");
+  });
+});
+
+describe("gateway_control_tree_fingerprint", () => {
+  function fingerprint(...paths: string[]): string {
+    const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
+    const result = runSupervisorLibrary(
+      `gateway_control_tree_fingerprint ${quoted}`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  }
+
+  it("is stable for unchanged paths and moves when a file is edited", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "config.yaml");
+    writeFileSync(file, "model: a\n");
+    const before = fingerprint(file);
+    expect(fingerprint(file)).toBe(before);
+    writeFileSync(file, "model: b\n");
+    expect(fingerprint(file)).not.toBe(before);
+  });
+
+  it("moves when a watched directory gains or loses an entry", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const skills = join(dir, "skills");
+    mkdirSync(skills);
+    writeFileSync(join(skills, "one"), "x\n");
+    const before = fingerprint(skills);
+    writeFileSync(join(skills, "two"), "y\n");
+    const added = fingerprint(skills);
+    expect(added).not.toBe(before);
+    rmSync(join(skills, "two"));
+    expect(fingerprint(skills)).toBe(before);
+  });
+
+  it("moves when file content changes but ignores unchanged paths", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "SOUL.md");
+    writeFileSync(file, "one\n");
+    const before = fingerprint(file);
+    writeFileSync(file, "two\n");
+    expect(fingerprint(file)).not.toBe(before);
+  });
+
+  it("does not move when identical bytes are rewritten in place", () => {
+    // Content is the fingerprint signal: rewriting the same design bytes —
+    // for example an idempotent seeding pass — must not force a reload.
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const file = join(dir, "SOUL.md");
+    writeFileSync(file, "same\n");
+    const before = fingerprint(file);
+    const tmp = join(dir, "SOUL.md.tmp");
+    writeFileSync(tmp, "same\n");
+    spawnSync("mv", [tmp, file]);
+    expect(fingerprint(file)).toBe(before);
+  });
+
+  it("ignores missing paths without failing", () => {
+    const dir = temporaryDirectory("nemoclaw-fingerprint-");
+    const missing = join(dir, "absent");
+    const present = join(dir, "present");
+    writeFileSync(present, "x\n");
+    expect(fingerprint(missing, present)).toBe(fingerprint(present));
   });
 });

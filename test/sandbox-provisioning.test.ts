@@ -1060,6 +1060,8 @@ describe("Hermes sandbox provisioning", () => {
     const hermesCronRestoreControlPath = path.join(localLib, "hermes-cron-restore-control.py");
     const files = [
       path.join(localBin, "nemoclaw-start"),
+      path.join(localBin, "nemoclaw-api-runtime"),
+      path.join(localLib, "hermes-api-prefix-proxy.py"),
       path.join(localBin, "nemoclaw-managed-startup-hold"),
       path.join(localBin, "nemoclaw-managed-bootstrap"),
       gatewayControlPath,
@@ -1108,7 +1110,7 @@ describe("Hermes sandbox provisioning", () => {
 
       expect(result.status, result.stderr).toBe(0);
       expect(calls).toContain(
-        `chown root:root ${gatewayControlPath} ${gatewaySupervisorPath} ${stateDirGuardPath} ${stateLockPlanPath} ${managedGatewayControlPath} ${buildMcpDigestPath} ${hermesCronRestoreControlPath} ${mcpManifest}`,
+        `chown root:root ${path.join(localBin, "nemoclaw-api-runtime")} ${gatewayControlPath} ${gatewaySupervisorPath} ${stateDirGuardPath} ${stateLockPlanPath} ${managedGatewayControlPath} ${buildMcpDigestPath} ${hermesCronRestoreControlPath} ${mcpManifest}`,
       );
       expect((fs.statSync(gatewayControlPath).mode & 0o777).toString(8)).toBe("700");
       expect((fs.statSync(hermesCronRestoreControlPath).mode & 0o777).toString(8)).toBe("700");
@@ -1181,10 +1183,8 @@ describe("Hermes sandbox provisioning", () => {
       'useradd() { printf "useradd %s\\n" "$*" >> "$call_log"; }',
       'usermod() { printf "usermod %s\\n" "$*" >> "$call_log"; }',
       'chown() { printf "chown %s\\n" "$*" >> "$call_log"; }',
-      'id() { case "$1" in -u) printf "998\\n" ;; -g) printf "999\\n" ;; *) return 1 ;; esac; }',
-      `getent() { printf "%s\\n" ${JSON.stringify(
-        `sandbox:x:998:999::${sandboxRoot}:/bin/bash`,
-      )}; }`,
+      'id() { case "$1:$2" in -u:sandbox) printf "998\\n" ;; -g:sandbox) printf "999\\n" ;; -g:hermesapi) printf "997\\n" ;; *) printf "uid=997(hermesapi) gid=997(api)\\n" ;; esac; }',
+      `getent() { if [ "$2" = hermesapi ]; then printf "%s\\n" ${JSON.stringify(`hermesapi:x:997:997::${sandboxRoot}:/usr/sbin/nologin`)}; else printf "%s\\n" ${JSON.stringify(`sandbox:x:998:999::${sandboxRoot}:/bin/bash`)}; fi; }`,
     ]);
     return { ...result, tmp, sandboxRoot };
   }
@@ -1319,7 +1319,7 @@ describe("Hermes sandbox provisioning", () => {
   it("adds root to the Hermes sandbox group during base user setup", () => {
     const { result, calls, tmp, sandboxRoot } = runHermesUserSetupBlock();
     try {
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       expect(calls).toContain("groupadd -r -g 999 sandbox");
       expect(calls).toContain("groupadd -r -g 998 gateway");
       expect(calls).toContain(

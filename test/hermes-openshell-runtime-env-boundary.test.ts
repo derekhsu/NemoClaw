@@ -57,6 +57,18 @@ describe("Hermes OpenShell runtime environment boundary", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("accepts the dedicated api profile opt-in flag", () => {
+    // The name carries an _API_ segment that trips the secret-shaped key
+    // regex even though the value is a non-secret boolean toggle injected by
+    // the ClawShell lifecycle command.
+    const result = runRuntimeEnvValidator({
+      NEMOCLAW_REQUIRE_API_PROFILE: "1",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it.each([
     ["OPENSHELL_TLS_CA", "/etc/openshell/tls/client/ca.crt"],
     ["OPENSHELL_TLS_CERT", "/etc/openshell/tls/client/tls.crt"],

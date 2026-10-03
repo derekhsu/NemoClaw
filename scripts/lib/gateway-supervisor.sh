@@ -240,6 +240,121 @@ EOF
   return 1
 }
 
+gateway_control_port_is_bound() {
+  # Any LISTEN socket on the port blocks the service bind regardless of bound
+  # address: internal services listen on loopback while the socat relays claim
+  # the wildcard address.
+  local port="$1" proc_root="${2:-/proc}" port_hex
+  case "$port" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  port_hex="$(printf '%04X' "$port")"
+  awk -v expected_port="$port_hex" '
+    {
+      split($2, local_address, ":")
+      if (toupper(local_address[2]) == expected_port && $4 == "0A") {
+        found = 1
+        exit
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${proc_root}/net/tcp" "${proc_root}/net/tcp6" 2>/dev/null
+}
+
+gateway_control_port_listener_pids() {
+  # Print every pid holding a LISTEN socket on the port. Forked children can
+  # inherit the socket fd, so the listener may have several owners that must
+  # all be reaped before the service can rebind.
+  local port="$1" proc_root="${2:-/proc}"
+  local port_hex listener_inodes inode pid_dir fd_path target pid found
+  case "$port" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  port_hex="$(printf '%04X' "$port")"
+  listener_inodes="$(awk -v expected_port="$port_hex" '
+    {
+      split($2, local_address, ":")
+      if (toupper(local_address[2]) == expected_port && $4 == "0A") {
+        print $10
+      }
+    }
+  ' "${proc_root}/net/tcp" "${proc_root}/net/tcp6" 2>/dev/null || true)"
+  [ -n "$listener_inodes" ] || return 1
+  for pid_dir in "${proc_root}"/[0-9]*; do
+    pid="${pid_dir##*/}"
+    [ "$pid" != "$$" ] || continue
+    found=0
+    for fd_path in "${pid_dir}"/fd/*; do
+      [ -L "$fd_path" ] || continue
+      target="$(readlink "$fd_path" 2>/dev/null || true)"
+      case "$target" in
+        'socket:['*']')
+          inode="${target#socket:[}"
+          inode="${inode%]}"
+          ;;
+        *) continue ;;
+      esac
+      while IFS= read -r listener_inode; do
+        if [ "$inode" = "$listener_inode" ]; then
+          found=1
+          break
+        fi
+      done <<EOF
+$listener_inodes
+EOF
+      [ "$found" -eq 1 ] && break
+    done
+    [ "$found" -eq 1 ] && printf '%s\n' "$pid"
+  done
+}
+
+gateway_control_reap_port_listener() {
+  # The tracked service pid is gone yet its port stays bound: an orphan outside
+  # the tracked set still owns the listener, such as a service left by a
+  # previous supervisor. Identity-pinned stop cannot reach it; port ownership
+  # is the only handle. Terminate every fd holder, escalating after a TERM
+  # grace so the relaunch can bind.
+  local port="$1" proc_root="${2:-/proc}"
+  local attempts=0 signal=TERM pids pid
+  while [ "$attempts" -lt 40 ]; do
+    gateway_control_port_is_bound "$port" "$proc_root" || return 0
+    pids="$(gateway_control_port_listener_pids "$port" "$proc_root" || true)"
+    # shellcheck disable=SC2086  # intentional word split of the pid list
+    for pid in $pids; do
+      echo "[gateway] reaping stray listener on port ${port} (pid ${pid})" >&2
+      kill -"$signal" "$pid" 2>/dev/null || true
+    done
+    if [ "$attempts" -eq 19 ]; then
+      signal=KILL
+    fi
+    sleep 0.25
+    attempts=$((attempts + 1))
+  done
+  return 1
+}
+
+gateway_control_tree_fingerprint() {
+  # Print one checksum covering every argument path. Regular files contribute
+  # their path and a content checksum; directories contribute every entry
+  # path beneath them plus each regular file's content. Missing paths and
+  # unreadable entries contribute nothing. Content — not metadata — is the
+  # signal: an atomic rewrite with identical bytes needs no reload.
+  local path
+  {
+    for path in "$@"; do
+      if [ -d "$path" ]; then
+        find "$path" -mindepth 1 -print 2>/dev/null
+        find "$path" -mindepth 1 -type f -exec cksum {} + 2>/dev/null
+      elif [ -e "$path" ]; then
+        printf '%s\n' "$path"
+        cksum "$path" 2>/dev/null
+      fi
+    done
+  } | LC_ALL=C sort | cksum
+}
+
 NEMOCLAW_MANAGED_EXPECTED_EXIT_DIR="/run/nemoclaw"
 NEMOCLAW_MANAGED_EXPECTED_EXIT_MARKER="managed-gateway-expected-exit"
 NEMOCLAW_MANAGED_CONTROLLER_PATH="/usr/local/lib/nemoclaw/managed-gateway-control.py"

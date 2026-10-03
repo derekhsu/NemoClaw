@@ -297,6 +297,8 @@ describe("Hermes final image layout", () => {
           "COPY agents/hermes/patch-langfuse-credentials.mts /usr/local/lib/nemoclaw/patch-hermes-langfuse-credentials.mts",
           "COPY agents/hermes/seed-dashboard-config.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py",
           "COPY agents/hermes/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py",
+          "COPY agents/hermes/api-runtime.sh /usr/local/bin/nemoclaw-api-runtime",
+          "COPY agents/hermes/api-prefix-proxy.py /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py",
           "COPY agents/hermes/finalize-tirith-marker.py /usr/local/lib/nemoclaw/finalize-tirith-marker.py",
           "COPY agents/hermes/build-mcp-digest.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py",
           "COPY agents/hermes/mcp-config-transaction.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py",

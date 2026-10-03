@@ -12,7 +12,8 @@
 # the managed entrypoint.
 #
 #   nemoclaw-api-runtime start    — ensure the api runtime is running
-#   nemoclaw-api-runtime stop     — stop the supervisor and its children
+#   nemoclaw-api-runtime stop     — wait for the supervisor and API listeners to stop
+#   nemoclaw-api-runtime stop-wait — explicit stop-completion contract for callers
 #   nemoclaw-api-runtime replace  — stop the current supervisor and children,
 #                                   then start fresh (post-config-write restart)
 #
@@ -32,9 +33,9 @@ fi
 
 ACTION="${1:-start}"
 case "$ACTION" in
-  start | stop | replace) ;;
+  start | stop | stop-wait | replace) ;;
   *)
-    echo "[api-runtime] usage: nemoclaw-api-runtime [start|stop|replace]" >&2
+    echo "[api-runtime] usage: nemoclaw-api-runtime [start|stop|stop-wait|replace]" >&2
     exit 1
     ;;
 esac
@@ -226,12 +227,33 @@ _api_kill_stale_children() {
   done
 }
 
+_api_listener_present() {
+  # Socket presence does not depend on finding the owner in /proc/*/fd.
+  local port="$1" port_hex tables=(/proc/net/tcp)
+  [ -r /proc/net/tcp ] || return 2
+  if [ -e /proc/net/tcp6 ]; then
+    [ -r /proc/net/tcp6 ] || return 2
+    tables+=(/proc/net/tcp6)
+  fi
+  port_hex="$(printf '%04X' "$port")"
+  awk -v expected="$port_hex" '
+    { split($2, address, ":"); if (toupper(address[2]) == expected && $4 == "0A") found=1 }
+    END { exit found ? 0 : 1 }
+  ' "${tables[@]}"
+}
+
 _api_wait_port_free() {
-  local port="$1" attempts=0
+  local port="$1" attempts=0 status
   while [ "$attempts" -lt 40 ]; do
-    _api_port_owner_pid "$port" >/dev/null 2>&1 || return 0
-    sleep 0.25
-    attempts=$((attempts + 1))
+    if _api_listener_present "$port"; then
+      sleep 0.25
+      attempts=$((attempts + 1))
+    else
+      status=$?
+      [ "$status" -eq 1 ] && return 0
+      log "cannot inspect listener state on ${port}"
+      return 1
+    fi
   done
   log "port ${port} still bound after stale-child cleanup"
   return 1
@@ -538,24 +560,22 @@ _api_resolve_payload_ns_pid() {
   PAYLOAD_NS_PID="$pid"
 }
 PAYLOAD_NS_PID=""
-if [ "$ACTION" != "stop" ]; then
-  if ! _api_resolve_payload_ns_pid; then
-    echo "[api-runtime] cannot resolve the payload network namespace anchor (nemoclaw-start pid)" >&2
+if ! _api_resolve_payload_ns_pid; then
+  echo "[api-runtime] cannot resolve the payload network namespace anchor (nemoclaw-start pid)" >&2
+  exit 1
+fi
+if [ "$(readlink /proc/self/ns/net)" != "$(readlink "/proc/${PAYLOAD_NS_PID}/ns/net")" ]; then
+  command -v nsenter >/dev/null 2>&1 || {
+    echo "[api-runtime] nsenter is required to join the payload network namespace" >&2
     exit 1
-  fi
-  if [ "$(readlink /proc/self/ns/net)" != "$(readlink "/proc/${PAYLOAD_NS_PID}/ns/net")" ]; then
-    command -v nsenter >/dev/null 2>&1 || {
-      echo "[api-runtime] nsenter is required to join the payload network namespace" >&2
-      exit 1
-    }
-    exec nsenter -t "$PAYLOAD_NS_PID" -n -- "$0" "$ACTION"
-  fi
+  }
+  exec nsenter -t "$PAYLOAD_NS_PID" -n -- "$0" "$ACTION"
 fi
 
 # ── Supervisor singleton ─────────────────────────────────────────
 # The lock serializes start/replace across concurrent privileged exec calls.
 exec 9>"$SUPERVISOR_LOCK_FILE"
-if [ "$ACTION" = "stop" ]; then
+if [ "$ACTION" = "stop" ] || [ "$ACTION" = "stop-wait" ]; then
   if [ -r "$SUPERVISOR_PID_FILE" ]; then
     old_pid="$(cat "$SUPERVISOR_PID_FILE" 2>/dev/null || true)"
     case "$old_pid" in
@@ -572,8 +592,15 @@ if [ "$ACTION" = "stop" ]; then
         ;;
     esac
   fi
-  # Belt-and-braces: reap any api children the supervisor did not own.
+  # A successful stop must exclude the previous supervisor from respawning.
+  # stop-wait gives callers an explicit contract that older images reject.
+  flock -w 30 9 || {
+    log "timed out waiting for the api runtime supervisor to stop"
+    exit 1
+  }
   _api_kill_stale_children
+  _api_wait_port_free "$API_INTERNAL_PORT" || exit 1
+  _api_wait_port_free "$PUBLIC_PORT" || exit 1
   exit 0
 fi
 if [ "$ACTION" = "replace" ]; then

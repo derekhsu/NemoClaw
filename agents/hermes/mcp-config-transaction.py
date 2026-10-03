@@ -521,6 +521,18 @@ def _validate_inspection_payload(payload: dict[str, object]) -> None:
 
 def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
     _validate_inspection_payload(payload)
+    return _inspect_expected_config(payload["present"], payload["absent"])
+
+
+def inspect_local_uploader(payload: dict[str, object]) -> dict[str, object]:
+    """Verify the fixed default-profile uploader without changing its state."""
+    _validate_local_uploader_payload(LOCAL_UPLOADER_ACTION, payload)
+    return _inspect_expected_config(
+        {LOCAL_UPLOADER_SERVER_NAME: _managed_local_uploader_candidate(payload)}, []
+    )
+
+
+def _inspect_expected_config(present: dict, absent: list) -> dict[str, object]:
     privileged = os.geteuid() == 0
     guard = _load_guard()
     hash_path = (
@@ -547,10 +559,6 @@ def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
     if servers is None:
         servers = {}
     if not isinstance(servers, dict):
-        raise RuntimeError("Hermes MCP config does not match persisted managed intent")
-    present = payload["present"]
-    absent = payload["absent"]
-    if not isinstance(present, dict) or not isinstance(absent, list):
         raise RuntimeError("Hermes MCP config does not match persisted managed intent")
     matches = all(servers.get(name) == expected for name, expected in present.items())
     matches = matches and all(name not in servers for name in absent)
@@ -1229,7 +1237,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=("add", "remove", "inspect", "probe", LOCAL_UPLOADER_ACTION),
+        choices=("add", "remove", "inspect", "inspect-local-uploader", "probe", LOCAL_UPLOADER_ACTION),
     )
     parser.add_argument("--payload")
     args = parser.parse_args()
@@ -1239,11 +1247,13 @@ def main() -> int:
             if args.payload is not None:
                 raise ValueError("Hermes MCP lifecycle probe does not accept --payload")
             result = probe()
-        elif args.action == "inspect":
+        elif args.action in {"inspect", "inspect-local-uploader"}:
             if args.payload is None:
                 raise ValueError("Hermes MCP inspection requires --payload")
             payload = _parse_payload(args.payload)
-            result = inspect_managed_config(payload)
+            result = (inspect_local_uploader(payload)
+                      if args.action == "inspect-local-uploader"
+                      else inspect_managed_config(payload))
         elif args.payload is None:
             raise ValueError("Hermes MCP mutation requires --payload")
         else:

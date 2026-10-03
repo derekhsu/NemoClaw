@@ -104,3 +104,58 @@ to `running`, container image verified as `a53f3b52d44b`:
 - 5 unrelated test failures on this branch were reproduced with changes
   stashed — pre-existing environment issues (Linux scripts on macOS).
 - Dashboard-chat edit itself remains the only unexercised step (browser UI).
+
+## Source Contract Repair (October 03, 2026)
+
+ClawShell PR #92 requires companion image changes for uploader verification and API runtime replacement.
+The validation and image digests above describe the September 30 implementation.
+They do not verify the October 03 source changes.
+
+### Verify the Managed Local Uploader
+
+ClawShell calls `hermes-mcp-config-transaction.py inspect-local-uploader` through the sandbox-user transport after `add-local-uploader`.
+Both actions apply only to the default Hermes profile at `/sandbox/.hermes`.
+ClawShell passes the reviewed Gateway URL and sandbox scope in a JSON `--payload` argument, using this shape:
+
+```json
+{"gateway_url":"https://gateway.example.com","sandbox_id":"sbx-example.00000000000000000000000000000000","replace_existing":true}
+```
+
+The inspection requires the canonical Gateway URL, the sandbox identifier, and `replace_existing: true`.
+It compares the persisted `sandbox-file-uploader` entry with the fixed image-owned command, arguments, environment references, and server settings.
+It also requires an authenticated guard snapshot that matches the applied MCP state.
+The helper rechecks the snapshot before returning `{"ok":true,"state":"matched"}`.
+A missing entry, a changed entry, or an integrity mismatch fails the inspection.
+The inspection does not change configuration, repair integrity state, or restart a process.
+ClawShell binds the sandbox scope to its HMAC proof before passing the argument.
+The zero-filled proof above illustrates the format; ClawShell generates the actual proof.
+The argument contains no secret credential values; the managed uploader uses the image-defined environment references.
+Generic `inspect` verifies HTTP MCP server entries and cannot verify this command-based uploader contract.
+These actions do not install or enable the uploader in the restricted API profile.
+
+### Replace the API Runtime
+
+`nemoclaw-api-runtime stop-wait` confirms that the supervisor singleton lock is released and the API listeners are absent before returning success.
+The existing `stop` action uses the same completion barrier.
+Both actions join the payload network namespace before checking listener absence.
+The affected listeners are the API gateway on port `18699` and the prefix proxy on port `8642` in the payload network namespace.
+The default gateway on port `18642` remains outside this stop operation.
+If the supervisor or either API listener remains after the wait limit, the stop action returns failure.
+The command also fails if it cannot resolve the payload namespace or read the listener tables.
+ClawShell must stop its replacement sequence on that failure.
+
+ClawShell maps its logical privileged-executor `stop` action to the attached command `nemoclaw-api-runtime stop-wait`.
+Restart and configuration reapply wait for that command to complete, launch `start` detached, and then probe API health.
+The existing `start` and `replace` actions remain detached operations.
+This order prevents the previous API gateway's health response from satisfying readiness for the replacement.
+
+### Adopt the Companion Image
+
+Build a Hermes image that includes both source changes before deploying the corresponding ClawShell caller changes.
+Select that image for the validation sandbox; upgrading the ClawShell backend alone does not update installed image helpers.
+An older image rejects the unknown `stop-wait` action, so ClawShell stops instead of using an incomplete stop result.
+An older image also rejects `inspect-local-uploader`.
+Do not treat the September 30 image digests as evidence for these contracts.
+
+No candidate image build, publication, or live sandbox validation is recorded for the October 03 contract changes in this addendum.
+Before image adoption, verify uploader inspection rejection paths, stop timeout failures, and replacement readiness through ClawShell.

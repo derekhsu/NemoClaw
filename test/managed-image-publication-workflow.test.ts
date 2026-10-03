@@ -32,6 +32,7 @@ type MatrixEntry = {
   arch?: string;
   artifact_platform?: string;
   base_alias?: string;
+  base_dockerfile?: string;
   base_image?: string;
   base_repository?: string;
   display_name?: string;
@@ -452,7 +453,28 @@ describe("complete managed-image publication workflow", () => {
       "hermes",
       "langchain-deepagents-code",
     ]);
-    expect(matrix.every(({ base_alias }) => base_alias?.endsWith(":latest"))).toBe(true);
+    expect(matrix.find(({ agent }) => agent === "hermes")?.base_dockerfile).toBe(
+      "agents/hermes/Dockerfile.base",
+    );
+    expect(matrix.find(({ agent }) => agent === "hermes")?.base_alias).toBeUndefined();
+    expect(
+      matrix
+        .filter(({ agent }) => agent !== "hermes")
+        .every(({ base_alias }) => base_alias?.endsWith(":latest")),
+    ).toBe(true);
+    expect(step(prBuilder, "Build PR Hermes source base").with).toMatchObject({
+      file: "${{ matrix.base_dockerfile }}",
+      platforms: "linux/amd64",
+      outputs: "type=oci,dest=${{ runner.temp }}/pr-hermes-source-base,tar=false",
+      push: false,
+      provenance: false,
+    });
+    expect(step(prBuilder, "Build PR managed image locally").with?.["build-contexts"]).toBe(
+      "${{ steps.base.outputs.context }}",
+    );
+    expect(step(prBuilder, "Resolve exact linux/amd64 PR base").run).toContain(
+      "resolve-hermes-pr-source-base.sh",
+    );
 
     for (const action of steps.filter((candidate) => candidate.uses)) {
       expect(action.uses, action.name).toMatch(fullShaAction);
@@ -596,7 +618,7 @@ set -euo pipefail
 if [ "\${1:-} \${2:-} \${3:-}" != "buildx imagetools inspect" ]; then
   exit 90
 fi
-if [[ "\${4:-}" == *":latest" ]]; then
+if [[ "\${4:-}" == "$BASE_ALIAS" ]]; then
   cat "$ALIAS_RAW"
 else
   cat "$EXACT_RAW"
@@ -604,13 +626,14 @@ fi
 `,
       { mode: 0o755 },
     );
-    const runResolver = () =>
+    const runResolver = (baseAlias = "ghcr.io/nvidia/nemoclaw/sandbox-base:latest") =>
       spawnSync("bash", ["-c", resolver], {
         encoding: "utf8",
         env: {
           ...process.env,
+          AGENT: "openclaw",
           ALIAS_RAW: aliasRaw,
-          BASE_ALIAS: "ghcr.io/nvidia/nemoclaw/sandbox-base:latest",
+          BASE_ALIAS: baseAlias,
           BASE_REPOSITORY: "ghcr.io/nvidia/nemoclaw/sandbox-base",
           DISPLAY_NAME: "OpenClaw",
           EXACT_RAW: exactRaw,
@@ -626,6 +649,17 @@ fi
       expect(accepted.status, accepted.stderr).toBe(0);
       expect(fs.readFileSync(output, "utf8")).toContain(
         `ref=ghcr.io/nvidia/nemoclaw/sandbox-base@${digest}`,
+      );
+
+      const indexDigest = createHash("sha256").update(fs.readFileSync(aliasRaw)).digest("hex");
+      const pinned = runResolver(`ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:${indexDigest}`);
+      expect(pinned.status, pinned.stderr).toBe(0);
+      const mismatchedIndex = runResolver(
+        `ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:${"f".repeat(64)}`,
+      );
+      expect(mismatchedIndex.status).not.toBe(0);
+      expect(mismatchedIndex.stderr).toContain(
+        "PR base index bytes do not match the pinned digest",
       );
 
       writeAlias([descriptor, descriptor]);

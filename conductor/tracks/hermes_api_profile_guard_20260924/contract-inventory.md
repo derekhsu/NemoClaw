@@ -122,7 +122,7 @@ delete. Both precedents apply to protecting `profiles/api` and its parent.
 Probed on the published image `sha256:ea54c5ff…` (docker driver, overlayfs;
 `sandbox` is uid 998 / gid 999; `su`/`runuser` present).
 
-**Findings**
+### Findings
 
 - `chattr +i` is unavailable — `cap_linux_immutable` is not in the
   container's bounding set. File immutability is not a mechanism.
@@ -154,7 +154,7 @@ Probed on the published image `sha256:ea54c5ff…` (docker driver, overlayfs;
   must decide whether `profiles/api` needs a `writableSubpaths` entry so
   the api runtime can keep state during locked shields transitions.
 
-**Decision (revised 2026-09-24 — three-uid model)**
+### Decision (revised 2026-09-24 — three-uid model)
 
 The operator's requirement: api config/env are modifiable by the default
 side but never by api-server-driven operations — which may include a

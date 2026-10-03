@@ -71,6 +71,12 @@ EXPECTED_SOURCE_SHA256 = {
     "main": "fb4ee75ebcf12bd9bc014d212c7abc110e1afbcf0c2cb79caa7230dd58006911",
 }
 
+# The official v0.0.122 base differs only by pinning the agent-browser npx
+# fallback from ^0.26.0 to 0.26.0. Keep that exact-version security restriction.
+REVIEWED_BROWSER_NPX_PIN_SHA256 = (
+    "b43608826bb10f9bf919ca97757bf36fc95247bd8b14fa8626a113c639cfd73e"
+)
+
 CONFIG_REQUIRED_UNCHANGED = ('"allow_unsafe_evaluate": False',)
 
 
@@ -286,7 +292,10 @@ def patch_file(path: Path, kind: str, values: dict[str, object]) -> None:
     source = path.read_text(encoding="utf-8")
     actual_sha256 = _sha256(source)
     expected_sha256 = EXPECTED_SOURCE_SHA256[kind]
-    if actual_sha256 != expected_sha256:
+    reviewed_browser_pin = (
+        kind == "browser" and actual_sha256 == REVIEWED_BROWSER_NPX_PIN_SHA256
+    )
+    if actual_sha256 != expected_sha256 and not reviewed_browser_pin:
         raise SystemExit(
             f"ERROR: {path} is not the reviewed Hermes v2026.8.27 {kind} source; "
             f"expected sha256 {expected_sha256}, got {actual_sha256}"

@@ -22,7 +22,7 @@ runs:
         mcp_client_imports_ok() {
           local ref="$1"
           docker run --rm --entrypoint /opt/hermes/.venv/bin/python "$ref" -c \
-            'import mcp; from tools import mcp_tool; assert getattr(mcp_tool, "_MCP_AVAILABLE", False); assert getattr(mcp_tool, "_MCP_HTTP_AVAILABLE", False)' \
+            'import mcp; from tools import mcp_tool; assert getattr(mcp_tool, "_MCP_AVAILABLE", False), "Hermes MCP client runtime is unavailable"; assert mcp_tool._ensure_mcp_sdk(), "Hermes MCP SDK failed to load"; assert getattr(mcp_tool, "_MCP_HTTP_AVAILABLE", False), "Hermes MCP Streamable HTTP runtime is unavailable"' \
             >/dev/null 2>&1
         }
 

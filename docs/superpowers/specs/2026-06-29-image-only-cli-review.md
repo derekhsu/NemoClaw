@@ -16,7 +16,7 @@ The two documents do not reference each other. Closing that gap is the central o
 Documents under review:
 
 - [`docs/superpowers/specs/2026-06-29-image-only-cli-design.md`](./2026-06-29-image-only-cli-design.md) — the upstream-style feature spec proposing `nemoclaw image ...` CLI subcommands backed by a three-layer refactor.
-- [`docs/modification/2026-06-29-image-build-pipeline.md`](../modification/2026-06-29-image-build-pipeline.md) — the fork-specific design that bypasses the NemoClaw CLI entirely with a standalone shell script at `scripts/build-sandbox-image.sh`.
+- [`docs/modification/2026-06-29-image-build-pipeline.md`](../../modification/2026-06-29-image-build-pipeline.md) — the fork-specific design that bypasses the NemoClaw CLI entirely with a standalone shell script at `scripts/build-sandbox-image.sh`.
 
 Both target the same artifact: a generic sandbox runtime image that does not bake provider or model choices. Their divergence is where the build logic lives.
 

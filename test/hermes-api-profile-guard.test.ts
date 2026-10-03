@@ -8,6 +8,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+function readFixtureText(file: string): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 // Contract seam under test (three-uid model, see contract-inventory.md): the
 // image owns a fixed, root-only `api` profile bootstrap and a profile-scoped
 // `write-config` transaction. Neither accepts a caller-selected profile name,
@@ -244,12 +253,16 @@ function writeApiConfig(
   );
 }
 
-function verifyApiProfile(fixture: ApiFixture, extraArgs: string[] = [], options: GuardRunOptions = {}) {
+function verifyApiProfile(
+  fixture: ApiFixture,
+  extraArgs: string[] = [],
+  options: GuardRunOptions = {},
+) {
   return runApiGuard(fixture, ["verify-api-profile", ...extraArgs], options);
 }
 
 function apiEnvKey(fixture: ApiFixture): string {
-  const match = fs.readFileSync(fixture.apiEnvPath, "utf-8").match(/^API_SERVER_KEY=(.+)$/m);
+  const match = readFixtureText(fixture.apiEnvPath).match(/^API_SERVER_KEY=(.+)$/m);
   expect(match, "api profile .env must carry API_SERVER_KEY").not.toBeNull();
   return match![1].trim();
 }
@@ -312,16 +325,13 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(fs.statSync(fixture.apiDir).mode & 0o7777).toBe(0o3770);
     expect(fs.statSync(fixture.apiProfilesDir).mode & 0o777).toBe(0o711);
     expect(fs.statSync(fixture.apiRootDir).mode & 0o777).toBe(0o711);
-    // codeql[js/file-system-race]: single-threaded test on a private fixture
-    const envText = fs.readFileSync(fixture.apiEnvPath, "utf-8");
+    const envText = readFixtureText(fixture.apiEnvPath);
     expect(envText).toMatch(/^API_SERVER_KEY=[0-9a-f]{64}$/m);
-    // codeql[js/file-system-race]: single-threaded test on a private fixture
-    const policy = JSON.parse(fs.readFileSync(fixture.apiPolicyPath, "utf-8"));
+    const policy = JSON.parse(readFixtureText(fixture.apiPolicyPath));
     expect(policy.version).toBe(POLICY_VERSION);
     // The config carries the image managed-policy sections verbatim so the
     // dashboard seeder's policy-parity check can pass.
-    // codeql[js/file-system-race]: single-threaded test on a private fixture
-    const configText = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    const configText = readFixtureText(fixture.apiConfigPath);
     expect(configText).toContain("mode: manual");
     expect(configText).toContain("at_hour: 4");
     // The anchor pins the fixed policy bytes and the structural contract; it
@@ -389,7 +399,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const result = bootstrap(fixture);
     expect(result.status, "operator edits must survive a verify retry").toBe(0);
     expect(apiEnvKey(fixture)).toBe(rotatedKey);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).toContain("operator-chosen");
+    expect(readFixtureText(fixture.apiConfigPath)).toContain("operator-chosen");
   });
 
   it("re-seals with a fresh key when the profile exists but the anchor is gone", () => {
@@ -417,7 +427,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     fs.chmodSync(fixture.apiPolicyPath, 0o440);
     const result = bootstrap(fixture);
     expect(result.status, "policy drift under a live anchor must fail").not.toBe(0);
-    expect(fs.readFileSync(fixture.apiPolicyPath, "utf-8")).toContain("forged");
+    expect(readFixtureText(fixture.apiPolicyPath)).toContain("forged");
   });
 
   it("fails closed when the api ownership matrix is broken", () => {
@@ -433,16 +443,16 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
     const defaultAnchorBefore = fs.readFileSync(fixture.defaultHashPath, "utf-8");
-    const envBefore = fs.readFileSync(fixture.apiEnvPath, "utf-8");
-    const updated = `${fs.readFileSync(fixture.apiConfigPath, "utf-8")}\n# managed update\n`;
+    const envBefore = readFixtureText(fixture.apiEnvPath);
+    const updated = `${readFixtureText(fixture.apiConfigPath)}\n# managed update\n`;
     const result = writeApiConfig(fixture, sha256File(fixture.apiConfigPath), updated);
     expect(result.status, result.stderr).toBe(0);
     // The write re-renders the document (managed policy sections are pinned
     // by the image), so assert semantics rather than byte equality.
-    const written = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    const written = readFixtureText(fixture.apiConfigPath);
     expect(written).toContain("default: hermes-agent");
     expect(written).toContain("mode: manual");
-    expect(fs.readFileSync(fixture.apiEnvPath, "utf-8")).toBe(envBefore);
+    expect(readFixtureText(fixture.apiEnvPath)).toBe(envBefore);
     // The compat hash snapshot advances to the last written state; the strict
     // anchor keeps pinning the policy and structure.
     expect(fs.readFileSync(fixture.apiCompatHashPath, "utf-8")).toContain(
@@ -478,13 +488,9 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
       "custom_field: preserved",
       "",
     ].join("\n");
-    const result = writeApiConfig(
-      fixture,
-      sha256File(fixture.apiConfigPath),
-      callerConfig,
-    );
+    const result = writeApiConfig(fixture, sha256File(fixture.apiConfigPath), callerConfig);
     expect(result.status, result.stderr).toBe(0);
-    const written = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    const written = readFixtureText(fixture.apiConfigPath);
     expect(written).toContain("default: caller-model");
     expect(written).toContain("custom_field: preserved");
     // Caller-supplied weaker value was overwritten by the policy.
@@ -518,10 +524,10 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   it("write-config --profile api refuses a stale expected digest", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
-    const original = fs.readFileSync(fixture.apiConfigPath, "utf-8");
+    const original = readFixtureText(fixture.apiConfigPath);
     const result = writeApiConfig(fixture, sha256Text("stale\n"), `${original}\n# x\n`);
     expect(result.status).not.toBe(0);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).toBe(original);
+    expect(readFixtureText(fixture.apiConfigPath)).toBe(original);
   });
 
   it("refuses the api transaction when the anchor is not owned by the privileged executor", () => {
@@ -541,7 +547,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
       { stdin: "model: {}\n", ownerUid: 0 },
     );
     expect(result.status).not.toBe(0);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).not.toBe("model: {}\n");
+    expect(readFixtureText(fixture.apiConfigPath)).not.toBe("model: {}\n");
   });
 
   it("fails closed when the api profile directory was replaced", () => {
@@ -563,7 +569,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
       "model:\n  default: adopted\n",
     );
     expect(result.status, "a replaced profile directory must fail closed").not.toBe(0);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).toContain("forged");
+    expect(readFixtureText(fixture.apiConfigPath)).toContain("forged");
   });
 
   it("fails closed on an interrupted api transaction journal", () => {
@@ -576,7 +582,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     );
     const result = writeApiConfig(fixture, sha256File(fixture.apiConfigPath), "model: {}\n");
     expect(result.status).not.toBe(0);
-    expect(fs.readFileSync(fixture.apiConfigPath, "utf-8")).not.toBe("model: {}\n");
+    expect(readFixtureText(fixture.apiConfigPath)).not.toBe("model: {}\n");
   });
 
   it("fails closed when the api anchor is missing", () => {
@@ -680,8 +686,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const skillsDir = path.join(fixture.apiDir, "skills");
     expect(fs.existsSync(soulPath)).toBe(true);
     expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
-    // codeql[js/file-system-race]: single-threaded test on a private fixture
-    expect(fs.readFileSync(soulPath, "utf-8")).toContain("Hermes Agent");
+    expect(readFixtureText(soulPath)).toContain("Hermes Agent");
     expect(fs.statSync(skillsDir).isDirectory()).toBe(true);
     expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
   });
@@ -711,8 +716,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
-    // codeql[js/file-system-race]: single-threaded test on a private fixture
-    expect(fs.readFileSync(soulPath, "utf-8")).toBe("operator-tuned soul\n");
+    expect(readFixtureText(soulPath)).toBe("operator-tuned soul\n");
     expect(fs.statSync(skillsDir).mode & 0o7777).toBe(0o2750);
     expect(fs.statSync(path.join(skillsDir, "demo")).mode & 0o777).toBe(0o750);
     expect(fs.statSync(path.join(skillsDir, "demo", "SKILL.md")).mode & 0o777).toBe(0o640);
@@ -731,17 +735,11 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   it("normalize-api-profile rejects selectors and non-owner callers", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
-    for (const extra of [
-      ["--profile", "api"],
-      ["--hermes-dir", fixture.apiDir],
-      ["api"],
-    ]) {
+    for (const extra of [["--profile", "api"], ["--hermes-dir", fixture.apiDir], ["api"]]) {
       const result = runApiGuard(fixture, ["normalize-api-profile", ...extra]);
       expect(result.status, `normalize must reject args: ${extra.join(" ")}`).not.toBe(0);
     }
-    expect(
-      runApiGuard(fixture, ["normalize-api-profile"], { ownerUid: 0 }).status,
-    ).not.toBe(0);
+    expect(runApiGuard(fixture, ["normalize-api-profile"], { ownerUid: 0 }).status).not.toBe(0);
   });
 
   it("normalize-api-profile refuses sealed-anchor drift it cannot repair", () => {
@@ -758,9 +756,13 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
 
   it("keeps dashboard routing on the dedicated api profile after managed restarts", () => {
     const src = fs.readFileSync(START_SCRIPT, "utf-8");
-    expect(src).toContain('HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"');
+    expect(src).toContain(
+      'HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"',
+    );
     expect(src).toContain('HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"');
-    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml"');
+    expect(src).toContain(
+      '"$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml"',
+    );
     expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"');
   });
 });

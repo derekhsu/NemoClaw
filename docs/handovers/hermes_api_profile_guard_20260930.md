@@ -159,3 +159,64 @@ Do not treat the September 30 image digests as evidence for these contracts.
 
 No candidate image build, publication, or live sandbox validation is recorded for the October 03 contract changes in this addendum.
 Before image adoption, verify uploader inspection rejection paths, stop timeout failures, and replacement readiness through ClawShell.
+
+## Hermes CI Repair Checkpoint (October 03, 2026)
+
+This checkpoint records the Hermes changes retained for NemoClaw PR #1.
+Repository baseline and dependency repairs remain a separate work item.
+
+### Bind Metadata Repair to Open Descriptors
+
+The runtime guard repairs API directories through open directory descriptors.
+For existing `SOUL.md` and non-symlink skill entries, it opens the entry with `O_NOFOLLOW` and `O_NONBLOCK`.
+The guard compares the opened device and inode with the inspected entry before changing ownership or permissions.
+It rejects a changed entry or an unexpected special file instead of repairing that replacement.
+The nonblocking flag prevents a substituted FIFO from blocking the guard.
+
+The existing ownership matrix remains the contract.
+The admin uid owns the design files, and the API gid can read them.
+The API gid cannot write the admin-owned design files.
+The guard preserves directory traversal and the sticky API profile directory needed for runtime state.
+The API profile guard tests read fixture content through an open descriptor.
+
+### Repair Hermes Test Fixtures and Integrity Classification
+
+The provisioning, doctor, and runtime-limit fixtures now include `nemoclaw-api-runtime` and `hermes-api-prefix-proxy.py`.
+The user-setup fixture distinguishes the `sandbox` and `hermesapi` identities.
+These updates let the fixtures exercise the existing three-uid image contract.
+
+The managed startup profile classifies `NEMOCLAW_HERMES_CRON_INCIDENTS_SOURCE_SHA256` as an integrity pin.
+The value identifies reviewed source bytes rather than a runtime configuration input.
+
+### Revalidate the MCP Helper Source Evidence
+
+The OpenShell migration contract test now expects the reviewed MCP helper digest `aa8294deb20e9c8c7ba103c90c67e8c4f77c4667909fb1f63786986e73f4254f`.
+The digest was revalidated against `agents/hermes/mcp-config-transaction.py` from reviewed commit `76496d57ece812d3831f86c7f8dd8d614c0f74b0`.
+The upstream credential sets and upstream source evidence remain unchanged.
+
+### Validation and Remaining Work
+
+The final 12-file Hermes matrix passed 273 tests in 61.56 seconds.
+The matrix includes API profile guards, design-file races, stop barriers, uploader inspection, MCP transactions, integrity checks, doctor fixtures, runtime limits, provisioning, migration manifests, credential boundary manifests, and managed startup profiles.
+All four new race tests passed.
+They cover symlink and FIFO replacements for both `SOUL.md` and skill files.
+The independent reviewer reran the four race tests and five migration tests; all nine passed.
+The code and documentation review reported no blockers.
+
+The following checks also passed:
+
+- `tsc -p tsconfig.cli.json --noEmit`.
+- Biome checks for seven changed files.
+- Python AST syntax validation.
+- `git diff --check`.
+
+These targeted results do not establish that all repository CI checks pass.
+
+CodeQL was not rerun for these source changes.
+No candidate image was built, and no full ClawShell sandbox end-to-end test was completed for this repair.
+This checkpoint records no GitHub write.
+
+The separate baseline repair patch is saved at `/Volumes/DS72/VMs/openshell-012/tmp/nemoclaw-ci-baseline-repair-20261003.patch`.
+It contains the documentation formatting and link repairs, workflow repairs, fork regression changes, archived source restoration, and stale TUI fixture repair.
+That patch remains outside PR #1, pending the separate baseline and dependency review.
+The full CI result remains incomplete.

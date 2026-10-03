@@ -4890,17 +4890,19 @@ def _api_env_key(env_path: str) -> str | None:
 
 def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:
     try:
-        st = os.lstat(path)
+        fd = _open_directory(path)
     except FileNotFoundError:
         os.mkdir(path, 0o700)
-        st = os.lstat(path)
-    if not stat.S_ISDIR(st.st_mode):
-        raise UnsafePathError(f"refusing non-directory api profile path: {path}")
-    os.chown(path, uid, gid)
-    if stat.S_IMODE(st.st_mode) != mode:
-        # Group read/traverse is the contract: the api runtime gid must read
-        # admin-owned design files without write access.
-        os.chmod(path, mode)  # codeql[py/overly-permissive-file]
+        fd = _open_directory(path)
+    try:
+        os.fchown(fd, uid, gid)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+            # Directories need traversal; the API gid reads admin-owned design
+            # files and creates runtime state under the sticky profile directory.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
 
 
 def _api_write_file(path: str, data: bytes, mode: int, uid: int, gid: int) -> None:
@@ -4965,10 +4967,23 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
     elif not stat.S_ISREG(soul_stat.st_mode):
         raise UnsafePathError("refusing non-regular api profile SOUL.md")
     else:
-        # lchown: on a pre-contract profile the runtime uid owned this file
-        # and could race a symlink swap; never follow the final component.
-        os.lchown(soul_path, admin_uid, api_gid)
-        os.chmod(soul_path, 0o640)  # codeql[py/overly-permissive-file]
+        # Pre-contract files were runtime-owned. Open without following a
+        # replacement symlink or waiting for a FIFO before checking the inode.
+        fd = os.open(
+            soul_path, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if not stat.S_ISREG(opened_stat.st_mode) or (
+                opened_stat.st_dev, opened_stat.st_ino
+            ) != (soul_stat.st_dev, soul_stat.st_ino):
+                raise UnsafePathError("api design file changed during ownership repair")
+            os.fchown(fd, admin_uid, api_gid)
+            # The API gid can read SOUL.md, but only the admin uid can write it.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, 0o640)
+        finally:
+            os.close(fd)
     _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
     # Skills installed before the contract change remain runtime-owned inside
     # the now admin-owned dir; re-own the whole tree so installed skill
@@ -4982,12 +4997,26 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
                 continue
             # lchown never follows the final component, so a symlink planted
             # by the runtime uid cannot redirect the ownership repair.
-            os.lchown(entry, admin_uid, api_gid)
             if stat.S_ISLNK(entry_stat.st_mode):
+                os.lchown(entry, admin_uid, api_gid)
                 continue
-            os.chmod(  # codeql[py/overly-permissive-file]
-                entry, 0o750 if stat.S_ISDIR(entry_stat.st_mode) else 0o640
+            if not (stat.S_ISREG(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode)):
+                raise UnsafePathError("refusing special file in api skills tree")
+            fd = os.open(
+                entry, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
             )
+            try:
+                opened_stat = os.fstat(fd)
+                if (opened_stat.st_dev, opened_stat.st_ino) != (
+                    entry_stat.st_dev, entry_stat.st_ino
+                ):
+                    raise UnsafePathError("api design entry changed during ownership repair")
+                os.fchown(fd, admin_uid, api_gid)
+                # Installed skills are readable by the API gid and writable only by admin.
+                # codeql[py/overly-permissive-file]
+                os.fchmod(fd, 0o750 if stat.S_ISDIR(opened_stat.st_mode) else 0o640)
+            finally:
+                os.close(fd)
 
 
 def _seal_api_profile(admin_uid: int, api_gid: int) -> None:

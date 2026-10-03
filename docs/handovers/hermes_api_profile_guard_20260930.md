@@ -220,3 +220,46 @@ The separate baseline repair patch is saved at `/Volumes/DS72/VMs/openshell-012/
 It contains the documentation formatting and link repairs, workflow repairs, fork regression changes, archived source restoration, and stale TUI fixture repair.
 That patch remains outside PR #1, pending the separate baseline and dependency review.
 The full CI result remains incomplete.
+
+## Hosted CI and Image Build Checkpoint (October 03, 2026)
+
+NemoClaw PR #1 received commit `eb79356875a3b5e1765477ded1e8cb8aef8f33ff`.
+The [CodeQL workflow](https://github.com/derekhsu/NemoClaw/actions/runs/37119220771) passed Python, JavaScript/TypeScript, and ShellCheck for that commit.
+That result does not verify the subsequent uncommitted guard repair described below.
+
+### Reject a Skill FIFO When Its Inode Is Reused
+
+Hosted CLI shard 7 exposed a regression in the skill-file replacement test.
+A substituted FIFO could reuse the inspected regular file's inode.
+The guard compared device and inode identity but did not require the opened skill entry to retain the inspected file type.
+The guard could therefore accept the FIFO before changing its metadata.
+
+The follow-up repair requires the opened entry's type to match the inspected entry's type before mutation.
+Its test fixture models recycled inode identity while retaining the replacement FIFO's actual file type.
+Before the guard fix, the deterministic four-test race suite produced one skill FIFO failure and three passes in 649 milliseconds.
+After the fix, the seven-file local matrix passed 153 tests in 14.42 seconds.
+The matrix covers design-file races, API profile guards, MCP transactions, MCP integrity, doctor fixtures, runtime limits, and provisioning.
+The independent reviewer reran all four race tests; all passed.
+No new Linux container validation ran after this fix because OrbStack remained stopped.
+The follow-up repair was not committed or pushed when this checkpoint was written.
+The earlier Linux and local test results describe commit `eb79356875a3b5e1765477ded1e8cb8aef8f33ff`; they do not validate this new candidate.
+
+### Separate Repository CI Failures from Image Adoption
+
+The [repository CI workflow](https://github.com/derekhsu/NemoClaw/actions/runs/37119220703) completed with failure for commit `eb79356875a3b5e1765477ded1e8cb8aef8f33ff`.
+The completed jobs exposed these unresolved baseline failures:
+
+- Package contracts, including npm dependency graph `edgesOut` handling.
+- Static checks and reviewed npm audit thresholds with unaccepted high-severity findings.
+- Coverage upload returning HTTP 404 after all 788 plugin tests passed.
+
+The [managed image workflow](https://github.com/derekhsu/NemoClaw/actions/runs/37119220707) failed the Hermes build against the latest base.
+That base contains npm `12.0.2`, whose bundled tar source differs from the patch's expected source.
+The local build against pinned base `57c091ab9b31` also failed.
+Its unchanged base Dockerfile invokes the `_ensure_mcp_sdk` probe, which is absent from that base.
+
+OrbStack stopped twice during the build attempts.
+It was restored after the first stop and remained stopped after the second.
+No new image was produced or deployed.
+The full CI workflow has not run for the subsequent guard repair.
+No full ClawShell sandbox end-to-end result is recorded for that candidate.

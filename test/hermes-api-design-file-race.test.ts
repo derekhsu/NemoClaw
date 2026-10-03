@@ -39,6 +39,8 @@ with tempfile.TemporaryDirectory() as root:
     victim.chmod(0o600)
     m.HERMES_API_PROFILE_DIR = str(home)
     original = os.lstat
+    original_fstat = os.fstat
+    target_stat = original(target)
     swapped = False
     def swap_after_check(name, *args, **kwargs):
         global swapped
@@ -51,7 +53,18 @@ with tempfile.TemporaryDirectory() as root:
             else:
                 target.symlink_to(victim)
         return before
+    def recycled_fifo_identity(fd):
+        opened = original_fstat(fd)
+        if replacement == "fifo" and stat.S_ISFIFO(opened.st_mode):
+            # Linux may reuse an unlinked inode for the replacement FIFO.
+            # Keep its real type while making that case deterministic.
+            fields = list(opened)
+            fields[1] = target_stat.st_ino
+            fields[2] = target_stat.st_dev
+            return os.stat_result(fields)
+        return opened
     m.os.lstat = swap_after_check
+    m.os.fstat = recycled_fifo_identity
     try:
         m._api_ensure_design_surface(os.getuid(), os.getgid())
     except (OSError, m.UnsafePathError):
@@ -60,6 +73,7 @@ with tempfile.TemporaryDirectory() as root:
         raise AssertionError("accepted design-file replacement")
     finally:
         m.os.lstat = original
+        m.os.fstat = original_fstat
     assert stat.S_IMODE(victim.stat().st_mode) == 0o600
 print("denied")
 `,

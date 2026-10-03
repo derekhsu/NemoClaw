@@ -5007,7 +5007,9 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
             )
             try:
                 opened_stat = os.fstat(fd)
-                if (opened_stat.st_dev, opened_stat.st_ino) != (
+                if stat.S_IFMT(opened_stat.st_mode) != stat.S_IFMT(entry_stat.st_mode) or (
+                    opened_stat.st_dev, opened_stat.st_ino
+                ) != (
                     entry_stat.st_dev, entry_stat.st_ino
                 ):
                     raise UnsafePathError("api design entry changed during ownership repair")

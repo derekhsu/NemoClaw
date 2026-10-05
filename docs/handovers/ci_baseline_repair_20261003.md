@@ -558,3 +558,31 @@ The regression executes the actual `RUN` payload with an installer fixture that 
 Before the fix, the payload returned zero; after the fix, it returned status 23.
 The focused three-file matrix passed all 20 tests in 1.76 seconds.
 These local results do not establish a repaired hosted final image, installed-image probe, publication, or deployment.
+
+## Published Native Candidate (October 05, 2026)
+
+The user resumed the task after the pause.
+[GitHub Actions run 37260118925](https://github.com/derekhsu/NemoClaw/actions/runs/37260118925) completed successfully.
+Both native validation jobs built the source base and final image, verified the OCI base, and passed the actual installed-uploader probe.
+Both platform publication jobs and the final manifest publication job succeeded.
+
+The image source commit is `048301c984c432b43f89f9aeba0b83c5a7742154`.
+The published candidate is `docker.io/derekhsu/openshell-hermes:candidate-baseline-20261005-37260118925-1`.
+Registry inspection confirmed these digests:
+
+- Multi-architecture manifest: `sha256:52984ca08cfc37d9affe664d26e1a300d17f476d92a1014b659f513f7c309967`.
+- Linux amd64 image manifest: `sha256:8c8e8a024c86105cd4f1d60758f822192395edf1aafae86fa292cb953f228f06`.
+- Linux arm64 image manifest: `sha256:e3a1800f20e93687ad72a1ca32f13d6b24fb8ef27923562eafabd7ba36ed3b13`.
+
+The downloaded manifest receipt is `/Volumes/DS72/VMs/openshell-012/tmp/hermes-image-20261005-cnhq3c43/ci-37260118925-manifest/manifest.json`.
+The candidate publication did not update `latest` or Hermes release aliases.
+The installed probes use synthetic credentials and `httpx.MockTransport`; they do not establish real Gateway or model connectivity.
+
+The primary agent ran `bun run docs`, which exited with status 0.
+Published-route checks passed, and Fern reported zero errors and two warnings.
+Generation left that checkout's Git status clean.
+
+This documentation checkpoint will be committed separately after image publication.
+That later documentation-only commit does not change the image source commit or imply that the image was rebuilt.
+Complete CI, CodeQL, and sandbox deployment verification remain incomplete.
+The candidate image pipeline does not establish recovery of existing local sandbox data.

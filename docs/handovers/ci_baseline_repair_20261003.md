@@ -6,6 +6,8 @@
 ## Scope and Branch Boundary
 
 The baseline repair uses branch `codex/nemoclaw-ci-baseline-repair`, based on commit `fe7c2794b21cef690f2b553bdc396492cc25e958`.
+Local commit `020403f05` records `ci: repair fork checks and Hermes PR base validation`.
+The commit has not been pushed.
 NemoClaw PR #1's remote source branch remains unchanged.
 Any baseline publication must use a separate branch and PR.
 
@@ -135,7 +137,9 @@ A matching version label does not establish patch source compatibility.
 
 ## Local Image and Runtime Verification
 
-The corrected local build completed successfully using the reviewed 0.20.6 base.
+The earlier corrected local build completed successfully using the reviewed 0.20.6 base.
+That build preceded the browser patcher digest and workflow changes in local commit `020403f05`.
+Its image and runtime results do not validate an image built from that commit.
 The candidate is `clawshell-hermes-baseline-verify:20261003`, with image identity `sha256:f61fd9486ff230f3535e1035d208074baee74fced73745ad77b809155c328741`.
 The built platform is Linux arm64.
 The build log is `/Volumes/DS72/VMs/openshell-012/tmp/hermes-baseline-build-correct-20261003.log`.
@@ -168,7 +172,8 @@ A live diagnostic preservation copy now exists at `/Volumes/DS72/OrbStack_Recove
 Its source is `/Volumes/DS72/OrbStack_Data/data.img.raw`; the source file was not modified by the copy operation.
 APFS `clonefile` created the copy on the same disk using copy-on-write.
 The operation receipt is `/Volumes/DS72/OrbStack_Recovery/20261004-004308/receipt.json`.
-The source VM was running because another actor or process had restarted it; this repair task did not restart it for the copy.
+The source VM was running at copy time; the reason it had restarted is unknown.
+This repair task did not start it again for the copy.
 
 This is a live diagnostic preservation copy, not a cold backup or verified recovery.
 It preserves existing corruption and does not establish filesystem consistency or restoreability.
@@ -185,7 +190,24 @@ This checkpoint does not accept those findings or disable the reviewed audit thr
 Package contract failures, static architecture budgets, and the coverage upload HTTP 404 also remain outside the completed repair evidence.
 
 The documentation build completed with zero errors and two warnings.
-No baseline commit, GitHub write, candidate image publication, OpenShell deployment, or full ClawShell end-to-end success is recorded in this checkpoint.
+The local `git commit --signoff` operation succeeded for `020403f05`.
+It produced no hook execution output, so this checkpoint does not claim that normal hooks passed.
+`git fetch origin main` completed successfully.
+The first `validate:pr` attempt reported a missing `.prek-hook.json` and `end-of-file-fixer` early EOF with the original tool cache.
+A second attempt with a fresh external `PREK_HOME` still reported early EOF.
+The log lists 3,536 files in `origin/main...HEAD` and records the failure while priority-0 native fast-path fixers ran in parallel.
+The root cause is not established.
+
+The complete PR validation did not finish; commitlint and pre-push checks were not reached.
+Running `end-of-file-fixer` with `PREK_NO_FAST_PATH=1` passed on three new source and test files.
+That focused result does not replace the complete PR checks.
+Hook-generated patch context whitespace and test trailing-blank changes were precisely restored.
+At that checkpoint, only this handover remained modified.
+The original cache was preserved, and the new tool cache is `/Volumes/DS72/VMs/openshell-012/tmp/prek-ci-baseline-20261004`.
+
+Before publication, complete `validate:pr` and satisfy the repository's signing requirements under `AGENTS.md`.
+No push, GitHub write, candidate image publication, OpenShell deployment, or full ClawShell end-to-end success is recorded for the baseline commit.
+The actual OCI integration and full CI gate remain incomplete.
 The independent reviewer successfully executed a review during the resumed work.
 The reviewer independently passed 60 targeted tests in 34.05 seconds.
 The fork workflow test formatting repair is complete and included in the final 71-test matrix.
@@ -193,3 +215,317 @@ The final independent writer review is complete: `docs-updated`, agent `Codex De
 The reviewer reported no blocking code or documentation findings.
 The review receipt does not supply the still-missing runtime evidence for actual OCI export and final-image named-context integration.
 The local evidence is a checkpoint, not a completed final handoff.
+
+## PR Check Continuation (October 04, 2026)
+
+OrbStack now reports Running, and Docker reports version 29.4.0 with the overlayfs storage driver.
+This status does not verify recovery of existing sandbox data or resolve the previously recorded BTRFS corruption.
+The earlier image and OCI limitations remain applicable until their actual verification completes.
+
+The native EOF hook ran alone, within the complete check, and through five parallel and five serial priority-0 reruns without reproducing early EOF.
+The earlier failure's root cause remains unknown.
+These reruns do not establish that the EOF issue was repaired.
+
+The subsequent full pre-commit run reached these failures:
+
+- `trailing-whitespace` changed whitespace used as patch context.
+- A test file contained a trailing blank line.
+- Repository architecture budgets, Hadolint, and source-shape budgets rejected the current branch.
+
+The new `test/precommit-patch-preservation.test.ts` first failed against the real built-in hook because it deleted patch context whitespace.
+The minimal repair adds `\.patch$` to the `trailing-whitespace` exclusion while preserving the signature exclusion.
+The behavioral test also checks that ordinary TypeScript whitespace is still corrected.
+The old Hermes test's trailing blank line was removed.
+The two-file targeted suite passed all nine tests in 1.93 seconds after the publisher test refinement.
+Native whitespace, EOF, and mixed-line-ending hooks passed on six files: the hook config, both new tests, the old Hermes test, and two actual Hermes patches.
+Those hooks produced no automatic file changes and did not reproduce early EOF.
+Architecture budgets and the reviewed audit gate remain unchanged.
+No full validation success is claimed in this continuation.
+
+`npm ci --ignore-scripts --no-audit --no-fund` installed 81 missing plugin packages from the existing lockfile using an external cache.
+With `PREK_MAX_CONCURRENCY=1`, all four pre-push hooks passed in the original worktree.
+Those hooks check the plugin build, JavaScript configuration typing, CLI TypeScript, and CLI version tags.
+The single-commit commitlint check passed for `020403f05`.
+Commitlint against the full `origin/main` comparison still rejects existing commits with long bodies or headers.
+No history rewrite was performed to bypass those findings.
+
+The fork workflow publisher test now executes the configured condition in a subprocess and checks whether the artifact publication side effect occurs.
+It no longer asserts the raw condition text.
+The source-shape findings decreased from six to five.
+The remaining findings are two legacy cases in `test/hermes-api-profile-guard.test.ts` and three in `test/hermes-local-uploader-image-contract.test.ts`.
+Neither the fork workflow test nor the new patch-preservation test appears among those findings.
+The source-shape budget remains zero, so the overall check still fails.
+The complete `validate:pr` gate has not passed, and the early EOF root cause remains unknown.
+
+### Complete Check After the Hook Repair
+
+A complete diagnostic `validate:pr` run in a disposable copy exited with status 1 and did not reproduce early EOF.
+Its log is `/Volumes/DS72/VMs/openshell-012/tmp/prek-pr-check-3evwhldh/validate-pr-after-fix.log`.
+Whitespace, EOF, and mixed-line-ending hooks passed.
+Repository architecture budgets, Hadolint, and the five legacy source-shape findings still failed.
+Formatters also changed nine files in that diagnostic copy.
+
+Only the formatting correction for this baseline's `scripts/checks/resolve-hermes-pr-source-base.sh` was carried back to the original worktree.
+`shfmt -bn` moved `||` continuations without changing the resolver's behavior.
+Its actual shfmt and ShellCheck hooks passed.
+The other eight legacy formatter changes were not applied to the original worktree.
+
+After the latest test changes, CLI TypeScript and version-tag pre-push hooks passed again.
+Plugin and JavaScript configuration hooks skipped because their inputs were outside the changed-file scope; the earlier four-hook pass remains recorded.
+At that checkpoint, the original worktree contained six modified or new files.
+Those changes had not been committed or pushed.
+The final three-file regression rerun passed all 15 tests in 1.91 seconds.
+
+## Source-Shape Behavior Test Refinement (October 04, 2026)
+
+The user approved replacing the five remaining source-shape cases with behavioral tests.
+The production implementation was not changed for this refinement.
+The source-shape check now passes across the repository.
+It reports zero source-shape cases, assertions, and files, with the budget still zero.
+The existing exception count remains 116, with zero invalid exceptions and no new exceptions.
+
+### API Profile Behavior
+
+The bootstrap test snapshots the default config, environment, and anchor before bootstrap, then compares their bytes afterward.
+The dashboard test executes the actual route-selection, prepare, and seed functions from `start.sh`.
+Two separate runs change the API model and environment configuration.
+The test checks that dashboard configuration updates, `API_SERVER_KEY` is not copied, and the default profile remains unchanged.
+
+The first execution failed because the test's API policy fixture omitted production routing requirements.
+The fixture was completed to match that contract; production code was not changed.
+
+### Offline Uploader Behavior
+
+Four behavior cases replace the uploader source-shape assertions.
+The installation fixture executes the Dockerfile payload COPY, final-stage COPY, and RUN steps against temporary paths.
+Package-manager and root ownership operations use fixture substitutes; real `chmod` and `find` exercise the installation boundary.
+FastMCP and HTTP dependencies use test substitutes.
+The fixture maps GNU find's `/022` permission expression to BSD find's `+022`, and maps root ownership to the fixture uid.
+This host fixture does not establish real root ownership.
+The fixture injects package installation exit status 12 and verifies that assembly stops before ownership and permission changes.
+
+The actual GatewayClient source runs against captured HTTP requests.
+The test prevents debug writes and socket probes.
+It checks stdout, stderr, and root logger output for synthetic credential leakage.
+
+The MCP transaction loads the production credential manifest.
+It rejects `GATEWAY_API_KEY`, `GATEWAY_CUSTOM_TOKEN`, and `OPENSHELL_TLS_KEY` as ordinary MCP token references.
+It accepts the fixed uploader's declared credential placeholder.
+That result does not permit arbitrary raw Gateway keys in MCP environment configuration.
+
+### Installed Image Evidence and Test Results
+
+Additional verification used the already built `f61fd9486ff230f3535e1035d208074baee74fced73745ad77b809155c328741` image.
+A disposable network-disabled container with a read-only root filesystem checked the installed entrypoint, server name, executable paths, root uid, and modes.
+The installed tree had zero unsafe writable entries.
+Installed GatewayClient and server SHA-256 values matched the current source.
+
+The actual installed client executed one signed-link request through `httpx.MockTransport`.
+Missing credentials were rejected, and synthetic credentials did not appear on stdout.
+These installed-image checks passed.
+Their log is `/Volumes/DS72/VMs/openshell-012/tmp/hermes-uploader-installed-behavior-20261004.log`.
+
+The first five-file matrix passed 83 tests in 9.82 seconds.
+The final five-file matrix passed all 83 tests in 12.58 seconds after the payload and final-stage COPY replay improvements.
+CLI TypeScript, version-tag synchronization, and `git diff --check` also passed.
+At this refinement checkpoint, the worktree contains ten modified or new files; the refinement changes are not committed or pushed.
+The installed-image result does not establish a newly built image, deployment, model inference, or completed OCI pipeline.
+No image build, push, or deployment was performed for this refinement.
+
+## Architecture and Dockerfile Check Continuation (October 04, 2026)
+
+The architecture check reproduced four findings:
+
+| File | Observed fan-in | Recorded limit |
+|---|---|---|
+| `src/lib/adapters/docker/index.ts` | 44 | 43 |
+| `src/lib/adapters/docker/run.ts` | 21 | 20 |
+| `src/lib/cli/nemoclaw-oclif-command.ts` | 108 | 106 |
+| `src/lib/core/shell-quote.ts` | 25 | 26 |
+
+The shell-quote finding is a request to lower its recorded budget to the already reduced fan-in.
+The image build service now imports the existing image and inspection adapters directly.
+Image push uses a thin wrapper for the existing Docker command in the image adapter.
+The wrapper preserves the command's stdio and status behavior.
+This reduces dependencies on the Docker adapter index and run module without changing build or push behavior.
+The shell-quote budget decreases to 25.
+
+The CLI contains 108 real command dependencies.
+This repair will not add indirect inheritance or move commands solely to satisfy the 106 limit.
+That gate remains an explicit unresolved finding.
+The user has been asked whether to retain the 106 limit through a real refactor or accept 108 for the two added image commands.
+No answer or budget change is recorded at this checkpoint.
+
+Nine Dockerfile Hadolint findings were reviewed.
+Required instructions preserve the scratch payload's metadata and cache boundaries, the existing sandbox/root user ABI, and a shell healthcheck.
+The model `MAX_TOKENS` argument is configuration rather than a secret.
+Instruction-local suppressions with specific reason comments now cover those nine findings.
+The global severity and source-shape exceptions remain unchanged.
+
+The final eleven-file matrix passed all 124 tests in 10.70 seconds.
+Hadolint, ShellCheck, shfmt, Biome checks for ten TypeScript files, and `git diff --check` passed.
+CLI TypeScript and version-tag pre-push hooks passed; plugin and JavaScript configuration hooks skipped because their paths were outside the changed-file scope.
+The repository-wide source-shape metrics remain zero, with 116 existing exceptions and zero invalid exceptions.
+The independent reviewer passed 32 tests across two files in 692 milliseconds and found no blocking code findings.
+
+Eight legacy formatter changes were applied to the original worktree.
+They contain formatting changes only.
+This supersedes the earlier checkpoint where those changes had not been carried back.
+The worktree contains 23 modified or new files at this checkpoint.
+
+The complete repository gate still fails on CLI fan-in 108 versus 106.
+The six repository checks after source architecture passed when run independently for diagnosis: test dist-import restrictions, createRequire budgets, Vitest membership, test-title style, live E2E unit-block restrictions, and test-registration boundaries.
+Their results include 27 CLI and eight support createRequire uses, and 2,280 Vitest files across seven projects.
+This diagnostic subset does not establish that the complete repository gate passed.
+The final layer-import boundary check for the changed imports passed.
+No complete gate, new image build, deployment, commit, or push success is claimed for this continuation.
+
+## Authorized CLI Baseline Update (October 04, 2026)
+
+The user explicitly approved updating the CLI fan-in baseline from 106 to 108 for the two additional image commands.
+The change updates only the CLI entry in `ci/source-architecture-budget.json` for this decision.
+The previously reduced shell-quote baseline remains 25, and all other architecture limits remain unchanged.
+
+This approval supersedes the earlier unresolved 108-versus-106 decision.
+The earlier gate failures remain accurate historical results.
+The complete `scripts/checks/run.mts` run exited with status 0; all 13 repository checks passed against the updated baseline.
+The architecture graph contains 1,655 files and 4,933 edges, with zero cycles, maximum fan-in 108, and maximum fan-out 211.
+All individual pre-commit hooks on the 23 changed files passed or skipped according to their path scope.
+These include gitleaks, environment documentation, source-shape, test-size, Hadolint, and repository checks.
+The first complete invocation still exited with status 1, reporting `Files were modified by following hooks` while this handover was updated during the run.
+That invocation is not recorded as a complete pre-commit pass.
+A rerun against stable files is required before claiming the complete invocation passed.
+
+No full hosted CI, new image build, deployment, commit, or push success is claimed for this baseline decision.
+
+After documentation writes stopped, the stable pre-commit rerun over all 23 changed files exited with status 0.
+Every applicable hook passed; hooks outside the changed-file scope skipped.
+This result covers local pre-commit checks and does not establish complete PR CI, a new image build, or deployment.
+
+## New Source Image Build (October 05, 2026)
+
+The user requested a new Hermes image build.
+The first attempt used Linux amd64 and the uncommitted baseline worktree at source commit `020403f05`.
+A later attempt used native Linux arm64 on the aarch64 Docker host.
+At the start of the attempt, that worktree contained 23 modified or new files.
+The build must therefore be identified by its source receipts as well as the commit.
+
+The intended workflow builds `agents/hermes/Dockerfile.base` into a local OCI layout without provenance or SBOM attestations.
+The repository resolver requires the exported digest and Linux amd64 platform before the final Dockerfile consumes it through the named build context.
+It is not applicable to arm64; the prepared native verification uses equivalent manifest/config byte checks and requires arm64.
+The artifacts are saved under `/Volumes/DS72/VMs/openshell-012/tmp/hermes-image-20261005-cnhq3c43/`.
+
+### OpenSSL Development Package Conflict
+
+The first source-base build failed with APT exit status 100.
+Pinned `libssl-dev=3.5.7-1~deb13u2` requires the matching runtime revision, but APT selected the Debian Security `deb13u3` runtime.
+The conflicting revisions prevented dependency resolution.
+
+The actual pinned Node amd64 container's package policy and simulated install confirmed that development revision `deb13u3` resolves.
+The official Debian Security development package SHA-256 is `c5f5f0383cac45209fefe85b3c3308e5ef6743663597d89bedcb96aaa06b8342`.
+Its September 29 changelog records additional security fixes.
+The review log is `openssl-package-review.log` in the build artifact directory.
+
+Only the Hermes base Dockerfile's development package pin changed from `3.5.7-1~deb13u2` to `3.5.7-1~deb13u3`.
+The native security package build consumes OpenSSL headers when compiling libssh2.
+The runtime remains in the OpenSSL 3.5.7 series.
+The pin remains exact, with no runtime downgrade or new exception.
+OpenClaw and Deep Agents base files were not changed without a reproduced failure in those builds.
+
+### Architecture-Specific Build Results
+
+The amd64 retry passed the libssh2 native package build after the OpenSSL pin correction.
+It then failed the complete upstream Perl suite: 2,933 files, 1,391,109 tests, and seven failed cases.
+Six failures were in `op/magic.t` process-view checks, and one was `threads/join.t` case 11.
+The Perl build step exited with status 2 before OCI export.
+Its log is `source-base-build-retry.log`.
+
+The Docker host is aarch64, so the amd64 build uses cross-architecture emulation.
+Emulation is an evidence-backed explanation to investigate, not a confirmed root cause for every failed test.
+The thread join failure's cause remains unknown, and the original amd64 CI build remains unresolved.
+No upstream test was skipped.
+
+The native arm64 attempt passed the complete Perl suite: 2,933 files and 1,391,187 tests in 91 seconds.
+Both `threads/join.t` and `op/magic.t` passed.
+This result does not resolve the amd64 failures.
+
+The native base then failed at stage 2, instruction 21 of 28, while downloading the exact Hermes `v2026.8.27` archive.
+GitHub returned HTTP 429 from `https://github.com/NousResearch/hermes-agent/archive/refs/tags/v2026.8.27.tar.gz`.
+Curl exited with status 22 at the Dockerfile's archive download line 445; the build wrapper exited with status 1.
+The log is `arm64/source-base-build.log`.
+The GitHub access failure stopped further attempts; no retry, alternate source, or bypass was used after that failure.
+
+### Final Validation Boundary and Next Step
+
+The focused two-file matrix passed all 12 tests in 2.84 seconds.
+Two pre-existing base Dockerfile Hadolint `DL4006` warnings remain.
+The earlier final Dockerfile Hadolint result does not establish that the base Dockerfile passed.
+
+The final source checkpoint contains 24 modified or new files at commit `020403f05`.
+Only the Hermes OpenSSL development package pin changed in production source for this build attempt.
+The native final-build and installed-probe runners were prepared outside the checkout but were not executed.
+The probe targets installed module paths because build-only uploader source under `/opt` is intentionally removed.
+
+No native OCI layout was exported and no final image was built.
+Docker inspection of `clawshell-hermes-baseline-verify:20261005-arm64` reported no such image.
+No installed-image probe, deployment, hosted CI, commit, push, or image publication was completed for this attempt.
+
+After the GitHub rate limit is removed, resume the native base build, verify the actual OCI manifest/config bytes and platform, and build the final image through its exact named context.
+Then run the installed-image verification against that new image.
+Retain the separate unresolved amd64 failure and the existing sandbox data recovery limitations.
+
+## Manual Native Candidate Validation (October 05, 2026)
+
+The user explicitly requested another local build attempt after the GitHub archive download failure.
+That attempt downloaded and verified the archive, then completed all 28 base build steps.
+OCI export failed when the Docker daemon could not read a blob because of an input/output error, followed by EOF.
+The build wrapper exited with status 1.
+Its log is `arm64/source-base-build-user-retry.log` in the October 05 build artifact directory.
+
+After the user restarted OrbStack, another attempt failed during OCI export with the same blob input/output error and EOF.
+The restarted attempt's wrapper also exited with status 1.
+Its log is `arm64/source-base-build-orbstack-restart.log`.
+Neither attempt produced an exported OCI layout or a new final image.
+Docker availability after restart does not establish recovery of existing sandbox data.
+
+The user authorized GitHub Actions validation and candidate publication to their Docker Hub repository.
+The new reusable workflow is `.github/workflows/hermes-image-validation.yaml`.
+Its manual entry point is the existing `Images / Hermes Local Uploader` workflow, `.github/workflows/hermes-local-uploader-image.yaml`.
+
+Select the baseline branch when dispatching that workflow.
+Set a `candidate-` prefixed `tag`, such as `candidate-baseline-20261005`, and set `validate_candidate=true`.
+Set `publish_candidate=true` only for the authorized candidate publication.
+Either boolean selects the candidate path; `publish_candidate=true` therefore also requires validation.
+Both inputs default to false; leaving both false selects the existing publication path that updates release aliases.
+The candidate path rejects `latest` and `hermes-*` tags.
+
+The candidate workflow performs these operations:
+
+- Build the branch's Hermes base Dockerfile on native `ubuntu-24.04` amd64 and `ubuntu-24.04-arm` arm64 runners.
+- Verify the exported OCI descriptor, manifest bytes, config bytes, and requested platform before consuming the exact named context.
+- Load the final image and run `test/support/hermes-installed-uploader-probe.py` with network access disabled and a read-only container root.
+- Save the compressed Docker image archive, archive checksum, image inspection, source commit, build metadata, build logs, and probe JSON.
+
+The resolver's platform argument now supports `linux/arm64`; its default remains `linux/amd64`.
+The installed probe checks actual installed imports, source hashes, root ownership, permissions, executable entry point, and reserved credential names.
+It uses `httpx.MockTransport` and a synthetic credential to test signed-link requests, missing-credential rejection, and absence of credential output.
+It does not test a real Gateway or model request.
+
+The validation jobs do not reference Docker Hub secrets or perform Docker Hub login or publication.
+When publication is enabled, separate platform publication jobs start only after the complete validation matrix succeeds.
+They download the verified image archives, check each archive checksum, and compare the loaded image ID with its saved inspection.
+Those jobs read the fork's `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` Actions secrets for Docker Hub login.
+They publish `docker.io/derekhsu/openshell-hermes:<tag>-<run-id>-<attempt>-<arch>`.
+The final publication job creates `docker.io/derekhsu/openshell-hermes:<tag>-<run-id>-<attempt>` only after both platform publication jobs succeed.
+A platform publication failure can leave the other platform's intermediate tag without a final candidate tag.
+The candidate path does not update `latest` or Hermes release aliases.
+Platform digest receipts and the published manifest are saved when their respective publication steps succeed.
+Workflow artifacts are retained for three days.
+
+The focused four-file matrix passed all 28 tests in 1.83 seconds: six candidate workflow cases, ten resolver cases, and 12 native/dependency cases.
+Actionlint passed for both workflows, and Hadolint passed for the Hermes base Dockerfile.
+The base Dockerfile now has two instruction-specific `DL4006` comments for the expected-zero grep count and checksum pipeline.
+These comments replace the earlier base warning status without changing global lint severity.
+The pre-commit run over seven new or updated implementation files was still running at this documentation checkpoint.
+Commit, push, dispatch, and hosted results will be recorded separately after they occur.
+The workflow implementation has not yet established hosted build, probe, publication, or deployment success.

@@ -36,10 +36,7 @@ describe("ImageStageCommand", () => {
   });
 
   it("forwards stage flags to the image stage action", async () => {
-    await ImageStageCommand.run(
-      ["--agent", "openclaw", "--output", "/tmp/out", "--json"],
-      rootDir,
-    );
+    await ImageStageCommand.run(["--agent", "openclaw", "--output", "/tmp/out", "--json"], rootDir);
 
     expect(runImageStageAction).toHaveBeenCalledWith(
       expect.objectContaining({

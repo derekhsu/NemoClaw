@@ -47,7 +47,8 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^skills/[^/]+/skill\.oms\.sig$
+        # Patch context spaces are part of the diff format.
+        exclude: ^skills/[^/]+/skill\.oms\.sig$|\.patch$
         stages: [pre-commit]
         priority: 0
       - id: end-of-file-fixer

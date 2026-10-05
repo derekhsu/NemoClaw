@@ -51,9 +51,7 @@ _QUICK_STATE_FILES = (
 )
 `;
 
-function fixtureFiles(
-  options: { executions?: string; incidents?: string; backup?: string } = {},
-) {
+function fixtureFiles(options: { executions?: string; incidents?: string; backup?: string } = {}) {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-cron-runtime-"));
   fixtures.push(fixture);
   const executions = path.join(fixture, "executions.py");
@@ -68,16 +66,7 @@ function fixtureFiles(
 function runPatcher(executions: string, incidents: string, backup: string) {
   return spawnSync(
     "python3",
-    [
-      "-I",
-      patcher,
-      "--executions",
-      executions,
-      "--incidents",
-      incidents,
-      "--backup",
-      backup,
-    ],
+    ["-I", patcher, "--executions", executions, "--incidents", incidents, "--backup", backup],
     { encoding: "utf8", timeout: 5000 },
   );
 }

@@ -3,6 +3,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
 import YAML from "yaml";
@@ -49,5 +50,21 @@ it.each([
     .replaceAll("github.event.action", JSON.stringify("synchronize"))
     .replaceAll("github.event.changes.base", "null")
     .replaceAll("needs.review.result", JSON.stringify(result));
-  expect(Function("return (" + condition + ")")()).toBe(expected);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "advisor-publication-"));
+  try {
+    const artifact = path.join(directory, "published");
+    const publish = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `(${condition}) && require("node:fs").writeFileSync(process.argv[1], "published");`,
+        artifact,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(publish.status, publish.stderr).toBe(0);
+    expect(fs.existsSync(artifact)).toBe(expected);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

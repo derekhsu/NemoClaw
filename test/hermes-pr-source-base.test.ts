@@ -13,7 +13,7 @@ const script = path.resolve(
   "../scripts/checks/resolve-hermes-pr-source-base.sh",
 );
 
-function resolveFixture(change = "none") {
+function resolveFixture(change = "none", platform?: string) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-source-base-"));
   const blobs = path.join(directory, "blobs/sha256");
   fs.mkdirSync(blobs, { recursive: true });
@@ -45,7 +45,12 @@ function resolveFixture(change = "none") {
   try {
     const result = spawnSync(
       "bash",
-      [script, directory, change === "export" ? `sha256:${"f".repeat(64)}` : digest],
+      [
+        script,
+        directory,
+        change === "export" ? `sha256:${"f".repeat(64)}` : digest,
+        ...(platform ? [platform] : []),
+      ],
       {
         encoding: "utf8",
         env: { ...process.env, GITHUB_OUTPUT: output },
@@ -71,6 +76,22 @@ describe("Hermes PR source base resolution", () => {
     expect(result.output).toContain(
       `context=nemoclaw-hermes-pr-base=oci-layout://${result.directory}@${result.digest}\n`,
     );
+  });
+
+  it("accepts arm64 only when the caller requests linux/arm64", () => {
+    const result = resolveFixture("platform", "linux/arm64");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.output).toContain("ref=nemoclaw-hermes-pr-base");
+  });
+
+  it.each([
+    "linux/arm64",
+    "linux/ppc64le",
+    "arm64",
+  ])("rejects an incompatible or unsupported requested platform %s", (platform) => {
+    const result = resolveFixture("none", platform);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toBe("");
   });
 
   it.each([

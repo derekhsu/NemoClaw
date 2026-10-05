@@ -74,3 +74,7 @@ export function dockerListImagesFormat(
 ): string {
   return dockerCapture(["images", "--filter", `reference=${reference}`, "--format", format], opts);
 }
+
+export function dockerPush(imageRef: string, opts: DockerRunOptions = {}): DockerRunResult {
+  return dockerRun(["push", imageRef], opts);
+}

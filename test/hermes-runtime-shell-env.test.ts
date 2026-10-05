@@ -70,7 +70,10 @@ function runRuntimeShellEnvBootstrap() {
     });
     const preservedHomeResult = spawnSync(
       "bash",
-      ["-c", `HERMES_HOME=/sandbox/.hermes/profiles/dashboard-home; . ${shellQuote(envFile)}; printf '%s' "$HERMES_HOME"`],
+      [
+        "-c",
+        `HERMES_HOME=/sandbox/.hermes/profiles/dashboard-home; . ${shellQuote(envFile)}; printf '%s' "$HERMES_HOME"`,
+      ],
       { encoding: "utf-8", timeout: 5000 },
     );
     const defaultHomeResult = spawnSync(

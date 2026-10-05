@@ -450,9 +450,7 @@ describe("root-only gateway control helper", () => {
 describe("gateway_control_tree_fingerprint", () => {
   function fingerprint(...paths: string[]): string {
     const quoted = paths.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(" ");
-    const result = runSupervisorLibrary(
-      `gateway_control_tree_fingerprint ${quoted}`,
-    );
+    const result = runSupervisorLibrary(`gateway_control_tree_fingerprint ${quoted}`);
     expect(result.status, result.stderr).toBe(0);
     return result.stdout;
   }

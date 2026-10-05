@@ -1,0 +1,227 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Images / Hermes Candidate Validation
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      publish:
+        type: boolean
+        default: false
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: docker.io/derekhsu/openshell-hermes
+
+jobs:
+  validate:
+    if: github.repository == 'derekhsu/NemoClaw'
+    name: Validate ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      CANDIDATE_TAG: ${{ inputs.tag }}
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate candidate tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_pattern='^candidate-[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,80}$'
+          [[ "$CANDIDATE_TAG" =~ $tag_pattern ]] || { echo 'ERROR: invalid candidate tag' >&2; exit 1; }
+          case "$CANDIDATE_TAG" in
+            latest | hermes-*) echo 'ERROR: candidate tag must not replace a release alias' >&2; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/hermes-evidence"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/hermes-evidence/source-commit.txt"
+          df -h
+
+      # These SDKs are unrelated to either Dockerfile. Remove them only on this
+      # disposable hosted runner to leave room for source packages and exports.
+      - name: Prepare hosted runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build source base
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-production-build-args.sh
+          docker buildx build --platform "$PLATFORM" -f agents/hermes/Dockerfile.base             --provenance=false --sbom=false             --output "type=oci,dest=$RUNNER_TEMP/hermes-source-base,tar=false"             --metadata-file "$RUNNER_TEMP/hermes-evidence/base-metadata.json"             --progress plain . 2>&1 | tee "$RUNNER_TEMP/hermes-evidence/base-build.log"
+
+      - name: Verify source base
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(jq -er '."containerimage.digest"' "$RUNNER_TEMP/hermes-evidence/base-metadata.json")"
+          bash scripts/checks/resolve-hermes-pr-source-base.sh             "$RUNNER_TEMP/hermes-source-base" "$digest" "$PLATFORM"
+
+      - name: Build final image
+        shell: bash
+        env:
+          BASE_CONTEXT: ${{ steps.base.outputs.context }}
+          BASE_REFERENCE: ${{ steps.base.outputs.ref }}
+        run: |
+          set -euo pipefail
+          args=(--build-arg "BASE_IMAGE=$BASE_REFERENCE"             --build-arg NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION=1             --build-arg NEMOCLAW_MANAGED_IMAGE_RUNTIME_USER=root)
+          bash scripts/check-production-build-args.sh "${args[@]}"
+          docker buildx build --platform "$PLATFORM" -f agents/hermes/Dockerfile             --build-context "$BASE_CONTEXT" "${args[@]}"             --label "org.opencontainers.image.revision=$GITHUB_SHA"             --provenance=false --sbom=false --load --tag hermes-candidate             --metadata-file "$RUNNER_TEMP/hermes-evidence/final-metadata.json"             --progress plain . 2>&1 | tee "$RUNNER_TEMP/hermes-evidence/final-build.log"
+
+      - name: Verify installed uploader
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image inspect hermes-candidate > "$RUNNER_TEMP/hermes-evidence/image-inspect.json"
+          jq -e --arg arch "$ARCH" --arg sha "$GITHUB_SHA"             'length == 1 and .[0].Architecture == $arch and .[0].Os == "linux" and
+            .[0].Config.Labels["org.opencontainers.image.revision"] == $sha'             "$RUNNER_TEMP/hermes-evidence/image-inspect.json"
+          client_sha="$(sha256sum vendor/clawshell/sandbox-mcp-server/src/sandbox_mcp_server/gateway_client.py | cut -d ' ' -f1)"
+          server_sha="$(sha256sum vendor/clawshell/sandbox-mcp-server/src/sandbox_mcp_server/server.py | cut -d ' ' -f1)"
+          docker run --rm -i --network none --read-only --memory 512m --cpus 1             --tmpfs /tmp:rw,nosuid,nodev,size=32m --user root             --entrypoint /sandbox/.venvs/sandbox-mcp-server/bin/python             hermes-candidate -I -B - "$client_sha" "$server_sha"             < test/support/hermes-installed-uploader-probe.py             | tee "$RUNNER_TEMP/hermes-evidence/installed-uploader.json"
+
+      - name: Save verified image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save hermes-candidate | gzip -1 > "$RUNNER_TEMP/hermes-evidence/hermes-$ARCH.tar.gz"
+          gzip -t "$RUNNER_TEMP/hermes-evidence/hermes-$ARCH.tar.gz"
+          cd "$RUNNER_TEMP/hermes-evidence"
+          sha256sum "hermes-$ARCH.tar.gz" > image-archive.sha256
+
+      - name: Save build and verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/hermes-evidence/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  publish-platform:
+    if: inputs.publish
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      CANDIDATE_TAG: ${{ inputs.tag }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hermes-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/hermes-evidence
+      - name: Load verified image archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/hermes-evidence"
+          sha256sum -c image-archive.sha256
+          gzip -t "hermes-$ARCH.tar.gz"
+          gzip -dc "hermes-$ARCH.tar.gz" | docker load
+          expected_id="$(jq -er '.[0].Id' image-inspect.json)"
+          actual_id="$(docker image inspect hermes-candidate --format '{{.Id}}')"
+          test "$actual_id" = "$expected_id"
+      - name: Log in to Docker Hub
+        if: inputs.publish
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push verified platform image
+        if: inputs.publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$IMAGE_NAME:$CANDIDATE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$ARCH"
+          docker tag hermes-candidate "$ref"
+          docker push "$ref" 2>&1 | tee "$RUNNER_TEMP/hermes-evidence/push.log"
+          digest="$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p "$RUNNER_TEMP/hermes-digest"
+          printf '%s\n' "$IMAGE_NAME@$digest" > "$RUNNER_TEMP/hermes-digest/$ARCH.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: inputs.publish
+        with:
+          name: candidate-digest-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/hermes-digest/
+          if-no-files-found: error
+          retention-days: 3
+
+
+  publish:
+    if: inputs.publish
+    needs: publish-platform
+    runs-on: ubuntu-24.04
+    env:
+      CANDIDATE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: candidate-digest-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish verified candidate manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64="$(cat digests/amd64.txt)"
+          arm64="$(cat digests/arm64.txt)"
+          [[ "$amd64" =~ ^docker.io/derekhsu/openshell-hermes@sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64" =~ ^docker.io/derekhsu/openshell-hermes@sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools create -t "$IMAGE_NAME:$CANDIDATE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" "$amd64" "$arm64"
+          docker buildx imagetools inspect "$IMAGE_NAME:$CANDIDATE_TAG-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --raw > manifest.json
+          jq -e '([.manifests[].platform | select(.os == "linux") | .architecture] | sort) == ["amd64", "arm64"]' manifest.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-published-manifest-${{ github.run_id }}
+          path: manifest.json
+          retention-days: 3

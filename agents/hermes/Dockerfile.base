@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates=20250419 \
         curl=8.14.1-2+deb13u5 \
         git=1:2.47.3-0+deb13u1 \
-        libssl-dev=3.5.7-1~deb13u2 \
+        libssl-dev=3.5.7-1~deb13u3 \
         openssh-server=1:10.0p1-7+deb13u4 \
         xz-utils=5.8.1-1+deb13u1 \
         zlib1g-dev=1:1.3.dfsg+really1.3.1-1+b1 \
@@ -302,6 +302,8 @@ RUN test -x /usr/bin/setpriv \
 # NOT a member of the sandbox group, so it cannot traverse /sandbox/.hermes
 # or touch default-profile files, while the api group grants it read access
 # to the api profile's sealed config/env.
+# grep -c returns status 1 for the expected zero matches; test checks the count.
+# hadolint ignore=DL4006
 RUN groupadd -r -g 999 sandbox \
     && groupadd -r -g 998 gateway \
     && groupadd -r -g 997 api \
@@ -499,7 +501,8 @@ WORKDIR /opt/hermes
 # probe below; relocate the interpreter store under /opt and open it with the
 # same a+rX pass used for the venv.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
-# hadolint ignore=SC2086
+# sha256sum is the final pipeline command and rejects a mismatched package hash.
+# hadolint ignore=SC2086,DL4006
 RUN set -eu; \
     set --; \
     for extra in ${HERMES_UV_EXTRAS}; do \

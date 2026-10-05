@@ -7,6 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { shellQuote } from "../src/lib/core/shell-quote";
+import { extractShellFunction } from "./support/hermes-shell-harness";
 
 function readFixtureText(file: string): string {
   const fd = fs.openSync(file, "r");
@@ -301,6 +303,12 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
 
   it("bootstrap creates the api profile, root-owned anchor, policy, and ownership matrix", () => {
     const fixture = createFixture();
+    const defaultPaths = [
+      fixture.defaultConfigPath,
+      fixture.defaultEnvPath,
+      fixture.defaultHashPath,
+    ];
+    const defaultBefore = defaultPaths.map((target) => fs.readFileSync(target));
     const result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     for (const target of [
@@ -339,10 +347,7 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     const anchor = fs.readFileSync(fixture.apiHashPath, "utf-8");
     expect(anchor).toContain(sha256File(fixture.apiPolicyPath));
     // The default profile is untouched.
-    expect(fs.readFileSync(fixture.defaultConfigPath, "utf-8")).toBe(DEFAULT_CONFIG);
-    expect(fs.readFileSync(fixture.defaultHashPath, "utf-8")).toBe(
-      anchorText(fixture.defaultConfigPath, fixture.defaultEnvPath),
-    );
+    expect(defaultPaths.map((target) => fs.readFileSync(target))).toEqual(defaultBefore);
   });
 
   it("bootstrap never prints the generated key", () => {
@@ -755,14 +760,64 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
   });
 
   it("keeps dashboard routing on the dedicated api profile after managed restarts", () => {
+    const fixture = createFixture();
+    const policy = JSON.parse(MANAGED_POLICY);
+    const key = "sk-OPENSHELL-PROXY-REWRITE";
+    const route = {
+      _nemoclaw_upstream: { provider_key: "api-route" },
+      model: { default: "api-initial", base_url: "http://api.example.test/v1", api_key: key },
+      providers: { "api-route": { api_key: key } },
+      custom_providers: [{ api_key: key }],
+    };
+    policy.env_lines = ["SAFE_SETTING=policy-default"];
+    Object.assign(policy.config, route);
+    policy.dashboard.routing_keys = Object.keys(route);
+    policy.dashboard.env_keys = ["SAFE_SETTING"];
+    fs.chmodSync(fixture.managedPolicyPath, 0o644);
+    fs.writeFileSync(fixture.managedPolicyPath, JSON.stringify(policy));
+    expect(bootstrap(fixture).status).toBe(0);
+    const defaults = [fixture.defaultConfigPath, fixture.defaultEnvPath, fixture.defaultHashPath];
+    const defaultBefore = defaults.map((target) => fs.readFileSync(target));
     const src = fs.readFileSync(START_SCRIPT, "utf-8");
-    expect(src).toContain(
-      'HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"',
-    );
-    expect(src).toContain('HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"');
-    expect(src).toContain(
-      '"$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml"',
-    );
-    expect(src).toContain('"$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"');
+    const routeStart = src.indexOf('HERMES_DASHBOARD_SOURCE_CONFIG="${HERMES_DIR}/config.yaml"');
+    const routeEnd = src.indexOf("\nvalidate_tcp_port()", routeStart);
+    const dashboard = path.join(fixture.profilesDir, "dashboard-home");
+    const script = [
+      "set -euo pipefail",
+      `HERMES_DIR=${shellQuote(fixture.hermesDir)}`,
+      `HERMES_DASHBOARD_HOME=${shellQuote(dashboard)}`,
+      "NEMOCLAW_REQUIRE_API_PROFILE=1",
+      "_HERMES_PYTHON=python3",
+      `_HERMES_DASHBOARD_CONFIG_SEEDER=${shellQuote(path.join(import.meta.dirname, "../agents/hermes/seed-dashboard-config.py"))}`,
+      `_HERMES_MANAGED_POLICY=${shellQuote(fixture.managedPolicyPath)}`,
+      extractShellFunction(src, "truthy_env"),
+      src.slice(routeStart, routeEnd).replaceAll("/sandbox/.hermes-api", fixture.apiRootDir),
+      extractShellFunction(src, "seed_hermes_dashboard_config"),
+      extractShellFunction(src, "prepare_hermes_dashboard_home"),
+      'prepare_hermes_dashboard_home ""',
+    ].join("\n");
+    for (const generation of ["first", "restarted"]) {
+      fs.writeFileSync(
+        fixture.apiConfigPath,
+        JSON.stringify({
+          ...route,
+          model: { ...route.model, default: `api-${generation}` },
+          approvals: policy.config.approvals,
+          session_reset: policy.config.session_reset,
+        }),
+      );
+      fs.writeFileSync(
+        fixture.apiEnvPath,
+        `SAFE_SETTING=api-${generation}\nAPI_SERVER_KEY=${"a".repeat(64)}\n`,
+      );
+      const run = spawnSync("bash", ["-c", script], { encoding: "utf8", timeout: 5000 });
+      expect(run.status, run.stderr).toBe(0);
+      expect(readFixtureText(path.join(dashboard, "config.yaml"))).toContain(`api-${generation}`);
+      expect(readFixtureText(path.join(dashboard, ".env"))).toContain(
+        `SAFE_SETTING=api-${generation}`,
+      );
+      expect(readFixtureText(path.join(dashboard, ".env"))).not.toContain("API_SERVER_KEY");
+    }
+    expect(defaults.map((target) => fs.readFileSync(target))).toEqual(defaultBefore);
   });
 });

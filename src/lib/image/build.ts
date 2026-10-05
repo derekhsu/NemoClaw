@@ -2,16 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import path from "node:path";
-
+import {
+  dockerBuild as adapterDockerBuild,
+  dockerPush as adapterDockerPush,
+} from "../adapters/docker/image";
+import { dockerImageInspectFormat } from "../adapters/docker/inspect";
 import { hermesBaseImageSupportsMcp } from "../agent/base-image";
 import { readHermesPinnedBaseImageRef } from "../agent/hermes-base-image-pin";
-import { dockerBuild as adapterDockerBuild, dockerImageInspectFormat } from "../adapters/docker";
 import { type ResolveBaseImageOptions, resolveSandboxBaseImage } from "../sandbox-base-image";
 import { resolveAgentImageDefinition } from "./agent-image-definition";
 import {
   resolveSourceCommit,
-  stageImageBuildContext,
   type StageImageBuildContextResult,
+  stageImageBuildContext,
 } from "./stage";
 
 export type ImageBuildFlags = {
@@ -182,10 +185,7 @@ async function defaultDockerBuild(input: DockerBuildInput): Promise<DockerBuildR
 }
 
 async function defaultDockerPush(tag: string): Promise<string | null> {
-  // dockerPush is a thin wrapper around `docker push`. We reuse the docker
-  // adapter's run helper via inspect after push to capture the registry digest.
-  const { dockerRun } = await import("../adapters/docker/run");
-  const result = dockerRun(["push", tag], { stdio: "inherit" });
+  const result = adapterDockerPush(tag, { stdio: "inherit" });
   if (result.status !== 0) {
     throw new Error(`docker push failed for ${tag} (exit ${result.status})`);
   }

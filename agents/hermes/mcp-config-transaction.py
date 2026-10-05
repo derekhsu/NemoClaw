@@ -58,6 +58,7 @@ SERVER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # ClawShell binds the shared managed upload key to a sandbox with an HMAC
 # scope proof, sent as "<sandbox_id>.<32 lowercase hex>"; accept that claim.
 SANDBOX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(\.[0-9a-f]{32})?$")
+CLAW_SHELL_SCOPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.[0-9a-f]{32}$")
 MCP_DNS_LABEL_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
@@ -378,8 +379,17 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
     if raw_url != canonical:
         raise ValueError("MCP mutation payload URL must be canonical")
     headers = payload.get("headers")
-    if not isinstance(headers, dict) or set(headers) != {"Authorization"}:
-        raise ValueError("MCP mutation payload must contain one Authorization header")
+    if not isinstance(headers, dict) or set(headers) not in (
+        {"Authorization"}, {"Authorization", "X-ClawShell-Sandbox-Id"}
+    ):
+        raise ValueError("MCP mutation payload contains unsupported headers")
+    if "X-ClawShell-Sandbox-Id" in headers:
+        scope = headers["X-ClawShell-Sandbox-Id"]
+        # Only the fixed ClawShell entry carries a signed sandbox claim.
+        # The Gateway verifies the proof; this helper validates its syntax.
+        if (server != "clawshell-gateway" or not isinstance(scope, str)
+                or CLAW_SHELL_SCOPE_RE.fullmatch(scope) is None):
+            raise ValueError("ClawShell MCP sandbox scope is invalid")
     authorization = headers.get("Authorization")
     authorization_match = (
         ENV_PLACEHOLDER_RE.fullmatch(authorization)
@@ -390,7 +400,13 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
         raise ValueError(
             "Hermes MCP Authorization must contain an OpenShell environment placeholder"
         )
-    if action == "add" and _credential_name_is_reserved(authorization_match.group(1)):
+    managed_gateway_credential = (
+        server == "clawshell-gateway"
+        and "X-ClawShell-Sandbox-Id" in headers
+        and authorization_match.group(1) == "GATEWAY_API_KEY"
+    )
+    if (action == "add" and _credential_name_is_reserved(authorization_match.group(1))
+            and not managed_gateway_credential):
         raise ValueError(
             "Hermes MCP Authorization uses a reserved credential environment name"
         )

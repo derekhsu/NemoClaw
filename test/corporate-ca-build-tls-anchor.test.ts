@@ -226,6 +226,7 @@ describe("Hermes corporate proxy CA final-stage trust", () => {
     );
     const expectedManagedUnionInstallRun = [
       "RUN --network=none --mount=from=hermes-managed-teams-wheels,target=/opt/nemoclaw-hermes-teams-wheels,ro \\",
+      "    set -eu; \\",
       '    if [ "$NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION" = "1" ]; then \\',
       "        UV_OFFLINE=true UV_FIND_LINKS=/opt/nemoclaw-hermes-teams-wheels \\",
       "        node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts \\",

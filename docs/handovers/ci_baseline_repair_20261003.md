@@ -529,3 +529,32 @@ These comments replace the earlier base warning status without changing global l
 The pre-commit run over seven new or updated implementation files was still running at this documentation checkpoint.
 Commit, push, dispatch, and hosted results will be recorded separately after they occur.
 The workflow implementation has not yet established hosted build, probe, publication, or deployment success.
+
+## Hosted Candidate Failure and Offline Dependency Repair (October 05, 2026)
+
+GitHub Actions run `37258832319` completed with failure on both native architectures.
+Both native base builds passed, and both exported OCI layouts passed descriptor, byte-digest, and platform verification.
+The native amd64 base result supersedes the unresolved amd64 base outcome from local cross-architecture emulation.
+It does not establish complete CI or final-image success.
+The amd64 job log is `ci-37258832319/amd64-job.log` under the October 05 build artifact directory.
+The arm64 artifact contains its `base-build.log`.
+
+Both final-image builds failed because the offline Teams capability installer lacked `pydantic-settings>=2.11`.
+The installer failed at build stage 52, but that `RUN` instruction did not enable shell failure propagation.
+A later Python version check returned zero and masked the installer's failure status.
+The package metadata check then failed at stage 56.
+The workflow did not reach installed-image verification or publication.
+The publication dependency gates prevented Docker Hub secret use and image publication.
+
+The repair adds the universal `pydantic_settings-2.11.0-py3-none-any.whl` to the Hermes Dockerfile's checksum-pinned offline payload.
+Its SHA-256 is `fe2cea3413b9530d10f3a5875adffb17ada5c1e1bab0b2885546d7310415207c`.
+The official wheel metadata requires `pydantic>=2.7`, `python-dotenv>=0.21`, and `typing-inspection>=0.4`.
+The base already contains compatible versions `2.13.4`, `1.2.2`, and `0.4.2`, respectively.
+The wheel review JSON is preserved outside the checkout.
+The repair also adds `set -eu` to the affected `RUN` instruction so installer failure stops the build.
+Offline installation remains required, and the bundled Hermes version is unchanged.
+
+The regression executes the actual `RUN` payload with an installer fixture that exits with status 23.
+Before the fix, the payload returned zero; after the fix, it returned status 23.
+The focused three-file matrix passed all 20 tests in 1.76 seconds.
+These local results do not establish a repaired hosted final image, installed-image probe, publication, or deployment.

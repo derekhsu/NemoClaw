@@ -77,13 +77,35 @@ All other reserved credential names remain rejected when adding remote MCP entri
 Generic remote MCP entries retain the existing Bearer placeholder contract.
 The default profile repair must not change the API profile tool policy or its independent integrity state.
 
-## Image and Live Verification Gates
+## Candidate Image Publication
 
 Source test results do not verify an installed image.
-Build a candidate containing the reviewed helper repair with the separately reviewed CI baseline changes.
-Record the combined source revision, build result, target architectures, and immutable image digest.
-Use a candidate tag rather than `latest`.
+The [candidate image workflow run 37395756882](https://github.com/derekhsu/NemoClaw/actions/runs/37395756882) completed successfully for source commit `f87bf1a60b87915bc9893953d10276b23e3b71c1`.
+Both native architecture jobs passed the installed uploader probe and installed default MCP scope probe before Docker Hub publication.
+The scope probe verifies the installed helper bytes and accepted and rejected payloads without network access.
+These results verify the candidate image contracts, not a running ClawShell sandbox.
+
+The [initial workflow run 37341123254](https://github.com/derekhsu/NemoClaw/actions/runs/37341123254) failed because the system Python interpreter lacked the `yaml` module.
+The workflow now runs the scope probe with `/opt/hermes/.venv/bin/python`, which provides the helper's runtime dependencies.
+The successful run includes that interpreter correction.
+
+Docker Hub contains `derekhsu/openshell-hermes:candidate-hermes-default-mcp-20261006-37395756882-1`.
+The registry verification record identifies these immutable digests and the same source commit on both platforms:
+
+| Manifest | Digest |
+| --- | --- |
+| Image index | `sha256:1423523e249a3c32bc59c93f442de0dc76ddaa8d55df0d19f9882ee798303b8a` |
+| Linux amd64 | `sha256:1f4e1631d3bf64b1da427366812b1d1b529f7ccd4a8194e0153cbbb7b44d69ae` |
+| Linux arm64 | `sha256:0039745c0c890f515669aad4613dfcbeff9557a8d832a526d17350ffd8d0b4bc` |
+
+Use the image index digest for sandbox adoption.
+The published tag is a candidate tag and does not use `latest`.
 The September 30 image digests and October 03 source evidence predate this repair and cannot verify its behavior.
+
+## Live Verification Gates
+
+Candidate publication does not establish sandbox adoption or successful registration against the real HTTPS MCP endpoint.
+Those live results remain pending.
 
 Before adopting the candidate, complete these checks against that digest:
 
@@ -95,7 +117,7 @@ Before adopting the candidate, complete these checks against that digest:
 6. Confirm the restricted API profile retains its tool policy and contains no new MCP server entry.
 7. Confirm default MCP configuration and API profile isolation across the required restart and rebuild operations.
 
-No candidate build, image publication, deployment, or live sandbox result is asserted by this handover.
+This handover records candidate image verification and publication, but no deployment or live sandbox result.
 The implementing agent must record source test results and candidate image results separately.
 Paid inference and live probes are outside this documentation task.
 

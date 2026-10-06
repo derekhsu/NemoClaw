@@ -117,7 +117,7 @@ jobs:
           helper_sha="$(sha256sum agents/hermes/mcp-config-transaction.py | cut -d ' ' -f1)"
           docker run --rm -i --network none --read-only --memory 512m --cpus 1 \
             --tmpfs /tmp:rw,nosuid,nodev,size=32m --user root \
-            --entrypoint /usr/bin/python3 hermes-candidate -I -B - "$helper_sha" \
+            --entrypoint /opt/hermes/.venv/bin/python hermes-candidate -I -B - "$helper_sha" \
             < test/support/hermes-installed-mcp-scope-probe.py \
             | tee "$RUNNER_TEMP/hermes-evidence/installed-mcp-scope.json"
 

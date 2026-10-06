@@ -846,6 +846,9 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
     host_actions = {
         "seal-restart",
         "write-config",
+        "bootstrap-api-profile",
+        "verify-api-profile",
+        "normalize-api-profile",
         "begin-shields-transition",
         "apply-shields-transition",
         "finish-shields-transition",
@@ -4621,6 +4624,719 @@ def write_config_transaction(
         raise
 
 
+# ── Fixed API-profile contract ───────────────────────────────────
+#
+# The `api` profile is image-owned and served by a dedicated gateway process
+# running as the `hermesapi` user (never the sandbox or gateway uid). The
+# profile home lives outside /sandbox/.hermes so the api runtime uid never
+# enters the default profile's tree:
+#
+#   /sandbox/.hermes-api/               root:root    0711 (traverse only)
+#   /sandbox/.hermes-api/profiles/      root:root    0711 (traverse only)
+#   .../profiles/api/                   sandbox:api  3770 (sticky+setgid)
+#   config.yaml, .env, SOUL.md          sandbox:api  0640 (admin writes,
+#   skills/                             sandbox:api  2750    runtime reads)
+#   .config-hash, .clawshell-tool-policy.json
+#                                       root:api     0440 (guard writes only)
+#   anchor + record                     under root-owned /sandbox/.nemoclaw
+#
+# The anchor pins the fixed policy digest and the structural contract (owner,
+# group, mode, directory identity). It deliberately does not pin config.yaml
+# or .env content: the default-side operator legitimately modifies them, and
+# --expected-config-sha256 on write-config is a compare-and-swap precondition,
+# not a trust baseline. Directory identity is pinned by inode alone: st_dev
+# changes when the container's overlay filesystem is remounted across a
+# sandbox stop/start, while st_ino survives and still catches replacement.
+
+HERMES_API_PROFILE_DIR = "/sandbox/.hermes-api/profiles/api"
+HERMES_API_ANCHOR_FILE = "/sandbox/.nemoclaw/hermes-api.config-hash"
+HERMES_API_RECORD_FILE = "/sandbox/.nemoclaw/hermes-api-profile.json"
+HERMES_API_STATE_FILE = "/run/nemoclaw/hermes-api-restart-seal.json"
+HERMES_API_INTERNAL_PORT = 18699
+HERMES_API_OWNER_UID = 0
+HERMES_API_OWNER_GID = 0
+HERMES_API_POLICY_VERSION = "clawshell-api-minimal-v1"
+HERMES_API_POLICY_BYTES = (
+    json.dumps(
+        {
+            "version": HERMES_API_POLICY_VERSION,
+            "allow": ["core.chat"],
+            "optional_allow": ["sandbox-file-uploader"],
+            "deny": [
+                "terminal",
+                "browser",
+                "delegation",
+                "subagent",
+                "cron",
+                "memory.write",
+                "arbitrary_mcp",
+                "unlisted_skills",
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n"
+).encode("utf-8")
+# The stock Hermes default soul (hermes_cli/default_soul.py DEFAULT_SOUL_MD),
+# the same bytes the image writes to /sandbox/.hermes/SOUL.md. Duplicated here
+# because the guard seals the api profile before the gateway ever runs — and
+# the runtime must never own it, or the api agent could rewrite its own soul.
+HERMES_API_SOUL_BYTES = (
+    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+    "range of tasks including answering questions, writing and editing code, "
+    "analyzing information, creative work, and executing actions via your "
+    "tools. You communicate clearly, admit uncertainty when appropriate, and "
+    "prioritize being genuinely useful over being verbose unless otherwise "
+    "directed below. Be targeted and efficient in your exploration and "
+    "investigations.\n"
+).encode("utf-8")
+HERMES_API_CONFIG_TEMPLATE = (
+    "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
+    "platforms:\n"
+    "  api_server:\n"
+    "    enabled: true\n"
+    "    extra:\n"
+    f"      port: {HERMES_API_INTERNAL_PORT}\n"
+    "      host: 127.0.0.1\n"
+    "platform_toolsets:\n"
+    "  api_server:\n"
+    "    - file\n"
+    "model:\n"
+    "  default: hermes-agent\n"
+)
+
+# The dashboard seeder mirrors the api profile's config into the dashboard
+# profile and refuses when the gateway's managed sections diverge from the
+# image policy. The api profile therefore carries those sections verbatim:
+# policy parity is part of the sealed contract, not caller-controlled bytes.
+HERMES_MANAGED_POLICY_PATH = "/usr/local/share/nemoclaw/hermes-managed-policy.json"
+
+
+def _api_managed_sections() -> dict:
+    """Return the image policy's managed top-level config sections.
+
+    Fails closed when the managed policy is unreadable or structurally
+    unexpected — bootstrap and write-config cannot seal a profile whose
+    policy parity cannot be proven.
+    """
+    try:
+        with open(HERMES_MANAGED_POLICY_PATH, "r", encoding="utf-8") as handle:
+            policy = json.load(handle)
+        managed_paths = policy["managed_paths"]
+        config = policy["config"]
+        if not isinstance(managed_paths, list) or not isinstance(config, dict):
+            raise ValueError("managed policy shape is unexpected")
+        sections: dict = {}
+        for path in managed_paths:
+            top = str(path).split(".", 1)[0]
+            sections[top] = copy.deepcopy(config[top])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise UnsafePathError(
+            f"managed policy is unavailable for the api profile: {exc}"
+        ) from exc
+    return sections
+
+
+def _api_config_bytes() -> bytes:
+    """Render the api profile config: fixed template plus managed sections."""
+    return (
+        HERMES_API_CONFIG_TEMPLATE
+        + yaml.safe_dump(_api_managed_sections(), sort_keys=True)
+    ).encode("utf-8")
+
+
+def _api_overlay_managed_sections(config_bytes: bytes) -> bytes:
+    """Pin the managed policy sections inside a caller-supplied api config.
+
+    The caller owns model routing and providers; the image owns the managed
+    policy posture. Overwriting those sections here keeps the api profile
+    sealed against policy weakening regardless of the submitted document.
+    """
+    try:
+        text = config_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnsafePathError("refusing non-UTF-8 Hermes api config input") from exc
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise UnsafePathError("refusing malformed Hermes api config input") from exc
+    if not isinstance(document, dict):
+        raise UnsafePathError("refusing non-mapping Hermes api config input")
+    document.update(_api_managed_sections())
+    rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    header = "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
+    return (header + rendered).encode("utf-8")
+
+
+def _api_identities() -> tuple[int, int, int]:
+    """Return (admin_uid, admin_gid, api_gid) for the api profile contract.
+
+    The admin identity is the `sandbox` user (the default-side operator); the
+    api group scopes the dedicated `hermesapi` runtime's read access.
+    """
+    try:
+        admin = pwd.getpwnam("sandbox")
+        api_group = grp.getgrnam("api")
+    except KeyError as exc:
+        raise UnsafePathError(f"missing api profile identity: {exc}") from exc
+    return admin.pw_uid, admin.pw_gid, api_group.gr_gid
+
+
+def _api_contract_checks() -> list[tuple[str, int, int, int, bool]]:
+    """(path, uid, gid, mode, is_dir) entries for the fixed api contract."""
+    admin_uid, admin_gid, api_gid = _api_identities()
+    api_dir = HERMES_API_PROFILE_DIR
+    profiles_dir = os.path.dirname(api_dir)
+    api_root = os.path.dirname(profiles_dir)
+    return [
+        (api_root, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID, 0o711, True),
+        (profiles_dir, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID, 0o711, True),
+        (api_dir, admin_uid, api_gid, 0o3770, True),
+        (os.path.join(api_dir, "config.yaml"), admin_uid, api_gid, 0o640, False),
+        (os.path.join(api_dir, ".env"), admin_uid, api_gid, 0o640, False),
+        # The agent-design surface is admin-owned too: the default side edits
+        # SOUL.md and installs skills, while the api runtime group can only
+        # read them. skills/ keeps setgid so admin-added skill files stay
+        # group-readable for the runtime.
+        (os.path.join(api_dir, "SOUL.md"), admin_uid, api_gid, 0o640, False),
+        (os.path.join(api_dir, "skills"), admin_uid, api_gid, 0o2750, True),
+        (
+            os.path.join(api_dir, ".clawshell-tool-policy.json"),
+            HERMES_API_OWNER_UID,
+            api_gid,
+            0o440,
+            False,
+        ),
+        (os.path.join(api_dir, ".config-hash"), HERMES_API_OWNER_UID, api_gid, 0o440, False),
+        (HERMES_API_ANCHOR_FILE, HERMES_API_OWNER_UID, api_gid, 0o440, False),
+        (HERMES_API_RECORD_FILE, HERMES_API_OWNER_UID, api_gid, 0o440, False),
+    ]
+
+
+def _lstat_no_follow(path: str) -> os.stat_result:
+    try:
+        return os.lstat(path)
+    except OSError as exc:
+        raise UnsafePathError(
+            f"refusing unsafe api profile path {path}: {exc}"
+        ) from exc
+
+
+def _verify_api_contract() -> dict[str, object]:
+    """Verify the api profile structure, anchor, and record. Fail closed."""
+    api_dir_stat: os.stat_result | None = None
+    for path, uid, gid, mode, is_dir in _api_contract_checks():
+        st = _lstat_no_follow(path)
+        if is_dir:
+            if not stat.S_ISDIR(st.st_mode):
+                raise UnsafePathError(f"refusing non-directory api profile path: {path}")
+        else:
+            _validate_regular(path, st)
+        if st.st_uid != uid or st.st_gid != gid:
+            raise UnsafePathError(f"refusing mis-owned api profile path: {path}")
+        if stat.S_IMODE(st.st_mode) != mode:
+            raise UnsafePathError(f"refusing mis-moded api profile path: {path}")
+        if path == HERMES_API_PROFILE_DIR:
+            api_dir_stat = st
+
+    record_text, _record_snapshot = _read_text(HERMES_API_RECORD_FILE, MAX_HASH_BYTES * 4)
+    try:
+        record = json.loads(record_text)
+    except json.JSONDecodeError as exc:
+        raise UnsafePathError("refusing malformed api profile record") from exc
+    if not isinstance(record, dict) or record.get("version") != 1:
+        raise UnsafePathError("refusing unsupported api profile record")
+    if record.get("profile_dir") != HERMES_API_PROFILE_DIR:
+        raise UnsafePathError("refusing api profile record for a different directory")
+    if api_dir_stat is None or record.get("dir_ino") != api_dir_stat.st_ino:
+        raise UnsafePathError("api profile directory identity does not match its record")
+    policy_sha = record.get("policy_sha256")
+    if not isinstance(policy_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", policy_sha):
+        raise UnsafePathError("refusing malformed api profile policy digest")
+    if not secrets.compare_digest(
+        policy_sha, hashlib.sha256(HERMES_API_POLICY_BYTES).hexdigest()
+    ):
+        raise UnsafePathError("api profile record does not pin the fixed tool policy")
+
+    anchor_text_value, _anchor_snapshot = _read_text(HERMES_API_ANCHOR_FILE, MAX_HASH_BYTES)
+    policy_path = os.path.join(HERMES_API_PROFILE_DIR, ".clawshell-tool-policy.json")
+    expected_anchor_prefix = f"{policy_sha}  {policy_path}\n"
+    if not anchor_text_value.startswith(expected_anchor_prefix):
+        raise UnsafePathError("refusing malformed Hermes api profile anchor")
+    policy_file = _open_regular(policy_path)
+    try:
+        policy_bytes = policy_file.read_bytes(MAX_CONFIG_INPUT_BYTES)
+    finally:
+        policy_file.close()
+    if not secrets.compare_digest(
+        hashlib.sha256(policy_bytes).hexdigest(), policy_sha
+    ):
+        raise UnsafePathError("api profile policy drifted from its anchor")
+    return record
+
+
+def _api_env_key(env_path: str) -> str | None:
+    try:
+        text, _snapshot = _read_text(env_path, MAX_ENV_BYTES)
+    except (UnsafePathError, FileNotFoundError):
+        return None
+    key = _first_env_assignment_value(text, "API_SERVER_KEY")
+    if key and _is_generated_api_server_key(key):
+        return key
+    return None
+
+
+def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:
+    try:
+        fd = _open_directory(path)
+    except FileNotFoundError:
+        os.mkdir(path, 0o700)
+        fd = _open_directory(path)
+    try:
+        os.fchown(fd, uid, gid)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+            # Directories need traversal; the API gid reads admin-owned design
+            # files and creates runtime state under the sticky profile directory.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+
+
+def _api_write_file(path: str, data: bytes, mode: int, uid: int, gid: int) -> None:
+    try:
+        opened = _open_regular(path)
+    except (FileNotFoundError, UnsafePathError):
+        opened = None
+    if opened is None:
+        _atomic_replace(path, data, expected=None, mode=mode, uid=uid, gid=gid)
+        return
+    try:
+        snapshot = opened.snapshot
+    finally:
+        opened.close()
+    _atomic_replace(path, data, expected=snapshot, mode=mode, uid=uid, gid=gid)
+
+
+def _api_compat_hash_text(api_dir: str) -> str:
+    config_path = os.path.join(api_dir, "config.yaml")
+    env_path = os.path.join(api_dir, ".env")
+    config_text, _config_snapshot = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)
+    mcp_digest = _canonical_mcp_servers_digest(config_text)
+    config_file = _open_regular(config_path)
+    try:
+        config_digest = hashlib.sha256(
+            config_file.read_bytes(MAX_CONFIG_INPUT_BYTES)
+        ).hexdigest()
+    finally:
+        config_file.close()
+    env_file = _open_regular(env_path)
+    try:
+        env_digest = hashlib.sha256(env_file.read_bytes(MAX_ENV_BYTES)).hexdigest()
+    finally:
+        env_file.close()
+    return (
+        f"{config_digest}  {config_path}\n"
+        f"{env_digest}  {env_path}\n"
+        f"# nemoclaw-hermes-mcp-state-v1 intended={mcp_digest} applied={mcp_digest}\n"
+    )
+
+
+def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
+    """Bring the admin-owned design files up to the sealed contract.
+
+    SOUL.md and skills/ shape what the api agent is; they must stay
+    admin-owned so the hermesapi runtime can read but never edit them.
+    Profiles sealed before this contract existed carry runtime-owned copies:
+    their content is adopted (the operator reviews it anyway) while ownership
+    and mode are restored. Missing entries are created — SOUL.md from the
+    stock default, skills/ as an empty setgid dir. A non-regular SOUL.md
+    (symlink, fifo) is never followed or rewritten — it fails closed.
+    """
+    api_dir = HERMES_API_PROFILE_DIR
+    soul_path = os.path.join(api_dir, "SOUL.md")
+    skills_dir = os.path.join(api_dir, "skills")
+    try:
+        soul_stat = os.lstat(soul_path)
+    except FileNotFoundError:
+        soul_stat = None
+    if soul_stat is None:
+        _api_write_file(soul_path, HERMES_API_SOUL_BYTES, 0o640, admin_uid, api_gid)
+    elif not stat.S_ISREG(soul_stat.st_mode):
+        raise UnsafePathError("refusing non-regular api profile SOUL.md")
+    else:
+        # Pre-contract files were runtime-owned. Open without following a
+        # replacement symlink or waiting for a FIFO before checking the inode.
+        fd = os.open(
+            soul_path, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if not stat.S_ISREG(opened_stat.st_mode) or (
+                opened_stat.st_dev, opened_stat.st_ino
+            ) != (soul_stat.st_dev, soul_stat.st_ino):
+                raise UnsafePathError("api design file changed during ownership repair")
+            os.fchown(fd, admin_uid, api_gid)
+            # The API gid can read SOUL.md, but only the admin uid can write it.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, 0o640)
+        finally:
+            os.close(fd)
+    _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
+    # Skills installed before the contract change remain runtime-owned inside
+    # the now admin-owned dir; re-own the whole tree so installed skill
+    # content is read-only to the api runtime as well.
+    for parent, dirs, files in os.walk(skills_dir):
+        for name in dirs + files:
+            entry = os.path.join(parent, name)
+            try:
+                entry_stat = os.lstat(entry)
+            except FileNotFoundError:
+                continue
+            # lchown never follows the final component, so a symlink planted
+            # by the runtime uid cannot redirect the ownership repair.
+            if stat.S_ISLNK(entry_stat.st_mode):
+                os.lchown(entry, admin_uid, api_gid)
+                continue
+            if not (stat.S_ISREG(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode)):
+                raise UnsafePathError("refusing special file in api skills tree")
+            fd = os.open(
+                entry, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
+            )
+            try:
+                opened_stat = os.fstat(fd)
+                if stat.S_IFMT(opened_stat.st_mode) != stat.S_IFMT(entry_stat.st_mode) or (
+                    opened_stat.st_dev, opened_stat.st_ino
+                ) != (
+                    entry_stat.st_dev, entry_stat.st_ino
+                ):
+                    raise UnsafePathError("api design entry changed during ownership repair")
+                os.fchown(fd, admin_uid, api_gid)
+                # Installed skills are readable by the API gid and writable only by admin.
+                # codeql[py/overly-permissive-file]
+                os.fchmod(fd, 0o750 if stat.S_ISDIR(opened_stat.st_mode) else 0o640)
+            finally:
+                os.close(fd)
+
+
+def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
+    """(Re)write the complete api profile contract with a fresh key.
+
+    Never adopts surviving file content: the profile is re-sealed from the
+    fixed template and a newly minted API_SERVER_KEY.
+    """
+    api_dir = HERMES_API_PROFILE_DIR
+    profiles_dir = os.path.dirname(api_dir)
+    api_root = os.path.dirname(profiles_dir)
+    _api_ensure_dir(api_root, 0o711, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID)
+    _api_ensure_dir(profiles_dir, 0o711, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID)
+    _api_ensure_dir(api_dir, 0o3770, admin_uid, api_gid)
+
+    config_path = os.path.join(api_dir, "config.yaml")
+    env_path = os.path.join(api_dir, ".env")
+    policy_path = os.path.join(api_dir, ".clawshell-tool-policy.json")
+    compat_path = os.path.join(api_dir, ".config-hash")
+
+    _api_write_file(
+        config_path,
+        _api_config_bytes(),
+        0o640,
+        admin_uid,
+        api_gid,
+    )
+    api_key = secrets.token_hex(32)
+    _api_write_file(
+        env_path, f"API_SERVER_KEY={api_key}\n".encode("utf-8"), 0o640, admin_uid, api_gid
+    )
+    _api_write_file(
+        policy_path, HERMES_API_POLICY_BYTES, 0o440, HERMES_API_OWNER_UID, api_gid
+    )
+    _api_write_file(
+        compat_path,
+        _api_compat_hash_text(api_dir).encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    _api_ensure_design_surface(admin_uid, api_gid)
+
+    policy_sha = hashlib.sha256(HERMES_API_POLICY_BYTES).hexdigest()
+    anchor_text_value = (
+        f"{policy_sha}  {policy_path}\n"
+        f"# nemoclaw-hermes-api-anchor-v1 profile={api_dir}\n"
+    )
+    _api_write_file(
+        HERMES_API_ANCHOR_FILE,
+        anchor_text_value.encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    dir_stat = _lstat_no_follow(api_dir)
+    record = {
+        "version": 1,
+        "profile_dir": api_dir,
+        "dir_ino": dir_stat.st_ino,
+        "policy_sha256": policy_sha,
+    }
+    _api_write_file(
+        HERMES_API_RECORD_FILE,
+        (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    _verify_api_contract()
+
+
+def verify_api_profile() -> None:
+    """Read-only verification of the api profile contract. Fails closed.
+
+    The api runtime supervisor runs this before launching the dedicated
+    gateway and on every respawn: a drifted anchor, replaced path, missing
+    key, or interrupted config-write journal must never yield a running api
+    process. Recovery belongs to the next write-config transaction, which
+    re-enters through _recover_api_config_write.
+    """
+    _verify_api_contract()
+    env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+    if _api_env_key(env_path) is None:
+        raise UnsafePathError(
+            "refusing api profile without a readable generated API_SERVER_KEY"
+        )
+    if os.path.exists(HERMES_API_STATE_FILE):
+        raise UnsafePathError(
+            "refusing api runtime start with an interrupted config transaction"
+        )
+    print("verified=1")
+
+
+def normalize_api_profile() -> None:
+    """Restore the design-surface contract, then verify. Root-only.
+
+    The api runtime supervisor calls this instead of a bare verify before
+    every launch and respawn: admin edits land through ordinary file writes
+    and can drop the pinned owner/mode (umask 644, a replaced skills file),
+    so respawns repair the structure before asserting it. Sealed bytes —
+    the policy, anchor, record — are still only verified, never rewritten.
+    """
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError(
+            "normalize-api-profile requires the privileged executor identity"
+        )
+    if not os.path.isdir(HERMES_API_PROFILE_DIR):
+        raise UnsafePathError("api profile is not provisioned")
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    _api_ensure_design_surface(admin_uid, api_gid)
+    _verify_api_contract()
+    env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+    if _api_env_key(env_path) is None:
+        raise UnsafePathError(
+            "refusing api profile without a readable generated API_SERVER_KEY"
+        )
+    if os.path.exists(HERMES_API_STATE_FILE):
+        raise UnsafePathError(
+            "refusing api runtime start with an interrupted config transaction"
+        )
+    print("normalized=1")
+
+
+def bootstrap_api_profile() -> None:
+    """Create or verify the fixed image-owned api profile. Root-only."""
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError(
+            "bootstrap-api-profile requires the privileged executor identity"
+        )
+    admin_uid, _admin_gid, api_gid = _api_identities()
+
+    anchor_present = os.path.exists(HERMES_API_ANCHOR_FILE) and os.path.exists(
+        HERMES_API_RECORD_FILE
+    )
+    profile_present = os.path.isdir(HERMES_API_PROFILE_DIR) and not os.path.islink(
+        HERMES_API_PROFILE_DIR
+    )
+    if anchor_present and profile_present:
+        # Design files predate the sealed contract on older profiles; restore
+        # their admin ownership before verifying so the upgrade does not fail
+        # closed on entries the runtime used to own.
+        _api_ensure_design_surface(admin_uid, api_gid)
+        # Verified retry: the structure must match the sealed contract exactly;
+        # drift fails closed rather than re-sealing over a live anchor.
+        _verify_api_contract()
+        if _api_env_key(os.path.join(HERMES_API_PROFILE_DIR, ".env")) is None:
+            # The key was lost without anchor drift; re-mint it in place.
+            api_key = secrets.token_hex(32)
+            env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+            _api_write_file(
+                env_path,
+                f"API_SERVER_KEY={api_key}\n".encode("utf-8"),
+                0o640,
+                admin_uid,
+                api_gid,
+            )
+            _api_write_file(
+                os.path.join(HERMES_API_PROFILE_DIR, ".config-hash"),
+                _api_compat_hash_text(HERMES_API_PROFILE_DIR).encode("utf-8"),
+                0o440,
+                HERMES_API_OWNER_UID,
+                api_gid,
+            )
+        print("verified=1")
+        return
+
+    # Missing anchor (rebuild remnant), missing profile with a stale anchor,
+    # or first boot: re-seal from scratch with a fresh key. Surviving file
+    # content is never adopted.
+    _seal_api_profile(admin_uid, api_gid)
+    print("bootstrapped=1")
+
+
+def _recover_api_config_write(state_file: str) -> None:
+    state_data = _load_restart_state(state_file)
+    phase = str(state_data.get("phase", ""))
+    if not phase.startswith("config-write"):
+        raise UnsafePathError(
+            f"refusing unsupported api transaction phase: {phase or 'unknown'}"
+        )
+    write_state = state_data.get("config_write")
+    if not isinstance(write_state, dict):
+        raise UnsafePathError(
+            "refusing api config-write recovery without rollback metadata"
+        )
+    encoded_original = write_state.get("original_base64")
+    original_digest = write_state.get("original_sha256")
+    if not isinstance(encoded_original, str) or not isinstance(original_digest, str):
+        raise UnsafePathError("refusing malformed api config-write rollback metadata")
+    original_bytes = _decode_bounded_base64(
+        encoded_original, MAX_CONFIG_INPUT_BYTES, "api config-write rollback bytes"
+    )
+    if not secrets.compare_digest(
+        hashlib.sha256(original_bytes).hexdigest(), original_digest
+    ):
+        raise UnsafePathError("refusing invalid api config-write rollback digest")
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    api_dir = str(state_data.get("hermes_dir", ""))
+    if api_dir != HERMES_API_PROFILE_DIR:
+        raise UnsafePathError("refusing api config-write journal for a foreign profile")
+    compat_hash = os.path.join(api_dir, ".config-hash")
+    if phase == "config-write-prepared":
+        config_path = os.path.join(api_dir, "config.yaml")
+        opened = _open_regular(config_path)
+        try:
+            current_snapshot = opened.snapshot
+        finally:
+            opened.close()
+        _atomic_replace(
+            config_path,
+            original_bytes,
+            expected=current_snapshot,
+            mode=0o640,
+            uid=admin_uid,
+            gid=api_gid,
+        )
+        refresh_hashes(api_dir, compat_hash, "compat")
+
+
+def write_api_config_transaction(
+    expected_config_sha256: str, config_bytes: bytes
+) -> None:
+    """Profile-scoped api config write over fixed image paths.
+
+    The expected digest is a compare-and-swap precondition against the live
+    file; the structural contract comes from the root-owned anchor, not from
+    caller-supplied state.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_config_sha256):
+        raise UnsafePathError("write-config requires a valid expected config SHA-256")
+    if len(config_bytes) > MAX_CONFIG_INPUT_BYTES:
+        raise UnsafePathError("refusing oversized Hermes config input")
+
+    _verify_api_contract()
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    api_dir = HERMES_API_PROFILE_DIR
+    state_file = HERMES_API_STATE_FILE
+    compat_hash = os.path.join(api_dir, ".config-hash")
+    config_path = os.path.join(api_dir, "config.yaml")
+
+    if os.path.exists(state_file):
+        _recover_api_config_write(state_file)
+        os.unlink(state_file)
+
+    token = secrets.token_hex(32)
+    mutation_lock_path = os.path.join(
+        os.path.dirname(state_file), os.path.basename(HERMES_MUTATION_LOCK_FILE)
+    )
+    _acquire_mutation_lock(mutation_lock_path, token, "api-config-write", state_file)
+    committed = False
+    try:
+        opened = _open_regular(config_path)
+        try:
+            original_bytes = opened.read_bytes(MAX_CONFIG_INPUT_BYTES)
+            original_snapshot = opened.snapshot
+        finally:
+            opened.close()
+        if not secrets.compare_digest(
+            hashlib.sha256(original_bytes).hexdigest(), expected_config_sha256
+        ):
+            raise UnsafePathError(
+                "Hermes api config changed after the host read it; retry the command"
+            )
+        try:
+            replacement_text = config_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise UnsafePathError("refusing non-UTF-8 Hermes config input") from exc
+        current_state = _hash_state_from_file(
+            compat_hash, config_path, os.path.join(api_dir, ".env")
+        )
+        replacement_mcp = _canonical_mcp_servers_digest(replacement_text)
+        if not secrets.compare_digest(replacement_mcp, current_state.intended):
+            raise UnsafePathError(
+                "non-MCP config transaction cannot change Hermes mcp_servers"
+            )
+        config_bytes = _api_overlay_managed_sections(config_bytes)
+
+        _write_restart_state(
+            state_file,
+            {
+                "version": 1,
+                "phase": "config-write-prepared",
+                "hermes_dir": api_dir,
+                "hash_file": compat_hash,
+                "config_write": {
+                    "original_base64": base64.b64encode(original_bytes).decode("ascii"),
+                    "original_sha256": hashlib.sha256(original_bytes).hexdigest(),
+                },
+            },
+            create=True,
+        )
+        _atomic_replace(
+            config_path,
+            config_bytes,
+            expected=original_snapshot,
+            mode=0o640,
+            uid=admin_uid,
+            gid=api_gid,
+        )
+        refresh_hashes(api_dir, compat_hash, "compat")
+        committed = True
+        os.unlink(state_file)
+    except Exception:
+        if not committed:
+            try:
+                if os.path.exists(state_file):
+                    _recover_api_config_write(state_file)
+                    os.unlink(state_file)
+            except Exception:
+                # Keep the journal for the next caller to recover; the lock is
+                # still released so the mutation lane is not wedged.
+                pass
+        raise
+    finally:
+        _release_mutation_lock(mutation_lock_path, token)
+
+
 def _parse_env_assignment(line: str) -> tuple[str, str, str] | None:
     stripped = line.rstrip("\n")
     prefix = ""
@@ -5006,9 +5722,13 @@ def main() -> int:
             "write-config",
             "recover-prestate-lock",
             "run-state-dir-transition",
+            "bootstrap-api-profile",
+            "verify-api-profile",
+            "normalize-api-profile",
         ),
     )
-    parser.add_argument("--hermes-dir", required=True)
+    parser.add_argument("--hermes-dir", default="")
+    parser.add_argument("--profile", choices=("api",), default="")
     parser.add_argument("--hash-file", default="")
     parser.add_argument("--runtime-plan", default="")
     parser.add_argument("--boundary-validator", default="")
@@ -5035,6 +5755,37 @@ def main() -> int:
             raise UnsafePathError(
                 "--mcp-state-exit-code requires inspect-mcp-integrity"
             )
+        if args.action in (
+            "bootstrap-api-profile",
+            "verify-api-profile",
+            "normalize-api-profile",
+        ):
+            # The fixed api-profile actions resolve every path and identity
+            # from image constants; any caller-supplied selector is rejected.
+            if (
+                args.hermes_dir
+                or args.hash_file
+                or args.state_file
+                or args.profile
+                or args.expected_config_sha256
+                or args.runtime_plan
+                or args.boundary_validator
+                or args.lock_token
+                or args.state_action
+                or args.state_lock_plan_json
+                or args.shields_mode
+                or args.rollback_shields_mode
+                or args.startup_owner
+            ):
+                raise UnsafePathError(
+                    f"{args.action} accepts no path or selector arguments"
+                )
+        elif args.profile and args.action != "write-config":
+            raise UnsafePathError("--profile is only valid for write-config")
+        elif not args.hermes_dir and not (
+            args.action == "write-config" and args.profile == "api"
+        ):
+            raise UnsafePathError(f"{args.action} requires --hermes-dir")
         _validate_action_readiness(args.action, args.startup_owner)
         if args.action == "ensure-api-key":
             if not args.hash_file:
@@ -5164,23 +5915,44 @@ def main() -> int:
             abort_shields_transition(args.hermes_dir, args.state_file, args.lock_token)
             print("aborted=1")
         elif args.action == "write-config":
-            if (
-                not args.hash_file
-                or not args.state_file
-                or not args.expected_config_sha256
-            ):
-                raise UnsafePathError(
-                    "write-config requires --hash-file, --state-file, and --expected-config-sha256"
+            if args.profile == "api":
+                if args.hermes_dir or args.hash_file or args.state_file:
+                    raise UnsafePathError(
+                        "write-config --profile api resolves fixed image paths; "
+                        "caller-supplied paths are refused"
+                    )
+                if not args.expected_config_sha256:
+                    raise UnsafePathError(
+                        "write-config requires --expected-config-sha256"
+                    )
+                config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+                write_api_config_transaction(
+                    args.expected_config_sha256, config_bytes
                 )
-            config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
-            write_config_transaction(
-                args.hermes_dir,
-                args.hash_file,
-                args.state_file,
-                args.expected_config_sha256,
-                config_bytes,
-            )
+            else:
+                if (
+                    not args.hash_file
+                    or not args.state_file
+                    or not args.expected_config_sha256
+                ):
+                    raise UnsafePathError(
+                        "write-config requires --hash-file, --state-file, and --expected-config-sha256"
+                    )
+                config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+                write_config_transaction(
+                    args.hermes_dir,
+                    args.hash_file,
+                    args.state_file,
+                    args.expected_config_sha256,
+                    config_bytes,
+                )
             print("updated=1")
+        elif args.action == "bootstrap-api-profile":
+            bootstrap_api_profile()
+        elif args.action == "verify-api-profile":
+            verify_api_profile()
+        elif args.action == "normalize-api-profile":
+            normalize_api_profile()
         elif args.action == "recover-prestate-lock":
             if not args.state_file:
                 raise UnsafePathError(

@@ -3009,14 +3009,20 @@ quarantine_hermes_managed_gateway_relaunch() {
 }
 
 hermes_managed_controller_argv_is_expected() {
-  [ "$#" -eq 5 ] || return 1
+  [ "$#" -eq 5 ] || [ "$#" -eq 6 ] || return 1
   case "${1##*/}" in
     python3) ;;
     *) return 1 ;;
   esac
   [ "$2" = "-I" ] && [ "$3" = "$HERMES_MANAGED_CONTROLLER_PATH" ] || return 1
   case "$4" in
-    restart | recover) ;;
+    restart | recover) [ "$#" -eq 5 ] || return 1 ;;
+    reload-managed-default)
+      [ "$#" -eq 6 ] || return 1
+      case "$6" in '' | *[!0123456789abcdef]*) return 1 ;; esac
+      [ "${#6}" -eq 64 ] || return 1
+      [ "$6" = "${HERMES_MANAGED_DEFAULT_TOKEN:-}" ] || return 1
+      ;;
     *) return 1 ;;
   esac
   case "$5" in
@@ -3064,10 +3070,11 @@ hermes_managed_controller_is_live() {
 }
 
 hermes_managed_gateway_exit_was_host_authorized() {
+  HERMES_MANAGED_DEFAULT_TOKEN=""
   local pid="$1"
   local start_identity="$2"
   local marker dir_metadata marker_metadata
-  local version marker_pid marker_start_identity controller_pid controller_start_identity extra
+  local version marker_pid marker_start_identity controller_pid controller_start_identity token extra
   local trailing=""
 
   case "$pid" in
@@ -3091,7 +3098,7 @@ hermes_managed_gateway_exit_was_host_authorized() {
   # Use a grouped redirect instead — variables assigned inside {} remain in scope.
   {
     if ! IFS=' ' read -r \
-      version marker_pid marker_start_identity controller_pid controller_start_identity extra; then
+      version marker_pid marker_start_identity controller_pid controller_start_identity token extra; then
       return 1
     fi
     if IFS= read -r trailing || [ -n "$trailing" ]; then
@@ -3099,8 +3106,16 @@ hermes_managed_gateway_exit_was_host_authorized() {
     fi
   } <"$marker" || return 1
 
-  [ "$version" = "v1" ] \
-    && [ "$marker_pid" = "$pid" ] \
+  HERMES_MANAGED_DEFAULT_TOKEN=""
+  case "$version" in
+    v1) [ -z "${token:-}" ] || return 1 ;;
+    v2)
+      case "${token:-}" in '' | *[!0123456789abcdef]*) return 1 ;; esac
+      [ "${#token}" -eq 64 ] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  [ "$marker_pid" = "$pid" ] \
     && [ "$marker_start_identity" = "$start_identity" ] \
     && [ -z "${extra:-}" ] || return 1
   case "$controller_pid" in
@@ -3109,7 +3124,11 @@ hermes_managed_gateway_exit_was_host_authorized() {
   case "$controller_start_identity" in
     '' | *[!0-9]*) return 1 ;;
   esac
-  hermes_managed_controller_is_live "$controller_pid" "$controller_start_identity"
+  [ "$version" != "v2" ] || HERMES_MANAGED_DEFAULT_TOKEN="$token"
+  if ! hermes_managed_controller_is_live "$controller_pid" "$controller_start_identity"; then
+    HERMES_MANAGED_DEFAULT_TOKEN=""
+    return 1
+  fi
 }
 
 record_hermes_managed_gateway_exit() {
@@ -3128,6 +3147,31 @@ record_hermes_managed_gateway_exit() {
     quarantine_hermes_managed_gateway_relaunch
     return 1
   fi
+}
+
+hermes_managed_default_transaction_pending() {
+  local marker="/sandbox/.hermes/.nemoclaw-hermes-restart-seal"
+  if [ ! -e "$marker" ] && [ ! -L "$marker" ]; then
+    HERMES_MANAGED_DEFAULT_PENDING=0
+    return 1
+  fi
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 2
+  [ "$(stat -c '%u:%g %a %h' "$marker" 2>/dev/null)" = "0:0 600 1" ] || return 2
+}
+
+recover_hermes_managed_default_current_user() {
+  # Only a root-owned v2 marker and the exact live controller authorize this
+  # launch. The root controller owns the prepared seal and applied receipt.
+  [ -n "${HERMES_MANAGED_DEFAULT_TOKEN:-}" ] || return 1
+  apply_shields_up_runtime_env || return 1
+  launch_hermes_gateway_current_user || return 1
+  HERMES_MANAGED_DEFAULT_PENDING=1
+  if ! wait_for_hermes_gateway_internal "$GATEWAY_PID"; then
+    hermes_stop_tracked_role gateway "$GATEWAY_PID" current "$INTERNAL_PORT" || return 1
+    mark_hermes_gateway_stopped
+    return 1
+  fi
+  refresh_hermes_supervised_child_pids
 }
 
 recover_hermes_gateway_current_user() {
@@ -3198,12 +3242,24 @@ recover_hermes_gateway_current_user() {
 }
 
 supervise_hermes_gateway_current_user() {
-  local exited_gateway_pid exited_gateway_start_identity rc respawn_count unhealthy_streak=0
+  local exited_gateway_pid exited_gateway_start_identity rc respawn_count unhealthy_streak=0 pending_status
 
   while :; do
     # Keep one exact supervisor alive for the full managed OpenShell process
     # tree and continuously repair its dashboard and internal relays.
     while hermes_tracked_role_is_current gateway "$GATEWAY_PID" current "$INTERNAL_PORT"; do
+      if [ "${HERMES_MANAGED_DEFAULT_PENDING:-0}" -eq 1 ]; then
+        pending_status=0
+        hermes_managed_default_transaction_pending || pending_status=$?
+        case "$pending_status" in
+          0)
+            sleep 1 || true
+            continue
+            ;;
+          1) ;;
+          *) return 1 ;;
+        esac
+      fi
       if hermes_gateway_healthy "$GATEWAY_PID"; then
         unhealthy_streak=0
         if ! ensure_hermes_supervised_auxiliaries; then
@@ -3227,6 +3283,15 @@ supervise_hermes_gateway_current_user() {
       sleep 1 || true
     done
 
+    if [ "${HERMES_MANAGED_DEFAULT_PENDING:-0}" -eq 1 ]; then
+      # Completion can remove the seal after the last live-child poll.
+      pending_status=0
+      hermes_managed_default_transaction_pending || pending_status=$?
+      if [ "$pending_status" -ne 1 ]; then
+        echo "[SECURITY] Hermes default exited before its managed update finished; refusing automatic recovery" >&2
+        return 1
+      fi
+    fi
     exited_gateway_pid="$GATEWAY_PID"
     exited_gateway_start_identity="${GATEWAY_PID_START_IDENTITY:-}"
     rc=0
@@ -3243,7 +3308,12 @@ supervise_hermes_gateway_current_user() {
     fi
     sleep 2 || true
 
-    recover_hermes_gateway_current_user || return 1
+    if [ -n "${HERMES_MANAGED_DEFAULT_TOKEN:-}" ]; then
+      recover_hermes_managed_default_current_user || return 1
+      HERMES_MANAGED_DEFAULT_TOKEN=""
+    else
+      recover_hermes_gateway_current_user || return 1
+    fi
     unhealthy_streak=0
     echo "[gateway] Hermes gateway respawned (pid $GATEWAY_PID)" >&2
   done

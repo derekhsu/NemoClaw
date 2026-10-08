@@ -871,8 +871,49 @@ def _seed_dashboard(argv: list[str], dashboard_fd: int | None) -> int:
     return 0
 
 
+def _seed_managed_default_routing(argv: list[str]) -> int:
+    """Refresh only routing in an existing dashboard and verify its readback."""
+    if len(argv) != 5:
+        return 1
+    _, _, policy_path, source, destination = argv
+    parent_fd = -1
+    try:
+        policy = load_managed_policy(Path(policy_path))
+        gateway = _load_yaml(source, "gateway config")
+        routing = _normalized_routing(gateway, policy["dashboard"]["routing_keys"], policy)
+        # This update does not migrate or create a profile, mirror environment,
+        # change tools, or write the API profile note.
+        parent_fd = _open_directory_no_follow("/")
+        for component in Path(os.path.dirname(destination)).parts[1:]:
+            next_fd = _open_directory_no_follow(component, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        dashboard = _load_yaml(destination, "dashboard config", dir_fd=parent_fd)
+        dashboard.update(routing)
+        import yaml
+        def write(handle: TextIO) -> None:
+            yaml.safe_dump(dashboard, handle, sort_keys=False)
+        if not _atomic_write_no_follow(destination, "dashboard config", write, parent_fd=parent_fd):
+            return 1
+        actual = _load_yaml(destination, "dashboard config readback", dir_fd=parent_fd)
+        if not _same_json_value(actual, dashboard):
+            return 1
+        after = _load_yaml(source, "gateway config readback")
+        if not _same_json_value(after, gateway):
+            return 1
+        return 0
+    except Exception:
+        print("[dashboard] Managed default routing seed or readback failed", file=sys.stderr)
+        return 1
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+
+
 def main(argv: list[str]) -> int:
     """Validate arguments, anchor the destination, and run the dashboard seed."""
+    if len(argv) > 1 and argv[1] == "--managed-default-routing":
+        return _seed_managed_default_routing(argv)
     merge_legacy = len(argv) > 1 and argv[1] == "--merge-legacy"
     seed_argv = [argv[0], *argv[2:]] if merge_legacy else argv
     if len(seed_argv) not in (4, 6):

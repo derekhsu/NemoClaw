@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Local fresh-sandbox acceptance image; not a published release recipe.
+FROM docker.io/derekhsu/openshell-hermes@sha256:1423523e249a3c32bc59c93f442de0dc76ddaa8d55df0d19f9882ee798303b8a
+# Preserve the pinned image's root bootstrap contract; OpenShell starts its
+# managed supervisor as sandbox and privileged helpers retain root ownership.
+# hadolint ignore=DL3002
+USER 0:0
+COPY agents/hermes/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py
+COPY agents/hermes/seed-dashboard-config.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py
+COPY agents/hermes/start.sh /usr/local/bin/nemoclaw-start
+COPY scripts/managed-gateway-control.py /usr/local/lib/nemoclaw/managed-gateway-control.py
+COPY scripts/gateway-control.sh /usr/local/bin/nemoclaw-gateway-control
+RUN chown root:root /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py /usr/local/bin/nemoclaw-start /usr/local/lib/nemoclaw/managed-gateway-control.py /usr/local/bin/nemoclaw-gateway-control && chmod 755 /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py /usr/local/bin/nemoclaw-start && chmod 500 /usr/local/lib/nemoclaw/managed-gateway-control.py && chmod 700 /usr/local/bin/nemoclaw-gateway-control

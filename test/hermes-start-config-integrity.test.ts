@@ -113,6 +113,8 @@ function runHermesDashboardHomePrepAsRoot() {
       extractShellFunctionFromSource(src, "prepare_hermes_dashboard_home"),
       `HERMES_DIR=${shellQuote(hermesHome)}`,
       `HERMES_DASHBOARD_HOME=${shellQuote(dashboardHome)}`,
+      `HERMES_DASHBOARD_SOURCE_CONFIG=${shellQuote(path.join(hermesHome, "config.yaml"))}`,
+      `HERMES_DASHBOARD_SOURCE_ENV=${shellQuote(path.join(hermesHome, ".env"))}`,
       `_HERMES_PYTHON=${shellQuote(fakePython)}`,
       `_HERMES_DASHBOARD_CONFIG_SEEDER=${shellQuote(path.join(tmpDir, "seed-dashboard-config.py"))}`,
       `_HERMES_MANAGED_POLICY=${shellQuote(path.join(tmpDir, "managed-policy.json"))}`,

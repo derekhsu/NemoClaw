@@ -303,8 +303,20 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
       expect(verifyApiProfile(fixture).status).toBe(0);
       expect(fs.existsSync(fixture.apiStatePath)).toBe(false);
     }
+    const changedUrl = JSON.stringify({
+      gateway_url: "http://gateway-next.test:8001",
+      sandbox_id: `sbx-test.${"a".repeat(32)}`,
+      replace_existing: true,
+    });
+    const reapplied = runApiGuard(fixture, ["register-api-uploader"], { stdin: changedUrl });
+    expect(reapplied.status, reapplied.stderr).toBe(0);
+    const inspectedNew = runApiGuard(fixture, ["inspect-api-uploader"], { stdin: changedUrl });
+    expect(JSON.parse(inspectedNew.stdout).ok).toBe(true);
     expect(fs.readFileSync(fixture.defaultConfigPath)).toEqual(defaultBefore);
-    const changed = readFixtureText(fixture.apiConfigPath).replace("gateway.test", "evil.test");
+    const changed = readFixtureText(fixture.apiConfigPath).replace(
+      "gateway-next.test",
+      "evil.test",
+    );
     expect(writeApiConfig(fixture, sha256File(fixture.apiConfigPath), changed).status).not.toBe(0);
   });
 

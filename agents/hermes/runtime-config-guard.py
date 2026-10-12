@@ -5796,8 +5796,22 @@ def _api_uploader_config(document: dict, payload: dict) -> dict:
     candidate["env"]["CLAWSHELL_UPLOADER_PROFILE"] = "api"
     candidate["env"]["HERMES_HOME"] = HERMES_API_PROFILE_DIR
     expected = {"sandbox-file-uploader": candidate}
-    if document.get("mcp_servers", {}) not in ({}, expected):
-        raise UnsafePathError("API uploader refuses unrelated MCP entries")
+    existing = document.get("mcp_servers", {})
+    if existing not in ({}, expected):
+        if not isinstance(existing, dict) or set(existing) != {"sandbox-file-uploader"}:
+            raise UnsafePathError("API uploader refuses unrelated MCP entries")
+        prior = existing["sandbox-file-uploader"]
+        if not isinstance(prior, dict) or not isinstance(prior.get("env"), dict):
+            raise UnsafePathError("API uploader refuses malformed prior intent")
+        prior_payload = {**payload, "gateway_url": prior["env"].get("GATEWAY_URL")}
+        prior_candidate = copy.deepcopy(_managed_default_uploader(prior_payload))
+        prior_candidate["env"].update({
+            "GATEWAY_API_KEY": "openshell:resolve:env:GATEWAY_API_KEY",
+            "CLAWSHELL_UPLOADER_PROFILE": "api",
+            "HERMES_HOME": HERMES_API_PROFILE_DIR,
+        })
+        if existing != {"sandbox-file-uploader": prior_candidate}:
+            raise UnsafePathError("API uploader refuses unrelated prior intent")
     updated = copy.deepcopy(document)
     updated["mcp_servers"] = expected
     updated.setdefault("platform_toolsets", {})["api_server"] = ["file", "mcp-sandbox-file-uploader"]
@@ -5882,9 +5896,9 @@ def write_api_config_transaction(
         )
         replacement_mcp = _canonical_mcp_servers_digest(replacement_text)
         if authorized_uploader is not None:
-            old_mcp = yaml.safe_load(original_bytes).get("mcp_servers", {})
             new_mcp = yaml.safe_load(replacement_text).get("mcp_servers", {})
-            if old_mcp not in ({}, authorized_uploader) or new_mcp != authorized_uploader:
+            if (new_mcp != authorized_uploader
+                    or _canonical_mcp_servers_digest(original_bytes.decode("utf-8")) != current_state.intended):
                 raise UnsafePathError("API uploader transaction contains unrelated MCP changes")
         elif not secrets.compare_digest(replacement_mcp, current_state.intended):
             raise UnsafePathError(

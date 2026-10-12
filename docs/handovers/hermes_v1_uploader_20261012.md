@@ -60,3 +60,7 @@ Acceptance requires these observations:
 A `sandbox:` path alone does not pass delivery acceptance.
 An older image's successful default-profile uploader test does not pass API-profile acceptance.
 Keep candidate data and diagnostic evidence until the deployment owner records the acceptance result.
+
+## Local acceptance receipt — 2026-10-12
+
+Local ARM64 acceptance passed using image `sha256:25388caa3c92aced419208ca8b04918c575308fbdf267a1796bcd9fe01de27f9` and guard source `9d2dc9b`. V1 JSON/SSE requests through a FastAPI HTTP contract harness used real OpenShell relay and Hermes inference. Uploader publication and signed downloads used an isolated real HTTP server on port8002. Exact content, Chinese filename, profile/sandbox scope denials, expiration/use count, default chat and delivery after Reapply passed. Temporary API keys were revoked. The temporary HTTP service and validation sandbox container were stopped after validation. This receipt does not establish registry publication, multi-architecture support, production backend deployment or browser UI acceptance.

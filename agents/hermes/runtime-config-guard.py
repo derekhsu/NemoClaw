@@ -852,6 +852,8 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
         "mark-managed-default-healthy",
         "finish-managed-default",
         "write-config",
+        "register-api-uploader",
+        "inspect-api-uploader",
         "bootstrap-api-profile",
         "verify-api-profile",
         "normalize-api-profile",
@@ -5787,8 +5789,48 @@ def _recover_api_config_write(state_file: str) -> None:
         refresh_hashes(api_dir, compat_hash, "compat")
 
 
+def _api_uploader_config(document: dict, payload: dict) -> dict:
+    """Enable only the image-owned uploader alongside restricted file tools."""
+    candidate = copy.deepcopy(_managed_default_uploader(payload))
+    candidate["env"]["GATEWAY_API_KEY"] = "openshell:resolve:env:GATEWAY_API_KEY"
+    candidate["env"]["CLAWSHELL_UPLOADER_PROFILE"] = "api"
+    candidate["env"]["HERMES_HOME"] = HERMES_API_PROFILE_DIR
+    expected = {"sandbox-file-uploader": candidate}
+    if document.get("mcp_servers", {}) not in ({}, expected):
+        raise UnsafePathError("API uploader refuses unrelated MCP entries")
+    updated = copy.deepcopy(document)
+    updated["mcp_servers"] = expected
+    updated.setdefault("platform_toolsets", {})["api_server"] = ["file", "mcp-sandbox-file-uploader"]
+    return updated
+
+
+def api_uploader_transaction(action: str, payload: dict) -> None:
+    """Register or inspect the fixed API uploader through the root guard."""
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError("API uploader requires the privileged executor identity")
+    _verify_api_contract()
+    config_path = os.path.join(HERMES_API_PROFILE_DIR, "config.yaml")
+    original, _ = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)
+    document = yaml.safe_load(original)
+    if not isinstance(document, dict):
+        raise UnsafePathError("API uploader requires a mapping config")
+    replacement = _api_uploader_config(document, payload)
+    if action == "inspect-api-uploader":
+        expected_hash = _api_compat_hash_text(HERMES_API_PROFILE_DIR)
+        actual_hash, _ = _read_text(os.path.join(HERMES_API_PROFILE_DIR, ".config-hash"), MAX_HASH_BYTES)
+        matched = document == replacement and secrets.compare_digest(expected_hash, actual_hash)
+        print(json.dumps({"ok": matched, "state": "matched" if matched else "missing"}))
+        return
+    if action != "register-api-uploader":
+        raise UnsafePathError("unsupported API uploader action")
+    raw = yaml.safe_dump(replacement, sort_keys=False, allow_unicode=True).encode("utf-8")
+    write_api_config_transaction(hashlib.sha256(original.encode("utf-8")).hexdigest(), raw,
+                                 authorized_uploader=replacement["mcp_servers"])
+    print(json.dumps({"ok": True, "state": "matched"}))
+
+
 def write_api_config_transaction(
-    expected_config_sha256: str, config_bytes: bytes
+    expected_config_sha256: str, config_bytes: bytes, *, authorized_uploader: dict | None = None
 ) -> None:
     """Profile-scoped api config write over fixed image paths.
 
@@ -5839,7 +5881,12 @@ def write_api_config_transaction(
             compat_hash, config_path, os.path.join(api_dir, ".env")
         )
         replacement_mcp = _canonical_mcp_servers_digest(replacement_text)
-        if not secrets.compare_digest(replacement_mcp, current_state.intended):
+        if authorized_uploader is not None:
+            old_mcp = yaml.safe_load(original_bytes).get("mcp_servers", {})
+            new_mcp = yaml.safe_load(replacement_text).get("mcp_servers", {})
+            if old_mcp not in ({}, authorized_uploader) or new_mcp != authorized_uploader:
+                raise UnsafePathError("API uploader transaction contains unrelated MCP changes")
+        elif not secrets.compare_digest(replacement_mcp, current_state.intended):
             raise UnsafePathError(
                 "non-MCP config transaction cannot change Hermes mcp_servers"
             )
@@ -5867,7 +5914,11 @@ def write_api_config_transaction(
             uid=admin_uid,
             gid=api_gid,
         )
-        refresh_hashes(api_dir, compat_hash, "compat")
+        if authorized_uploader is None:
+            refresh_hashes(api_dir, compat_hash, "compat")
+        else:
+            _api_write_file(compat_hash, _api_compat_hash_text(api_dir).encode("utf-8"),
+                            0o440, HERMES_API_OWNER_UID, api_gid)
         committed = True
         os.unlink(state_file)
     except Exception:
@@ -6275,7 +6326,9 @@ def main() -> int:
             "finish-managed-default",
             "recover-prestate-lock",
             "run-state-dir-transition",
-            "bootstrap-api-profile",
+        "register-api-uploader",
+        "inspect-api-uploader",
+        "bootstrap-api-profile",
             "verify-api-profile",
             "normalize-api-profile",
         ),
@@ -6360,7 +6413,9 @@ def main() -> int:
             ):
                 raise UnsafePathError("unexpected managed default lock selector")
         elif args.action in (
-            "bootstrap-api-profile",
+        "register-api-uploader",
+        "inspect-api-uploader",
+        "bootstrap-api-profile",
             "verify-api-profile",
             "normalize-api-profile",
         ):
@@ -6608,6 +6663,17 @@ def main() -> int:
                     config_bytes,
                 )
             print("updated=1")
+        elif args.action in {"register-api-uploader", "inspect-api-uploader"}:
+            raw = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+            if len(raw) > MAX_CONFIG_INPUT_BYTES:
+                raise UnsafePathError("API uploader payload is oversized")
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise UnsafePathError("invalid API uploader payload") from exc
+            if not isinstance(payload, dict):
+                raise UnsafePathError("API uploader payload must be a mapping")
+            api_uploader_transaction(args.action, payload)
         elif args.action == "bootstrap-api-profile":
             bootstrap_api_profile()
         elif args.action == "verify-api-profile":

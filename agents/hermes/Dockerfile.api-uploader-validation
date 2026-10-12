@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Local issue 109 acceptance image. Registry publication is a separate operation.
+# Base image ID verified before build: sha256:145e91d6252d3b95781f315f19bab80954d6df0ec6494785b7672bb44bc67ac3
+FROM local/hermes-issue109-base:validation
+# hadolint ignore=DL3002
+USER 0:0
+COPY agents/hermes/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py
+COPY vendor/clawshell/sandbox-mcp-server/ /opt/nemoclaw-api-uploader/
+RUN chown root:root /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py && chmod 755 /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py && uv pip install --python /sandbox/.venvs/sandbox-mcp-server/bin/python --no-deps /opt/nemoclaw-api-uploader && chown -R root:root /sandbox/.venvs/sandbox-mcp-server && chmod -R go-w /sandbox/.venvs/sandbox-mcp-server && chmod -R a+rX /sandbox/.venvs/sandbox-mcp-server && rm -rf /opt/nemoclaw-api-uploader

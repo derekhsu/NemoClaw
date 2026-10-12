@@ -214,6 +214,18 @@ module.grp.getgrnam = lambda name: types.SimpleNamespace(
 os.chown = lambda *a, **k: None
 os.fchown = lambda *a, **k: None
 os.lchown = lambda *a, **k: None
+helper_path = os.path.join(os.path.dirname(source), "mcp-config-transaction.py")
+helper_spec = importlib.util.spec_from_file_location("fixture_mcp", helper_path)
+helper = importlib.util.module_from_spec(helper_spec)
+sys.modules[helper_spec.name] = helper
+helper_spec.loader.exec_module(helper)
+def fixture_uploader(payload):
+    helper._validate_local_uploader_payload("add-local-uploader", payload)
+    import re
+    if not re.fullmatch(r"sbx-[A-Za-z0-9_-]+[.][0-9a-f]{32}", payload["sandbox_id"]):
+        raise module.UnsafePathError("unsigned scope")
+    return helper._managed_local_uploader_candidate(payload)
+module._managed_default_uploader = fixture_uploader
 sys.argv = [source, *sys.argv[2:]]
 raise SystemExit(module.main())
 `;
@@ -270,6 +282,51 @@ function apiEnvKey(fixture: ApiFixture): string {
 }
 
 describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => {
+  it("registers, verifies and reapplies the API uploader with sealed hashes", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const defaultBefore = fs.readFileSync(fixture.defaultConfigPath);
+    const payload = JSON.stringify({
+      gateway_url: "http://gateway.test:8001",
+      sandbox_id: `sbx-test.${"a".repeat(32)}`,
+      replace_existing: true,
+    });
+    const missing = runApiGuard(fixture, ["inspect-api-uploader"], { stdin: payload });
+    expect(missing.status, missing.stderr).toBe(0);
+    expect(JSON.parse(missing.stdout).ok).toBe(false);
+    for (let i = 0; i < 2; i++) {
+      const registered = runApiGuard(fixture, ["register-api-uploader"], { stdin: payload });
+      expect(registered.status, registered.stderr).toBe(0);
+      const inspected = runApiGuard(fixture, ["inspect-api-uploader"], { stdin: payload });
+      expect(inspected.status, inspected.stderr).toBe(0);
+      expect(JSON.parse(inspected.stdout)).toEqual({ ok: true, state: "matched" });
+      expect(verifyApiProfile(fixture).status).toBe(0);
+      expect(fs.existsSync(fixture.apiStatePath)).toBe(false);
+    }
+    expect(fs.readFileSync(fixture.defaultConfigPath)).toEqual(defaultBefore);
+    const changed = readFixtureText(fixture.apiConfigPath).replace("gateway.test", "evil.test");
+    expect(writeApiConfig(fixture, sha256File(fixture.apiConfigPath), changed).status).not.toBe(0);
+  });
+
+  it("rejects API uploader selectors, unsigned scope and non-owner callers", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const before = fs.readFileSync(fixture.apiConfigPath);
+    const payload = JSON.stringify({
+      gateway_url: "http://gateway.test",
+      sandbox_id: "sbx-unsigned",
+      replace_existing: true,
+    });
+    for (const action of ["register-api-uploader", "inspect-api-uploader"]) {
+      expect(runApiGuard(fixture, [action], { stdin: payload }).status).not.toBe(0);
+      expect(
+        runApiGuard(fixture, [action, "--hermes-dir", fixture.apiDir], { stdin: payload }).status,
+      ).not.toBe(0);
+      expect(runApiGuard(fixture, [action], { stdin: payload, ownerUid: 0 }).status).not.toBe(0);
+    }
+    expect(fs.readFileSync(fixture.apiConfigPath)).toEqual(before);
+  });
+
   it("still refuses the default-profile anchor for the api profile hermes dir", () => {
     // Regression pin for the 2026-09-24 production refusal (op-16c864769b09):
     // passing the default anchor with a profile hermes dir must stay fail-closed.

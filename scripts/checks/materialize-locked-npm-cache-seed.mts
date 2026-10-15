@@ -219,8 +219,10 @@ export function lockedArchives(
   const byResolved = new Map<string, LockedArchive>();
   const byIntegrity = new Map<string, LockedArchive>();
 
+  const collidingArchives = new Set<string>();
   for (const packagePath of reachablePackagePaths(packages, target)) {
     const entry = record(packages[packagePath], `package-lock entry ${packagePath}`);
+    if (entry.inBundle === true) continue;
     const resolved = entry.resolved;
     const integrity = entry.integrity;
     if (resolved === undefined && integrity === undefined) continue;
@@ -234,7 +236,7 @@ export function lockedArchives(
     const sameResolved = byResolved.get(resolved);
     const sameIntegrity = byIntegrity.get(integrity);
     if (sameArchive && JSON.stringify(sameArchive) !== JSON.stringify(candidate)) {
-      throw new Error(`package-lock archive name is ambiguous: ${archive}`);
+      collidingArchives.add(archive);
     }
     if (sameResolved && sameResolved.integrity !== integrity) {
       throw new Error(`package-lock URL has more than one integrity: ${resolved}`);
@@ -248,7 +250,16 @@ export function lockedArchives(
   }
 
   if (byArchive.size === 0) throw new Error("package-lock.json contains no registry archives");
-  return [...byArchive.values()].sort((left, right) => left.archive.localeCompare(right.archive));
+  return [...byResolved.values()]
+    .map((entry) =>
+      collidingArchives.has(entry.archive)
+        ? {
+            ...entry,
+            archive: `${crypto.createHash("sha256").update(entry.resolved).digest("hex")}-${entry.archive}`,
+          }
+        : entry,
+    )
+    .sort((left, right) => left.archive.localeCompare(right.archive));
 }
 
 async function exactFileSource(file: string, label: string): Promise<Buffer> {

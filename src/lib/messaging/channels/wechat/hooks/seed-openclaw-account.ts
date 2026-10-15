@@ -50,7 +50,7 @@ export function buildWechatSeedOpenClawAccountOutputs(
     WECHAT_TOKEN_PLACEHOLDER;
   const savedAt = isoTimestamp(options.now);
   const pluginInstallPath = options.pluginInstallPath ?? WECHAT_PLUGIN_INSTALL_PATH;
-  const pluginSpec = options.pluginSpec ?? "@tencent-weixin/openclaw-weixin@2.4.3";
+  const pluginSpec = options.pluginSpec ?? "@tencent-weixin/openclaw-weixin@2.4.9";
 
   return {
     openclawWeixinAccountsIndex: {

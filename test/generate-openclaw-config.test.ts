@@ -493,7 +493,7 @@ describe("generate-openclaw-config.mts: config generation", () => {
 
     expect(config.plugins?.installs?.["openclaw-weixin"]).toEqual({
       source: "npm",
-      spec: "@tencent-weixin/openclaw-weixin@2.4.3",
+      spec: "@tencent-weixin/openclaw-weixin@2.4.9",
       installPath: "/sandbox/.openclaw/extensions/openclaw-weixin",
     });
     expect(config.plugins?.load?.paths ?? []).not.toContain(
@@ -523,7 +523,7 @@ describe("generate-openclaw-config.mts: config generation", () => {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     const installEntry = {
       source: "npm",
-      spec: "@tencent-weixin/openclaw-weixin@2.4.3",
+      spec: "@tencent-weixin/openclaw-weixin@2.4.9",
     };
     fs.writeFileSync(
       configPath,

@@ -21,7 +21,7 @@ afterEach(() => {
 
 const packages = {
   "node_modules/@tencent-weixin/openclaw-weixin": {
-    version: "2.4.3",
+    version: "2.4.9",
     integrity: "sha512-plugin",
     dependencies: { "qrcode-terminal": "0.12.0", zod: "^4.3.6" },
     peerDependencies: { openclaw: ">=2026.3.22" },

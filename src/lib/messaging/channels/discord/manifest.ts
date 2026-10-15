@@ -195,11 +195,11 @@ export const discordManifest = {
       spec: "npm:@openclaw/discord@{{openclaw.version}}",
       pin: true,
       integrityByVersion: {
-        "2026.7.1":
-          "sha512-tZfdC1YA8oVLvc2BK1w0F6rUljS5ugCOp2uWe0vPsbG1fbzVVIO4V32RoqZznGHe5u2R9u4n1aV5Z/qa1m2oFg==",
+        "2026.9.2":
+          "sha512-j+fSHxbXA+DSxwbL8SvtsDNL6tvBX4+RmH+EerVW6dCbeIwSconXj6J/+AaN/mhzZI4g0jPPj30TUhdCRRbc2w==",
       },
       tarballUrlByVersion: {
-        "2026.7.1": "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.7.1.tgz",
+        "2026.9.2": "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.9.2.tgz",
       },
       required: true,
     },

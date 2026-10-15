@@ -27,8 +27,15 @@ type JsonObject = Record<string, any>;
 type Remediation = Readonly<{
   expectedPatchedMetadataIntegrity?: string;
   expectedPatchedTreeIntegrity?: string;
-  kind: "axios" | "core" | "current-core" | "jaeger" | "legacy-core" | "undici";
-  version: "2026.3.11" | "2026.6.10" | "2026.7.1";
+  kind:
+    | "axios"
+    | "core"
+    | "current-core"
+    | "jaeger"
+    | "legacy-core"
+    | "slack-proxy-addr"
+    | "undici";
+  version: "2026.3.11" | "2026.6.10" | "2026.7.1" | "2026.9.2";
 }>;
 
 type RemediationRequest = Readonly<{
@@ -112,7 +119,18 @@ const OTEL_CORE_INTEGRITY =
   "sha512-m2nckMT80NnmjTYSPjJQObBJ+8dgkoajEOUbznL8AHZ3T3yHRk2P7gI1PhEBc1+lOnrYE9UWrWHqJDsmqjmNbw==";
 const OTEL_CORE_TARBALL = "https://registry.npmjs.org/@opentelemetry/core/-/core-2.9.0.tgz";
 
+const PROXY_ADDR_VERSION = "2.0.8";
+const PROXY_ADDR_INTEGRITY =
+  "sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==";
+const PROXY_ADDR_TARBALL = "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz";
+
 const REMEDIATIONS: Readonly<Record<string, Remediation>> = Object.freeze({
+  "@openclaw/slack@2026.9.2": {
+    expectedPatchedTreeIntegrity:
+      "sha512-li/y4SFf6t3Z6JvP2R2H8dfauu0eybiwzd408QMCR9+zzi6oVVVffi+LGRDDYMh2TFCGgQ8Pnv2a5FiXMmPt1A==",
+    kind: "slack-proxy-addr",
+    version: "2026.9.2",
+  },
   "@openclaw/diagnostics-otel@2026.6.10": {
     expectedPatchedMetadataIntegrity:
       "sha512-ByLYBs3KXz3u0mPuj9DcP/xPTJNgQaLTPxazybhyIC1VjyftEmKQuoZufPZ8z8CjwBsOPm6NbjMQB2BfX36TTg==",
@@ -890,6 +908,84 @@ export function patchOpenClawDiagnosticsOtelPackageGraph(packageDirectory: strin
   writeJson(shrinkwrapPath, shrinkwrap);
 }
 
+export function patchOpenClawSlackProxyAddrPackageGraph(
+  packageDirectory: string,
+  replacementDirectory: string,
+): void {
+  const packageJson = readJson(join(packageDirectory, "package.json"));
+  requirePackageIdentity(packageJson, "@openclaw/slack", "2026.9.2", "OpenClaw Slack plugin");
+  if (
+    packageJson.dependencies?.["@slack/bolt"] !== "5.0.0" ||
+    !Array.isArray(packageJson.bundledDependencies) ||
+    !packageJson.bundledDependencies.includes("@slack/bolt")
+  ) {
+    throw new Error("@openclaw/slack@2026.9.2 Bolt dependency changed after review");
+  }
+
+  const boltDirectory = join(packageDirectory, "node_modules", "@slack", "bolt");
+  const boltPackageJson = readJson(join(boltDirectory, "package.json"));
+  requirePackageIdentity(boltPackageJson, "@slack/bolt", "5.0.0", "OpenClaw Slack bundled Bolt");
+  if (
+    boltPackageJson.dependencies?.express !== "^5.0.0" ||
+    boltPackageJson.license !== "MIT" ||
+    boltPackageJson.engines?.node !== ">=20"
+  ) {
+    throw new Error("@openclaw/slack@2026.9.2 bundled Bolt contract changed after review");
+  }
+
+  const expressPackageJson = readJson(
+    join(boltDirectory, "node_modules", "express", "package.json"),
+  );
+  requirePackageIdentity(expressPackageJson, "express", "5.2.1", "OpenClaw Slack bundled Express");
+  if (
+    expressPackageJson.dependencies?.["proxy-addr"] !== "^2.0.7" ||
+    expressPackageJson.license !== "MIT" ||
+    expressPackageJson.engines?.node !== ">= 18"
+  ) {
+    throw new Error("@openclaw/slack@2026.9.2 bundled Express contract changed after review");
+  }
+
+  const proxyAddrDirectory = join(boltDirectory, "node_modules", "proxy-addr");
+  const proxyAddrPackageJson = readJson(join(proxyAddrDirectory, "package.json"));
+  requirePackageIdentity(
+    proxyAddrPackageJson,
+    "proxy-addr",
+    "2.0.7",
+    "OpenClaw Slack bundled proxy-addr",
+  );
+  requireDependencyShape(
+    proxyAddrPackageJson,
+    { forwarded: "0.2.0", "ipaddr.js": "1.9.1" },
+    "proxy-addr@2.0.7",
+  );
+  if (proxyAddrPackageJson.license !== "MIT" || proxyAddrPackageJson.engines?.node !== ">= 0.10") {
+    throw new Error("@openclaw/slack@2026.9.2 bundled proxy-addr contract changed after review");
+  }
+
+  const replacementPackageJson = readJson(join(replacementDirectory, "package.json"));
+  requirePackageIdentity(
+    replacementPackageJson,
+    "proxy-addr",
+    PROXY_ADDR_VERSION,
+    "OpenClaw Slack proxy-addr remediation package",
+  );
+  requireDependencyShape(
+    replacementPackageJson,
+    { forwarded: "0.2.0", "ipaddr.js": "1.9.1" },
+    `proxy-addr@${PROXY_ADDR_VERSION}`,
+  );
+  if (
+    replacementPackageJson.license !== "MIT" ||
+    replacementPackageJson.engines?.node !== ">= 0.10"
+  ) {
+    throw new Error(
+      `proxy-addr@${PROXY_ADDR_VERSION} package contract changed; review the remediation before updating it`,
+    );
+  }
+
+  copyReplacementPackage(replacementDirectory, proxyAddrDirectory);
+}
+
 function patchFsSafePackageGraph(packageDirectory: string): void {
   const packageJsonPath = join(packageDirectory, "package.json");
   const packageJson = readJson(packageJsonPath);
@@ -987,7 +1083,22 @@ export function buildRemediatedOpenClawPluginArchive(
     remediationRoot,
     env,
   );
-  if (remediation.kind === "core") {
+  if (remediation.kind === "slack-proxy-addr") {
+    const archive = packReplacement(
+      `proxy-addr@${PROXY_ADDR_VERSION}`,
+      PROXY_ADDR_INTEGRITY,
+      PROXY_ADDR_TARBALL,
+      remediationRoot,
+      env,
+    );
+    const replacement = extractArchive(
+      archive.archivePath,
+      join(remediationRoot, "proxy-addr"),
+      remediationRoot,
+      env,
+    );
+    patchOpenClawSlackProxyAddrPackageGraph(sourcePackage, replacement);
+  } else if (remediation.kind === "core") {
     const fsSafeArchive = packReplacement(
       `@openclaw/fs-safe@${FS_SAFE_VERSION}`,
       FS_SAFE_INTEGRITY,

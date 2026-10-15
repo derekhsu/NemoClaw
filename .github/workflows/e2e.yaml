@@ -463,8 +463,7 @@ jobs:
           done
           for boundary in \
             openshell-policy-boundary.cjs \
-            sandbox-name.cjs \
-            snapshot-sanitizer-boundary.cjs; do
+            sandbox-name.cjs; do
             boundary_path="nemoclaw/dist/shared/$boundary"
             [[ -f "$boundary_path" && ! -L "$boundary_path" && -s "$boundary_path" ]] ||
               { echo "::error::candidate CLI build shared module is missing or is not a nonempty regular file: $boundary"; exit 1; }

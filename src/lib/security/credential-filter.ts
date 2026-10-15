@@ -5,7 +5,6 @@
 //
 // Used by:
 //   - sandbox-state.ts (rebuild backup/restore)
-//   - migration-state.ts (host→sandbox onboarding migration)
 //
 // Credentials must never be baked into sandbox filesystems or local backups.
 // They are injected at runtime via OpenShell's provider credential mechanism.

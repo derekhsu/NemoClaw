@@ -48,10 +48,10 @@ describe("mergeOpenClawRestoredConfig", () => {
             model: { primary: "inference/nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8" },
             thinkingDefault: "off",
           },
-          list: [
-            { id: "main", model: "inference/nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8", default: true },
-            { id: "researcher", model: "inference/pinned-by-user" },
-          ],
+          entries: {
+            main: { model: "inference/nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8", default: true },
+            researcher: { model: "inference/pinned-by-user" },
+          },
         },
         customAgents: { researcher: { prompt: "be thorough" } },
       },
@@ -63,15 +63,14 @@ describe("mergeOpenClawRestoredConfig", () => {
     ) as {
       agents: {
         defaults: { model: Record<string, unknown>; thinkingDefault: unknown };
-        list: Record<string, unknown>[];
+        entries: Record<string, Record<string, unknown>>;
       };
       customAgents: unknown;
     };
 
     // Fresh rebuild owns the primary routing reference and the main agent model.
     expect(merged.agents.defaults.model).toEqual({ primary: "inference/Qwen/Qwen3.6-27B-FP8" });
-    expect(merged.agents.list[0]).toEqual({
-      id: "main",
+    expect(merged.agents.entries.main).toEqual({
       model: "inference/Qwen/Qwen3.6-27B-FP8",
       default: true,
     });
@@ -79,7 +78,33 @@ describe("mergeOpenClawRestoredConfig", () => {
     expect(merged.agents.defaults.thinkingDefault).toBe("off");
     expect(merged.customAgents).toEqual({ researcher: { prompt: "be thorough" } });
     // An intentional non-default per-agent pin is NOT touched.
-    expect(merged.agents.list[1]).toEqual({ id: "researcher", model: "inference/pinned-by-user" });
+    expect(merged.agents.entries.researcher).toEqual({ model: "inference/pinned-by-user" });
+  });
+
+  it("re-owns the main list-entry model for pre-entries backups (#7210)", () => {
+    // Snapshots captured before OpenClaw 2026.9.x carry agents.list instead of
+    // agents.entries; the merge must follow the same main/default precedence.
+    const merged = mergeOpenClawRestoredConfig(
+      {
+        agents: {
+          defaults: { model: { primary: "inference/nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8" } },
+          list: [
+            { id: "main", model: "inference/nvidia/NVIDIA-Nemotron-3-Nano-4B-FP8", default: true },
+          ],
+        },
+      },
+      {
+        agents: {
+          defaults: { model: { primary: "inference/Qwen/Qwen3.6-27B-FP8" } },
+        },
+      },
+    ) as { agents: { list: Record<string, unknown>[] } };
+
+    expect(merged.agents.list[0]).toEqual({
+      id: "main",
+      model: "inference/Qwen/Qwen3.6-27B-FP8",
+      default: true,
+    });
   });
 
   it("leaves backup agent routing untouched when the rebuild carries no agent primary (#7210)", () => {

@@ -485,7 +485,7 @@ describe("MessagingSetupApplier", () => {
     const files: Record<string, string> = {
       "/sandbox/.openclaw/openclaw.json": JSON.stringify({
         agents: {
-          list: ["default"],
+          entries: { default: {} },
         },
       }),
     };
@@ -524,7 +524,7 @@ describe("MessagingSetupApplier", () => {
     ]);
     expect(calls[1]?.input).toBeTruthy();
     const openclawConfig = JSON.parse(files["/sandbox/.openclaw/openclaw.json"] ?? "{}");
-    expect(openclawConfig.agents.list).toEqual(["default"]);
+    expect(openclawConfig.agents.entries).toEqual({ default: {} });
     expect(openclawConfig.channels.telegram.accounts.default).toMatchObject({
       botToken: "openshell:resolve:env:TELEGRAM_BOT_TOKEN",
       enabled: true,

@@ -745,7 +745,7 @@ COPY scripts/codex-acp-wrapper.sh /usr/local/bin/nemoclaw-codex-acp
 COPY scripts/generate-openclaw-config.mts /scripts/generate-openclaw-config.mts
 COPY scripts/validate-openclaw-tool-search.mts /scripts/validate-openclaw-tool-search.mts
 COPY --from=managed-startup-runtime-builder /out/managed-startup-image-runtime.cjs /usr/local/lib/nemoclaw/managed-startup-image-runtime.cjs
-COPY src/lib/tool-disclosure.ts /src/lib/tool-disclosure.ts
+COPY src/lib/extra-agents-validation.ts src/lib/tool-disclosure.ts /src/lib/
 COPY src/lib/messaging/ /src/lib/messaging/
 COPY nemoclaw-blueprint/openclaw-plugins/ /usr/local/share/nemoclaw/openclaw-plugins/
 COPY --from=mcp-tool-discovery-runtime /opt/mcp-tool-discovery-runtime/dist/ /usr/local/lib/nemoclaw/mcp-tool-discovery-runtime/
@@ -1686,7 +1686,7 @@ RUN chmod 755 /usr/local/bin/nemoclaw-start /usr/local/bin/nemoclaw-codex-acp \
         /scripts/generate-openclaw-config.mts \
         /scripts/validate-openclaw-tool-search.mts \
         /src/lib/messaging/applier/build/messaging-build-applier.mts \
-    && chmod 444 /src/lib/tool-disclosure.ts \
+    && chmod 444 /src/lib/extra-agents-validation.ts /src/lib/tool-disclosure.ts \
         /usr/local/lib/nemoclaw/entrypoint-env-wrapper.sh \
     && chmod -R a+rX /src/lib/messaging \
     && chown root:root /usr/local/bin/nemoclaw-gateway-control \
@@ -2055,7 +2055,7 @@ ENV NPM_CONFIG_OFFLINE=true \
 # OCI image imported by k3s.
 # hadolint ignore=DL3059,DL4006
 RUN NPM_CONFIG_IGNORE_SCRIPTS=true npm_config_ignore_scripts=true \
-    openclaw plugins install /opt/nemoclaw \
+    openclaw plugins install --force --accept-capabilities /opt/nemoclaw \
     && openclaw plugins inspect nemoclaw --json > /dev/null \
     && if [ -d /sandbox/.openclaw/plugin-runtime-deps ]; then \
         find /sandbox/.openclaw/plugin-runtime-deps -type f \( \

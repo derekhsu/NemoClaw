@@ -235,13 +235,15 @@ describe("sandbox build context staging", () => {
       writeFixture(path.join("src", "lib", relativePath));
     }
     writeFixture(path.join("scripts", "patch-openclaw-tool-catalog.mts"));
-    writeFixture(path.join("scripts", "patch-openclaw-chat-send.mts"));
+    writeFixture(path.join("scripts", "lib", "patch-openclaw-npm12-pack-json.mts"));
+    writeFixture(path.join("scripts", "lib", "patch-openclaw-container-restart.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-mcp-npx.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-mcp-reliability.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-mcp-tools-list-timeout.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-issue-4434-diagnostics.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-managed-transport-diagnostics.mts"));
     writeFixture(path.join("scripts", "patch-openclaw-device-self-approval.mts"));
+    writeFixture(path.join("scripts", "lib", "patch-openclaw-secondary-main-session-delete.mts"));
     writeFixture(path.join("scripts", "openclaw", "patch-gateway-daemon-dialback.mts"));
     writeFixture(path.join("scripts", "extract-semver.sh"));
     writeFixture(path.join("scripts", "patch-openclaw-shared-state-permissions.mts"));
@@ -857,12 +859,19 @@ describe("sandbox build context staging", () => {
       expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-tool-catalog.mts"))).toBe(
         true,
       );
-      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-chat-send.mts"))).toBe(
-        true,
-      );
-      expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-chat-send.js"))).toBe(
-        false,
-      );
+      expect(
+        fs.existsSync(path.join(buildCtx, "scripts", "lib", "patch-openclaw-npm12-pack-json.mts")),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(buildCtx, "scripts", "lib", "patch-openclaw-container-restart.mts"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(buildCtx, "scripts", "lib", "patch-openclaw-secondary-main-session-delete.mts"),
+        ),
+      ).toBe(true);
       expect(fs.existsSync(path.join(buildCtx, "scripts", "patch-openclaw-mcp-npx.mts"))).toBe(
         true,
       );

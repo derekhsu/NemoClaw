@@ -16,7 +16,52 @@ import {
 } from "./helpers/openclaw-device-self-approval-patch-harness";
 
 describe("OpenClaw bounded stored-device-auth selection (#4462)", () => {
-  it("forwards stored device auth only for exact same-device transitions", async () => {
+  it("uses pairing-only stored auth only for a marked settlement list (#9844)", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-device-cli-settlement-list-"));
+    const dist = path.join(tmp, "dist");
+    fs.mkdirSync(dist);
+    writeFixtureDist(dist);
+    try {
+      expect(runPatch(dist).status).toBe(0);
+      const source = fs.readFileSync(path.join(dist, "devices-cli.runtime-fixture.js"), "utf8");
+      const runtime = runFixture<{
+        list: (opts: Record<string, unknown>) => Promise<unknown>;
+        calls: Array<Record<string, unknown>>;
+        setSettlement: (enabled: boolean) => void;
+      }>(
+        source,
+        `({
+          list: listPairingWithFallback,
+          calls: gatewayCalls,
+          setSettlement: (enabled) => {
+            if (enabled) process.env.NEMOCLAW_OPENCLAW_PAIRING_SETTLEMENT = "1";
+            else delete process.env.NEMOCLAW_OPENCLAW_PAIRING_SETTLEMENT;
+          },
+        })`,
+      );
+
+      runtime.setSettlement(false);
+      await runtime.list({ json: true });
+      runtime.setSettlement(true);
+      await runtime.list({ json: true });
+
+      expect(runtime.calls[0]).toMatchObject({ method: "device.pair.list" });
+      expect(runtime.calls[0]).not.toHaveProperty("useStoredDeviceAuth");
+      expect(runtime.calls[1]).toMatchObject({
+        method: "device.pair.list",
+        scopes: ["operator.pairing"],
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.pairing"],
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["repair", validPending()],
+    ["nonrepair", validPending({ isRepair: false })],
+  ])("forwards stored device auth for an exact same-device %s transition", async (_label, pending) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-device-cli-stored-auth-"));
     const dist = path.join(tmp, "dist");
     fs.mkdirSync(dist);
@@ -36,24 +81,21 @@ describe("OpenClaw bounded stored-device-auth selection (#4462)", () => {
           setList: setPairingLists,
         })`,
       );
-      for (const pending of [validPending(), validPending({ isRepair: false })]) {
-        runtime.calls.length = 0;
-        runtime.setList({ pending: [pending], paired: [validPaired()] });
+      runtime.setList({ pending: [pending], paired: [validPaired()] });
 
-        await runtime.approve({ json: true }, "request-1");
+      await runtime.approve({ json: true }, "request-1");
 
-        expect(runtime.calls).toHaveLength(2);
-        for (const [method, call] of [
-          ["device.pair.list", runtime.calls[0]],
-          ["device.pair.approve", runtime.calls[1]],
-        ] as const) {
-          expect(call).toMatchObject({
-            method,
-            scopes: ["operator.pairing"],
-            useStoredDeviceAuth: true,
-            requiredStoredDeviceAuthScopes: ["operator.pairing"],
-          });
-        }
+      expect(runtime.calls).toHaveLength(2);
+      for (const [method, call] of [
+        ["device.pair.list", runtime.calls[0]],
+        ["device.pair.approve", runtime.calls[1]],
+      ] as const) {
+        expect(call).toMatchObject({
+          method,
+          scopes: ["operator.pairing"],
+          useStoredDeviceAuth: true,
+          requiredStoredDeviceAuthScopes: ["operator.pairing"],
+        });
       }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

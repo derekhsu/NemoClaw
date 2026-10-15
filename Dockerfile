@@ -707,13 +707,15 @@ COPY nemoclaw-blueprint/ /opt/nemoclaw-blueprint/
 FROM scratch AS openclaw-patch-payload
 
 COPY scripts/patch-openclaw-tool-catalog.mts /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts
-COPY scripts/patch-openclaw-chat-send.mts /usr/local/lib/nemoclaw/patch-openclaw-chat-send.mts
+COPY scripts/lib/patch-openclaw-npm12-pack-json.mts /usr/local/lib/nemoclaw/npm12.mts
+COPY scripts/lib/patch-openclaw-container-restart.mts /usr/local/lib/nemoclaw/patch-openclaw-container-restart.mts
 COPY scripts/patch-openclaw-mcp-npx.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts
 COPY scripts/patch-openclaw-mcp-reliability.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-reliability.mts
 COPY scripts/patch-openclaw-mcp-tools-list-timeout.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts
 COPY scripts/patch-openclaw-issue-4434-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.mts
 COPY scripts/patch-openclaw-managed-transport-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-managed-transport-diagnostics.mts
 COPY scripts/patch-openclaw-device-self-approval.mts /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts
+COPY scripts/lib/patch-openclaw-secondary-main-session-delete.mts /usr/local/lib/nemoclaw/patch-openclaw-secondary-main-session-delete.mts
 COPY scripts/openclaw/patch-gateway-daemon-dialback.mts /usr/local/lib/nemoclaw/patch-openclaw-gateway-daemon-dialback.mts
 COPY scripts/extract-semver.sh /usr/local/lib/nemoclaw/extract-semver
 COPY scripts/patch-openclaw-shared-state-permissions.mts /usr/local/lib/nemoclaw/patch-openclaw-shared-state-permissions.mts
@@ -802,7 +804,7 @@ RUN node --experimental-strip-types /scripts/patch-bundled-npm-tar.mts \
 RUN node --experimental-strip-types /scripts/patch-bundled-npm-brace-expansion.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
-# OpenClaw 2026.7.1 loads some generated source through jiti. Disable its
+# OpenClaw 2026.9.2 loads some generated source through jiti. Disable its
 # filesystem transform cache so source fragments that mention provider marker
 # names do not persist under /tmp/jiti inside the sandbox.
 ENV JITI_FS_CACHE=false
@@ -937,13 +939,15 @@ COPY --from=wechat-npm-cache /out/wechat-npm-cache/ /usr/local/share/nemoclaw/we
 COPY --from=openclaw-patch-payload / /
 
 RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts \
-        /usr/local/lib/nemoclaw/patch-openclaw-chat-send.mts \
+        /usr/local/lib/nemoclaw/npm12.mts \
+        /usr/local/lib/nemoclaw/patch-openclaw-container-restart.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-reliability.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-managed-transport-diagnostics.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts \
+        /usr/local/lib/nemoclaw/patch-openclaw-secondary-main-session-delete.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-gateway-daemon-dialback.mts \
         /usr/local/lib/nemoclaw/extract-semver \
         /usr/local/lib/nemoclaw/patch-openclaw-shared-state-permissions.mts \
@@ -1313,7 +1317,7 @@ RUN set -eu; \
         fi; \
     fi; \
     # --- Patch 2b: allow OpenShell host gateway only through web_fetch trusted env proxy --- \
-    # Reviewed against openclaw@2026.7.1 dist: fetchWithWebToolsNetworkGuard \
+    # Reviewed against openclaw@2026.9.2 dist: fetchWithWebToolsNetworkGuard \
     # passes useEnvProxy into withTrustedEnvProxyGuardedFetchMode(resolved), and \
     # the SSRF guard consumes policy.allowedHostnames to skip private-network \
     # checks for an exact normalized hostname. hostnameAllowlist only gates \
@@ -1349,7 +1353,7 @@ RUN set -eu; \
         fi; \
     fi; \
     # --- Patch 4: route unconfigured strict fetches through the sandbox egress proxy (#4687) --- \
-    # Reviewed against openclaw@2026.7.1 dist fetch-guard: the STRICT-mode \
+    # Reviewed against openclaw@2026.9.2 dist fetch-guard: the STRICT-mode \
     # managed-proxy gate is `mode === GUARDED_FETCH_MODE.STRICT && \
     # isManagedProxyActive()`. Extend activation to OPENSHELL_SANDBOX=1 only \
     # for fetches with no explicit dispatcherPolicy so \
@@ -1383,7 +1387,7 @@ RUN set -eu; \
         fi; \
     fi; \
     # --- Patch 6: cron model-provider preflight opts into trusted env-proxy mode --- \
-    # Reviewed against openclaw@2026.7.1 dist: the cron isolated-agent preflight \
+    # Reviewed against openclaw@2026.9.2 dist: the cron isolated-agent preflight \
     # (`probeLocalProviderEndpoint`) calls `fetchWithSsrFGuard` with \
     # `auditContext: "cron-model-provider-preflight"` and a narrow hostname-allowlist \
     # SsrFPolicy from `buildLocalProviderSsrFPolicy`, but does not pass a `mode`. \
@@ -1451,16 +1455,26 @@ RUN set -eu; \
         fi; \
     fi; \
     # --- Patch 3: follow symlinks in plugin-install path checks (#2203) --- \
-    # OpenClaw's install-safe-path and install-package-dir reject symlinked \
-    # directories via lstat. Changing lstat → stat in these two modules lets \
-    # symlinks resolve; the real security gates (realpath + isPathInside \
-    # containment) remain intact — a symlink escaping the base tree is still caught. \
-    # Scoped to install-safe-path + install-package-dir only. \
+    # Replace legacy lstat checks with stat while retaining realpath containment. \
+    # Current safe-path delegates to fs-safe; directory guards remain native. \
     isp_file="$(grep -RIlE --include='*.js' 'const baseLstat = await fs\.(lstat|stat)\(baseDir\)' "$OC_DIST/install-safe-path-"*.js || true)"; \
-    test -n "$isp_file" || { echo "ERROR: install-safe-path baseLstat pattern not found" >&2; exit 1; }; \
-    sed -i 's/const baseLstat = await fs\.lstat(baseDir)/const baseLstat = await fs.stat(baseDir)/' "$isp_file"; \
-    if grep -q 'const baseLstat = await fs\.lstat(baseDir)' "$isp_file"; then echo "ERROR: Patch 3a (install-safe-path) left baseLstat lstat call" >&2; exit 1; fi; \
-    if ! grep -q 'const baseLstat = await fs\.stat(baseDir)' "$isp_file"; then echo "ERROR: Patch 3a (install-safe-path) did not find patched baseLstat stat call" >&2; exit 1; fi; \
+    if [ -n "$isp_file" ]; then \
+        sed -i 's/const baseLstat = await fs\.lstat(baseDir)/const baseLstat = await fs.stat(baseDir)/' "$isp_file"; \
+        if grep -q 'const baseLstat = await fs\.lstat(baseDir)' "$isp_file"; then echo "ERROR: Patch 3a (install-safe-path) left baseLstat lstat call" >&2; exit 1; fi; \
+        if ! grep -q 'const baseLstat = await fs\.stat(baseDir)' "$isp_file"; then echo "ERROR: Patch 3a (install-safe-path) did not find patched baseLstat stat call" >&2; exit 1; fi; \
+    else \
+        isp_delegate_file="$(grep -RIlF --include='*.js' 'from "@openclaw/fs-safe/advanced"' "$OC_DIST/install-safe-path-"*.js || true)"; \
+        if [ "$(printf '%s\n' "$isp_delegate_file" | grep -c .)" -ne 1 ]; then \
+            patch_fail "Patch 3a target missing without the single reviewed 2026.9.2 @openclaw/fs-safe delegation"; \
+        fi; \
+        if ! grep -q 'resolveSafeInstallDir\|assertCanonicalPathWithinBase' "$isp_delegate_file"; then \
+            patch_fail "Patch 3a reviewed @openclaw/fs-safe delegation is incomplete"; \
+        fi; \
+        if grep -qE 'fs(\$1)?\.lstat\(' "$isp_delegate_file"; then \
+            patch_fail "Patch 3a reviewed @openclaw/fs-safe delegation still performs a local lstat"; \
+        fi; \
+        echo "INFO: OpenClaw ${OC_VERSION} delegates install-safe-path to @openclaw/fs-safe/advanced; Patch 3a not needed"; \
+    fi; \
     ipd_file="$(grep -RIlE --include='*.js' 'assertInstallBaseStable' "$OC_DIST/install-package-dir-"*.js || true)"; \
     test -n "$ipd_file" || { echo "ERROR: install-package-dir assertInstallBaseStable not found" >&2; exit 1; }; \
 	    if grep -q 'const baseLstat = await fs\.lstat(params\.installBaseDir)' "$ipd_file"; then \
@@ -1470,7 +1484,11 @@ RUN set -eu; \
 	        if ! grep -q 'const baseLstat = await fs\.stat(params\.installBaseDir)' "$ipd_file" && ! grep -q 'await fs\.stat(params\.installBaseDir)).isDirectory()' "$ipd_file"; then echo "ERROR: Patch 3b (install-package-dir) did not find patched/safe installBaseDir stat call" >&2; exit 1; fi; \
 	        if grep -q 'baseLstat\.isSymbolicLink()' "$ipd_file"; then echo "ERROR: Patch 3b (install-package-dir) left baseLstat symlink check" >&2; exit 1; fi; \
 	    else \
-	        grep -q 'await fs\.realpath(params\.installBaseDir) !== params\.expectedRealPath' "$ipd_file" || { echo "ERROR: install-package-dir lacks expected realpath stability guard" >&2; exit 1; }; \
+	        grep -Eq 'if \(!\(await fs(\$1)?\.stat\(params\.installBaseDir\)\)\.isDirectory\(\)\)' "$ipd_file" \
+	            || patch_fail "Patch 3b current install-package-dir lacks the reviewed directory stat guard"; \
+	        grep -Eq 'await fs(\$1)?\.realpath\(params\.installBaseDir\) !== params.expectedRealPath' "$ipd_file" \
+	            || patch_fail "Patch 3b current install-package-dir lacks the reviewed realpath stability guard"; \
+	        echo "INFO: OpenClaw ${OC_VERSION} install-package-dir already uses stat plus realpath stability; Patch 3b not needed"; \
 	    fi; \
     # --- Patch 5: bump default WS handshake timeout 10s -> 60s (#2484) --- \
     # OpenClaw's WS connect handshake has a hard-coded 10s timeout on both \
@@ -1493,23 +1511,13 @@ RUN set -eu; \
     if grep -REq --include='*.js' 'DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = (1e4|15e3)' "$OC_DIST"; then echo "ERROR: Patch 5 left a short handshake-timeout constant" >&2; exit 1; fi; \
     if ! grep -REq --include='*.js' 'DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 6e4' "$OC_DIST"; then echo "ERROR: Patch 5 did not find patched 6e4 constant" >&2; exit 1; fi
 
-# Patch OpenClaw chat.send gateway behavior for OpenClaw 2026.7.1.
-#
-# OpenClaw can accept rapid TUI/WebChat chat.send requests and then emit a
-# terminal chat event with state="final" but no assistant message for the later
-# submitted run. That makes clients treat the turn as complete even though no
-# visible reply was delivered. The shim also correlates real agent run IDs back
-# to the submitted chat.send run ID when OpenClaw starts an internal run with a
-# different ID, carries that submitted ID through queued follow-up turns, and
-# adds the submitted run ID as the transcript idempotency key.
-#
-# Removal criteria: drop when upstream OpenClaw fixes openclaw/openclaw#70164
-# and openclaw/openclaw#50298, or when NemoClaw no longer ships an affected OpenClaw.
+# Native OpenClaw restart must reload updated ESM plugins in OpenShell sandboxes.
+# Remove this bridge when upstream container restart refreshes the module graph.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-chat-send.mts \
+RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-container-restart.mts \
     /usr/local/lib/node_modules/openclaw/dist
 
-# Keep OpenClaw 2026.7.1 scope-upgrade approvals inside the gateway's
+# Keep OpenClaw 2026.9.2 scope-upgrade approvals inside the gateway's
 # canonical locked pairing writer (#4462). The upstream devices CLI otherwise
 # asks for the very scopes it is trying to approve, so the handshake fails
 # before device.pair.approve runs and its operator.admin retry fails likewise.
@@ -1522,7 +1530,9 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-chat-
 # self-upgrade through the gateway using only operator.pairing.
 # hadolint ignore=DL3059
 RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts \
-    /usr/local/lib/node_modules/openclaw/dist
+    /usr/local/lib/node_modules/openclaw/dist \
+    && node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-secondary-main-session-delete.mts \
+        /usr/local/lib/node_modules/openclaw/dist
 
 # Keep backend RPC initiated by the OpenClaw gateway daemon on loopback while
 # preserving OPENCLAW_GATEWAY_URL for agent processes that OpenShell requires
@@ -1535,14 +1545,14 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-devic
 # self-dialback from descendant agent routing without changing the inherited
 # gateway URL.
 # hadolint ignore=DL3059
-RUN if [ "$OPENCLAW_VERSION" = "2026.7.1" ]; then \
+RUN if [ "$OPENCLAW_VERSION" = "2026.9.2" ]; then \
       node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-gateway-daemon-dialback.mts \
         /usr/local/lib/node_modules/openclaw/dist; \
     fi
 
 # Patch OpenClaw TUI unreachable-inference diagnostics for #4434.
 #
-# OpenClaw 2026.7.1 formats sandbox inference egress failures as either generic
+# OpenClaw 2026.9.2 formats sandbox inference egress failures as either generic
 # `TypeError: fetch failed` or `LLM request timed out.` messages, which leave the
 # TUI without the required HTTP/cause, gateway/upstream reporting layer, and
 # recovery hint fields. This version-scoped shim enriches only those reviewed
@@ -1566,7 +1576,7 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-n
     /usr/local/lib/node_modules/openclaw/dist
 
 # Recover from a transient remote Streamable HTTP MCP startup failure. OpenClaw
-# 2026.7.1 turns one reset or request timeout into an empty tool set plus
+# 2026.9.2 turns one reset or request timeout into an empty tool set plus
 # catalog diagnostics, and keeps that degraded catalog for the whole session, so
 # the agent reports the integration as unavailable until a new session starts.
 # The patch retries a classified transient startup once with a fresh transport
@@ -1591,7 +1601,7 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-t
     /usr/local/lib/node_modules/openclaw/dist
 
 # Emit a redacted managed-transport diagnostic when a remote Streamable HTTP MCP
-# request fails. OpenClaw 2026.7.1 surfaces only the transport error text, which
+# request fails. OpenClaw 2026.9.2 surfaces only the transport error text, which
 # does not say whether policy, CONNECT, TLS, the upstream connection, the
 # request, or response headers failed. The fetch-boundary wrapper is
 # failure-only by default, never retries, never alters the request, and never
@@ -1607,13 +1617,16 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-manag
     /usr/local/lib/node_modules/openclaw/dist
 
 # Run the compact tool catalog shim for OpenClaw selection runtimes that still
-# need it. OpenClaw 2026.7.1 ships a built-in catalog surface, so the script
-# skips cleanly after classifying the compiled selection-*.js shape.
+# need it. OpenClaw 2026.9.2 ships a built-in catalog surface, so the script
+# skips cleanly after classifying the compiled local-model shape. The chained
+# npm pack JSON verifier confirms the reviewed install-source-utils layout.
 # hadolint ignore=DL3059
 RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts \
-    /usr/local/lib/node_modules/openclaw/dist
+    /usr/local/lib/node_modules/openclaw/dist \
+    && node --experimental-strip-types /usr/local/lib/nemoclaw/npm12.mts \
+        /usr/local/lib/node_modules/openclaw/dist "$OPENCLAW_VERSION"
 
-# OpenClaw 2026.7.1 moved gateway startup work into shared and per-agent SQLite
+# OpenClaw 2026.9.2 moved gateway startup work into shared and per-agent SQLite
 # databases, but hardens them to owner-only modes on every open. NemoClaw's
 # root entrypoint runs the CLI and gateway as separate users in the sandbox
 # group, so use group-shared modes only when that split-user runtime marker is
@@ -1715,6 +1728,10 @@ ARG NEMOCLAW_INFERENCE_PROVIDER_ID=inference
 # policy (#5468). Empty default keeps prior behavior when onboard does not supply
 # a value.
 ARG NEMOCLAW_UPSTREAM_PROVIDER=
+# Keep selected upstream and catalog preset distinct from the managed
+# "inference" route. The generator uses them for provider and profile settings.
+# Empty defaults retain the standard managed-route behavior.
+ARG NEMOCLAW_SERVING_PRESET=
 ARG NEMOCLAW_PRIMARY_MODEL_REF=inference/nvidia/nemotron-3-super-120b-a12b
 # Default dashboard port 18789 — override at runtime via NEMOCLAW_DASHBOARD_PORT.
 ARG CHAT_UI_URL=http://127.0.0.1:18789
@@ -1794,7 +1811,7 @@ ARG NEMOCLAW_WEB_SEARCH_PROVIDER=brave
 ARG NEMOCLAW_OPENCLAW_OTEL=0
 # The default local OTEL endpoint is intentionally the single host-gateway
 # collector path covered by the openclaw-diagnostics-otel-local policy preset.
-# @openclaw/diagnostics-otel@2026.7.1 exports through OpenTelemetry's OTLP
+# @openclaw/diagnostics-otel@2026.9.2 exports through OpenTelemetry's OTLP
 # trace exporter path, not OpenClaw web_fetch, so Patch 2b's host gateway
 # exception remains scoped to user-requested web_fetch proxy calls.
 ARG NEMOCLAW_OPENCLAW_OTEL_ENDPOINT=http://host.openshell.internal:4318
@@ -1808,6 +1825,7 @@ ARG NEMOCLAW_OPENCLAW_OTEL_SAMPLE_RATE=1.0
 ENV NEMOCLAW_MODEL=${NEMOCLAW_MODEL} \
     NEMOCLAW_INFERENCE_PROVIDER_ID=${NEMOCLAW_INFERENCE_PROVIDER_ID} \
     NEMOCLAW_UPSTREAM_PROVIDER=${NEMOCLAW_UPSTREAM_PROVIDER} \
+    NEMOCLAW_SERVING_PRESET=${NEMOCLAW_SERVING_PRESET} \
     NEMOCLAW_PRIMARY_MODEL_REF=${NEMOCLAW_PRIMARY_MODEL_REF} \
     CHAT_UI_URL=${CHAT_UI_URL} \
     NEMOCLAW_INFERENCE_BASE_URL=${NEMOCLAW_INFERENCE_BASE_URL} \

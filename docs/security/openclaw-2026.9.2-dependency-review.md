@@ -188,10 +188,20 @@ instructions still run under `--network=none`. The `2026.7.1` pin family is
 removed; the `2026.3.11` and `2026.4.24` pins remain only as E2E legacy
 fixtures gated behind production rejection.
 
-The compiled-dist patch inventory, the pairing and config surfaces, and the
-supervisor and shields boundaries are unchanged by this pin bump. Patch
-anchors verified against the `2026.7.1` dist must be re-verified against the
-`2026.9.2` dist before the agent is declared runnable; that re-verification is
-tracked separately and this document does not assert it. Comments inside the
-Dockerfile that name `2026.7.1` mark the dist version each patch was last
-verified against and are updated as re-verification lands.
+The compiled-dist patch inventory is re-anchored against the `2026.9.2`
+dist. Upstream retired the downstream `chat.send` ordering workaround
+(`patch-openclaw-chat-send.mts`) because run-ID lineage and empty-terminal
+suppression are now upstream-owned; the script, its Dockerfile staging and
+application, and its dedicated tests are removed. Three upstream scripts are
+adopted: `patch-openclaw-container-restart.mts` (fresh-process `execve`
+restart inside OpenShell sandboxes),
+`patch-openclaw-secondary-main-session-delete.mts` (secondary `main` session
+deletion guard), and `patch-openclaw-npm12-pack-json.mts` (npm 12 pack-JSON
+parser verifier, which already recognizes the `2026.9.2` bundled parser).
+`patch-openclaw-device-self-approval.mts` is updated to the upstream `9.x`
+selector set with SQLite pairing persistence specs gated on the dist shape.
+`patch-openclaw-shared-state-permissions.mts` keeps the NemoClaw split-user
+group-shared modes on the `2026.9.2` migration shapes.
+`patch-gateway-daemon-dialback.mts` drops its call-context spec because
+`2026.9.2` merged both env-URL resolution sites into one unified resolver;
+the remaining specs keep strict exact-one semantics.

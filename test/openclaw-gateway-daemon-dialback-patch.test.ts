@@ -89,7 +89,7 @@ function readGatewayDaemonDialbackBuildCommand(): string {
   const continuation = String.fromCharCode(92);
   const newline = String.fromCharCode(10);
   const expectedBlock = [
-    `RUN if [ "$OPENCLAW_VERSION" = "2026.7.1" ]; then ${continuation}`,
+    `RUN if [ "$OPENCLAW_VERSION" = "2026.9.2" ]; then ${continuation}`,
     `      node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-gateway-daemon-dialback.mts ${continuation}`,
     `        /usr/local/lib/node_modules/openclaw/dist; ${continuation}`,
     "    fi",
@@ -110,7 +110,7 @@ describe("OpenClaw gateway daemon self-dialback patch", () => {
     {
       expectedCalls:
         "--experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-gateway-daemon-dialback.mts /usr/local/lib/node_modules/openclaw/dist\n",
-      version: "2026.7.1",
+      version: "2026.9.2",
     },
   ])("runs the exact-version Dockerfile gate for $version (#7230)", ({
     expectedCalls,
@@ -356,6 +356,36 @@ describe("OpenClaw gateway daemon self-dialback patch", () => {
       );
       expect(audit.status, audit.stderr).toBe(0);
       expect(audit.stdout).toContain("audited OpenClaw gateway daemon self-dialback (3 files)");
+    } finally {
+      fs.rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("patches only the merged connection-details target when the call-context shape is retired (#7215)", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-gateway-dialback-merged-"));
+    try {
+      fs.writeFileSync(path.join(tmp, "connection-details.js"), CONNECTION_DETAILS_SOURCE);
+      fs.writeFileSync(path.join(tmp, "gateway-tools.js"), TOOL_TARGET_SOURCE);
+
+      const apply = spawnSync(process.execPath, ["--experimental-strip-types", PATCH_SCRIPT, tmp], {
+        encoding: "utf8",
+      });
+      expect(apply.status, apply.stderr).toBe(0);
+      expect(apply.stdout).toContain("patched OpenClaw gateway daemon self-dialback (2 files)");
+      expect(fs.readFileSync(path.join(tmp, "connection-details.js"), "utf8")).toContain(
+        CONNECTION_DETAILS_MARKER,
+      );
+      expect(fs.readFileSync(path.join(tmp, "gateway-tools.js"), "utf8")).toContain(
+        TOOL_TARGET_MARKER,
+      );
+
+      const audit = spawnSync(
+        process.execPath,
+        ["--experimental-strip-types", PATCH_SCRIPT, "--audit", tmp],
+        { encoding: "utf8" },
+      );
+      expect(audit.status, audit.stderr).toBe(0);
+      expect(audit.stdout).toContain("audited OpenClaw gateway daemon self-dialback (2 files)");
     } finally {
       fs.rmSync(tmp, { force: true, recursive: true });
     }

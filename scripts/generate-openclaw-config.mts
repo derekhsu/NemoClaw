@@ -92,6 +92,9 @@ const OPENCLAW_MIN_PROMPT_BUDGET_TOKENS = 8_000;
 const SMALL_OLLAMA_CONTEXT_THRESHOLD =
   OPENCLAW_DEFAULT_RESERVE_TOKENS_FLOOR + OPENCLAW_MIN_PROMPT_BUDGET_TOKENS;
 const LOCAL_OLLAMA_UPSTREAM_PROVIDER = "ollama-local";
+const LOCAL_VLLM_UPSTREAM_PROVIDER = "vllm-local";
+const N1X_MANAGED_VLLM_SERVING_PRESET = "vllm.n1x.single.qwen3-6-35b-a3b-nvfp4";
+const N1X_COMPACTION_TIMEOUT_SECONDS = 300;
 const MANAGED_INFERENCE_PROVIDER_KEY = "inference";
 const MANAGED_INFERENCE_HOSTNAME = "inference.local";
 // Upstream source of truth (#4781): OpenClaw's `AgentCompactionConfig` schema and
@@ -109,11 +112,9 @@ const MANAGED_INFERENCE_HOSTNAME = "inference.local";
 const MANAGED_INFERENCE_SAFEGUARD_COMPACTION: JsonObject = {
   mode: "safeguard",
   timeoutSeconds: 120,
-  maxHistoryShare: 0.35,
   recentTurnsPreserve: 1,
   qualityGuard: { enabled: true, maxRetries: 0 },
   notifyUser: true,
-  truncateAfterCompaction: true,
 };
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 const WEB_SEARCH_PROVIDERS = {
@@ -1169,14 +1170,20 @@ function isManagedInferenceLocalRoute(
 
 // Managed inference sessions other than Local Ollama use OpenClaw's safeguard
 // compaction rather than its plain runtime compactor. A two-minute timeout
-// bounds each attempt, lifecycle notices expose automatic and agent-run
-// compaction progress, and
-// successful compaction rotates the active transcript. These safeguards do not
-// guarantee that summarization succeeds or that the resulting context is smaller.
+// bounds each standard summarization request. The N1x managed-vLLM profile
+// retains its five-minute request timeout (#11805). OpenClaw
+// 2026.9.1 retired the configurable reserve fields, so its runtime owns prompt
+// headroom while NemoClaw retains the profile-specific timeout. Lifecycle notices
+// expose compaction progress, and successful compaction rotates the active transcript.
+// These safeguards do not guarantee that summarization succeeds or that the
+// resulting context is smaller.
 export function buildManagedInferenceSafeguardCompaction(
   providerKey: string | undefined,
   upstreamProvider: string | undefined,
   inferenceBaseUrl: string,
+  servingPreset: string | undefined,
+  _contextWindow: number,
+  _maxTokens: number,
 ): JsonObject | undefined {
   if (!isManagedInferenceLocalRoute(providerKey, inferenceBaseUrl)) {
     return undefined;
@@ -1184,9 +1191,22 @@ export function buildManagedInferenceSafeguardCompaction(
   if ((upstreamProvider || "").trim() === LOCAL_OLLAMA_UPSTREAM_PROVIDER) {
     return undefined;
   }
+  const isN1xManagedVllm =
+    (upstreamProvider || "").trim() === LOCAL_VLLM_UPSTREAM_PROVIDER &&
+    (servingPreset || "").trim() === N1X_MANAGED_VLLM_SERVING_PRESET;
   return {
     ...MANAGED_INFERENCE_SAFEGUARD_COMPACTION,
-    qualityGuard: { ...MANAGED_INFERENCE_SAFEGUARD_COMPACTION.qualityGuard },
+    ...(isN1xManagedVllm
+      ? {
+          timeoutSeconds: N1X_COMPACTION_TIMEOUT_SECONDS,
+        }
+      : {}),
+    qualityGuard: {
+      ...MANAGED_INFERENCE_SAFEGUARD_COMPACTION.qualityGuard,
+      // Give N1x summaries one corrective attempt with audit feedback (#12297).
+      // Keep the audit enabled so failed summaries cannot replace conversation history.
+      ...(isN1xManagedVllm ? { maxRetries: 1 } : {}),
+    },
   };
 }
 
@@ -1466,6 +1486,9 @@ export function buildConfig(env: Env = process.env): JsonObject {
     providerKey,
     env.NEMOCLAW_UPSTREAM_PROVIDER,
     inferenceBaseUrl,
+    env.NEMOCLAW_SERVING_PRESET,
+    contextWindow,
+    maxTokens,
   );
   if (managedInferenceCompaction) {
     agentDefaults.compaction = managedInferenceCompaction;

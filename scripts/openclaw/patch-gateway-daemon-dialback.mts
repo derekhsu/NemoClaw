@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * Temporary compatibility patch for OpenClaw 2026.7.1 gateway daemon
- * self-dialback.
+ * Temporary compatibility patch for OpenClaw gateway daemon self-dialback.
  *
  * NemoClaw exports OPENCLAW_GATEWAY_URL so agent processes can reach the
  * gateway through its OpenShell-allowed private interface. The gateway daemon
@@ -14,6 +13,11 @@
  * "openclaw-gateway" title, so ignore the inherited URL only in that process
  * and only when OPENSHELL_SANDBOX is exactly "1". Explicit URL overrides and
  * configured remote URLs remain unchanged.
+ *
+ * OpenClaw 2026.7.1 resolved the inherited URL in a separate call-context
+ * helper; 2026.9.2 merged that path into the shared connection-details
+ * resolver, so the call-context target applies only to dists that still ship
+ * the legacy shape.
  *
  * Remove this patch when upstream distinguishes gateway daemon self-dialback
  * from descendant agent routing without changing the daemon environment.
@@ -40,6 +44,7 @@ interface PatchSpec {
   readonly marker: string;
   readonly upstream: string;
   readonly patched: string;
+  readonly optional?: boolean;
 }
 
 interface PatchTextResult {
@@ -54,6 +59,7 @@ export interface PatchDistResult {
 
 const CALL_CONTEXT_SPEC: PatchSpec = {
   label: "gateway call context",
+  optional: true,
   marker: CALL_CONTEXT_MARKER,
   upstream:
     "const envUrlOverride = cliUrlOverride || opts.localPortOverride !== void 0 ? void 0 : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);",
@@ -144,11 +150,12 @@ function listJavaScriptFiles(distDir: string): string[] {
 function findTarget(
   entries: ReadonlyArray<{ file: string; source: string }>,
   spec: PatchSpec,
-): { file: string; source: string } {
+): { file: string; source: string } | null {
   const matches = entries.filter(
     ({ source }) => source.includes(spec.upstream) || source.includes(spec.marker),
   );
   if (matches.length !== 1) {
+    if (matches.length === 0 && spec.optional) return null;
     throw new Error(
       `OpenClaw dist: expected exactly one ${spec.label} target, found ${matches.length}`,
     );
@@ -169,6 +176,7 @@ export function patchOpenClawGatewayDaemonDialback(
 
   for (const spec of PATCH_SPECS) {
     const target = findTarget(entries, spec);
+    if (!target) continue;
     const result = patchText(target.source, target.file, spec);
     if (options.audit && result.status !== "already-patched") {
       throw new Error(`${target.file}: ${spec.label} patch is not applied`);

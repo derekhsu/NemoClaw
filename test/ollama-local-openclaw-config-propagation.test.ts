@@ -168,11 +168,9 @@ describe("OpenClaw managed-route compaction policy (#5468, #4781)", () => {
     expect(config.agents.defaults.compaction).toEqual({
       mode: "safeguard",
       timeoutSeconds: 120,
-      maxHistoryShare: 0.35,
       recentTurnsPreserve: 1,
       qualityGuard: { enabled: true, maxRetries: 0 },
       notifyUser: true,
-      truncateAfterCompaction: true,
     });
   });
 
@@ -182,15 +180,38 @@ describe("OpenClaw managed-route compaction policy (#5468, #4781)", () => {
         "inference",
         undefined,
         "https://inference.local/v1",
+        undefined,
+        16384,
+        4096,
       ),
     ).toEqual({
       mode: "safeguard",
       timeoutSeconds: 120,
-      maxHistoryShare: 0.35,
       recentTurnsPreserve: 1,
       qualityGuard: { enabled: true, maxRetries: 0 },
       notifyUser: true,
-      truncateAfterCompaction: true,
+    });
+  });
+
+  it("allows one N1x summary retry while retaining the audit and extended timeout (#12297)", () => {
+    const config = buildConfig({
+      NEMOCLAW_MODEL: "nvidia/Qwen3.6-35B-A3B-NVFP4",
+      NEMOCLAW_PROVIDER_KEY: "inference",
+      NEMOCLAW_UPSTREAM_PROVIDER: "vllm-local",
+      NEMOCLAW_SERVING_PRESET: "vllm.n1x.single.qwen3-6-35b-a3b-nvfp4",
+      NEMOCLAW_PRIMARY_MODEL_REF: "inference/nvidia/Qwen3.6-35B-A3B-NVFP4",
+      NEMOCLAW_INFERENCE_BASE_URL: "https://inference.local/v1",
+      NEMOCLAW_INFERENCE_API: "openai-completions",
+      NEMOCLAW_CONTEXT_WINDOW: "32768",
+      NEMOCLAW_MAX_TOKENS: "4096",
+      NEMOCLAW_AGENT_TIMEOUT: "600",
+    });
+    expect(config.agents.defaults.compaction).toEqual({
+      mode: "safeguard",
+      timeoutSeconds: 300,
+      recentTurnsPreserve: 1,
+      qualityGuard: { enabled: true, maxRetries: 1 },
+      notifyUser: true,
     });
   });
 
@@ -215,6 +236,9 @@ describe("OpenClaw managed-route compaction policy (#5468, #4781)", () => {
         "inference",
         "nvidia-prod",
         "https://integrate.api.nvidia.com/v1",
+        undefined,
+        16384,
+        4096,
       ),
     ).toBeUndefined();
   });
@@ -224,7 +248,14 @@ describe("OpenClaw managed-route compaction policy (#5468, #4781)", () => {
     "https://inference.local@evil.example/v1",
   ])("rejects a confusing managed-inference hostname %s (#4781)", (baseUrl) => {
     expect(
-      buildManagedInferenceSafeguardCompaction("inference", "nvidia-prod", baseUrl),
+      buildManagedInferenceSafeguardCompaction(
+        "inference",
+        "nvidia-prod",
+        baseUrl,
+        undefined,
+        16384,
+        4096,
+      ),
     ).toBeUndefined();
   });
 
@@ -234,6 +265,9 @@ describe("OpenClaw managed-route compaction policy (#5468, #4781)", () => {
         "nvidia-prod",
         "nvidia-prod",
         "https://inference.local/v1",
+        undefined,
+        16384,
+        4096,
       ),
     ).toBeUndefined();
   });

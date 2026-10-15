@@ -72,7 +72,6 @@
     "test/onboard-sandbox-recreation.test.ts": 20130,
     "test/onboard-selection-vllm.test.ts": 5005,
     "test/onboard-selection.test.ts": 26638,
-    "test/openclaw-chat-send-patch.test.ts": 7378,
     "test/openclaw-config-guard.test.ts": 17693,
     "test/openclaw-device-self-approval-patch.test.ts": 11677,
     "test/plugin-vitest-project.test.ts": 5205,

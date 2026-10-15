@@ -450,7 +450,8 @@ describe("full-E2E cold-path calibration", () => {
     expect(validation.imageInputPaths).toEqual(
       expect.arrayContaining([
         "scripts/patch-openclaw-tool-catalog.mts",
-        "scripts/patch-openclaw-chat-send.mts",
+        "scripts/lib/patch-openclaw-npm12-pack-json.mts",
+        "scripts/lib/patch-openclaw-container-restart.mts",
         "scripts/patch-openclaw-mcp-npx.mts",
         "scripts/patch-openclaw-mcp-reliability.mts",
         "scripts/patch-openclaw-issue-4434-diagnostics.mts",
@@ -460,7 +461,7 @@ describe("full-E2E cold-path calibration", () => {
     expect(validation.imageInputPaths).not.toEqual(
       expect.arrayContaining([
         "scripts/patch-openclaw-tool-catalog.js",
-        "scripts/patch-openclaw-chat-send.js",
+        "scripts/lib/patch-openclaw-npm12-pack-json.js",
         "scripts/patch-openclaw-issue-4434-diagnostics.ts",
         "scripts/patch-openclaw-device-self-approval.ts",
       ]),

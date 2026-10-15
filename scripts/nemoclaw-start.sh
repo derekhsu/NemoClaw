@@ -2598,27 +2598,89 @@ import binascii
 import hashlib
 import os
 import re
+import sqlite3
 import stat
 import subprocess
+import sys
 import time
 
+LAST_SANITIZED_STATUS = None
+STATUS_PATH = '/tmp/nemoclaw-auto-pair-status.json'
+
+
+def publish_status(state):
+    global LAST_SANITIZED_STATUS
+    if state == LAST_SANITIZED_STATUS:
+        return
+    LAST_SANITIZED_STATUS = state
+    status = json.dumps({
+        'schemaVersion': 1,
+        'state': state,
+    }, separators=(',', ':'))
+    print('[auto-pair-status] ' + status, flush=True)
+    status_fd = None
+    try:
+        status_fd = os.open(
+            STATUS_PATH,
+            os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        metadata = os.fstat(status_fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise OSError('unsafe watcher status metadata')
+        os.ftruncate(status_fd, 0)
+        remaining = status.encode('utf-8')
+        while remaining:
+            written = os.write(status_fd, remaining)
+            if written <= 0:
+                raise OSError('watcher status write made no progress')
+            remaining = remaining[written:]
+    except Exception:
+        pass
+    finally:
+        if status_fd is not None:
+            os.close(status_fd)
+
+
 print('[auto-pair] watcher started', flush=True)
+publish_status('running')
+
+
+def report_unhandled_watcher_exception(exc_type, _exc_value, _traceback):
+    publish_status('stopped')
+    print(f'[auto-pair] stage=watcher-execution failed error={exc_type.__name__}', flush=True)
+
+
+sys.excepthook = report_unhandled_watcher_exception
 
 APPROVAL_POLICY_FILE = '/usr/local/lib/nemoclaw/openclaw_device_approval_policy.py'
+PAIRING_STATE_FILE = os.path.join(
+    os.path.dirname(APPROVAL_POLICY_FILE), 'openclaw_pairing_state.py',
+)
 
 
-def load_approval_policy(path):
+def load_trusted_helper(path, module_name, label):
     helper_stat = os.stat(path)
     mode = helper_stat.st_mode
     if mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise RuntimeError('approval policy helper is writable by group or other')
+        raise RuntimeError(f'{label} helper is writable by group or other')
     if helper_stat.st_uid == os.geteuid() and mode & stat.S_IWUSR:
-        raise RuntimeError('approval policy helper is writable by the current user')
-    spec = importlib.util.spec_from_file_location('openclaw_device_approval_policy', path)
+        raise RuntimeError(f'{label} helper is writable by the current user')
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise RuntimeError('approval policy helper could not be loaded')
+        raise RuntimeError(f'{label} helper could not be loaded')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def load_approval_policy(path):
+    module = load_trusted_helper(path, 'openclaw_device_approval_policy', 'approval policy')
     return (
         module.approval_request_decision,
         module.gateway_approval_env,
@@ -2627,6 +2689,16 @@ def load_approval_policy(path):
 
 
 approval_request_decision, gateway_approval_env, policy_allowed_scopes = load_approval_policy(APPROVAL_POLICY_FILE)
+pairing_state_reader = None
+
+
+def read_openclaw_pairing_state(*args, **kwargs):
+    global pairing_state_reader
+    if pairing_state_reader is None:
+        pairing_state_reader = load_trusted_helper(
+            PAIRING_STATE_FILE, 'openclaw_pairing_state', 'pairing state',
+        ).read_openclaw_pairing_state
+    return pairing_state_reader(*args, **kwargs)
 
 OPENCLAW = os.environ.get('OPENCLAW_BIN', 'openclaw')
 
@@ -2647,8 +2719,7 @@ def _env_seconds(name, default):
 # the gateway. Late `openclaw agent` runs (NemoClaw#4263) request additional
 # scopes that the gateway holds as pending until something approves them; an
 # exited watcher leaves those upgrades stuck and the agent falls back to
-# embedded mode. Defaults: 8h total, 30s slow-mode cadence.
-FAST_DEADLINE = time.time() + _env_seconds('NEMOCLAW_AUTO_PAIR_FAST_DEADLINE_SECS', 600)
+# embedded mode. Defaults: 8h total, 5s slow-mode cadence.
 DEADLINE = time.time() + _env_seconds('NEMOCLAW_AUTO_PAIR_DEADLINE_SECS', 28800)
 # After convergence the watcher polls at SLOW_INTERVAL. A late allowlisted
 # scope upgrade — e.g. `openclaw tui` or `openclaw agent` invoked after the
@@ -2664,46 +2735,27 @@ DEADLINE = time.time() + _env_seconds('NEMOCLAW_AUTO_PAIR_DEADLINE_SECS', 28800)
 # failures both clear before the OpenClaw client gives up. The counter is
 # only bumped on the rising edge for each requestId (tracked in
 # FAST_REENTRY_BUMPED_REQUEST_IDS and garbage-collected against the live
-# pending list), so a sticky failing request cannot pin the watcher in fast
-# polling. This is a polling-cadence fix only — non-allowlisted scopes such
+# pending list). After canonical settlement, a sticky failing request cannot
+# repeatedly rearm fast reentry. Before settlement, the watcher stays at the
+# 1s cadence by design. This is a polling-cadence fix only. Non-allowlisted scopes such
 # as `operator.admin` are still rejected by the device approval policy, and
 # requests that need them must be approved through a separate operator path.
 SLOW_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS', 5)
-# SOURCE_OF_TRUTH_REVIEW (auto-pair slow-mode cadence default 30s → 5s):
-#
-#   * Source boundary: the single SLOW_INTERVAL global above is the only
-#     steady-state inter-poll wait for the in-sandbox auto-pair watcher
-#     after browser pairing converges. The watcher's faster pre-converge
-#     cadence (1s) is unaffected.
-#   * Invalid state at the old default: a late
-#     `openclaw tui` / `openclaw agent` allowlisted scope upgrade lands
-#     inside a 30s window and waits up to one full SLOW_INTERVAL before
-#     the watcher polls. Two sibling sandboxes onboarded back-to-back
-#     each hit this window and both fall back to embedded mode (#5343).
-#   * Source-fix constraint: the 5s default is a bounded 6x increase in
-#     steady-state `openclaw devices list --json` calls per sandbox — at
-#     most one extra call per 5s vs. per 30s, which the gateway connect
-#     handler tolerates easily; the bounded fast-reentry counter above
-#     keeps cascading upgrades from exceeding this cadence.
-#   * Migration: operators who relied on the old cadence (load-sensitive
-#     gateways, large multi-sandbox deployments) can restore it by
-#     exporting NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS=30 in the sandbox
-#     environment; the PR body calls this out under "Changes" too.
-#   * Regression test: test/nemoclaw-start.test.ts's late-CLI fixture
-#     covers the new default deterministically; #5343 Phase 5 covers it
-#     end to end.
-#   * Removal condition: when OpenClaw signals scope-upgrade requests via
-#     a push channel rather than a poll, the cadence becomes irrelevant
-#     and the variable retires.
+# Fast reentry temporarily restores 1s polling after a fresh allowlisted
+# request; canonical settlement and approval policy remain unchanged.
 FAST_REENTRY_POLLS = int(_env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_POLLS', 5))
 FAST_REENTRY_INTERVAL = _env_seconds('NEMOCLAW_AUTO_PAIR_FAST_REENTRY_INTERVAL_SECS', 1)
 FAST_REENTRY_REMAINING = 0
 FAST_REENTRY_BUMPED_REQUEST_IDS = set()
-QUIET_POLLS = 0
 APPROVED = 0
 SLOW_MODE = False
 HANDLED = set()  # Track rejected/approved requestIds to avoid reprocessing
+OBSERVED_REQUEST_IDS = set()
+VALIDATED_REQUEST_IDS = set()
+LAST_LIST_FAILURE_REASON = None
+REQUEST_CREATION_WAITING_REPORTED = False
 PAIRING_BOOTSTRAPPED = False
+MALFORMED_REQUEST_ID_REPORTED = False
 # SECURITY NOTE: clientId/clientMode are client-supplied and spoofable
 # (the gateway stores connectParams.client.id verbatim). The policy requires
 # an explicit known clientId and never trusts an allowlisted mode by itself.
@@ -2736,6 +2788,126 @@ def _identity_public_key(identity):
     return base64.urlsafe_b64encode(der[-32:]).decode('ascii').rstrip('=')
 
 
+def _state_sqlite_path(state_dir):
+    return os.path.join(state_dir, 'state', 'openclaw.sqlite')
+
+
+def _read_initial_pairing_observer(observer_dir, request_id):
+    expected_uid_text = os.environ.get('NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_UID', '')
+    if not expected_uid_text.isascii() or not expected_uid_text.isdecimal():
+        raise RuntimeError('pairing observer owner is invalid')
+    expected_uid = int(expected_uid_text)
+    if not os.path.isabs(observer_dir):
+        raise RuntimeError('pairing observer path is not absolute')
+    directory_fd = -1
+    snapshot_fd = -1
+    try:
+        directory_fd = os.open(
+            observer_dir,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        directory = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory.st_mode)
+            or directory.st_uid != expected_uid
+            or directory.st_gid != os.getegid()
+            or stat.S_IMODE(directory.st_mode) != 0o2750
+        ):
+            raise OSError('unsafe pairing observer directory')
+        snapshot_fd = os.open(
+            'pending.json',
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+            dir_fd=directory_fd,
+        )
+        snapshot = os.fstat(snapshot_fd)
+        if (
+            not stat.S_ISREG(snapshot.st_mode)
+            or snapshot.st_nlink != 1
+            or snapshot.st_uid != expected_uid
+            or snapshot.st_gid != os.getegid()
+            or stat.S_IMODE(snapshot.st_mode) != 0o640
+            or not 0 < snapshot.st_size <= 256 * 1024
+        ):
+            raise OSError('unsafe pairing observer snapshot')
+        chunks = []
+        remaining = snapshot.st_size
+        while remaining:
+            chunk = os.read(snapshot_fd, min(remaining, 64 * 1024))
+            if not chunk:
+                raise OSError('pairing observer snapshot was truncated')
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(snapshot_fd, 1):
+            raise OSError('pairing observer snapshot exceeded its bound')
+        document = json.loads(b''.join(chunks).decode('utf-8'))
+        if (
+            not isinstance(document, dict)
+            or set(document) != {'schemaVersion', 'pending'}
+            or document.get('schemaVersion') != 1
+            or not isinstance(document.get('pending'), dict)
+            or len(document['pending']) > 64
+        ):
+            raise ValueError('pairing observer snapshot is invalid')
+        return document['pending'].get(request_id)
+    finally:
+        if snapshot_fd >= 0:
+            os.close(snapshot_fd)
+        if directory_fd >= 0:
+            os.close(directory_fd)
+
+
+def _sqlite_initial_pairing_snapshot(sqlite_path, request_id):
+    client_state_dir = os.path.dirname(os.path.dirname(sqlite_path))
+    client_records, _database_metadata = read_openclaw_pairing_state(
+        client_state_dir, timeout=1,
+    )
+    observer_dir = os.environ.get('NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_DIR')
+    if observer_dir:
+        request = _read_initial_pairing_observer(observer_dir, request_id)
+    else:
+        request = client_records['pending'].get(request_id)
+    return client_records['identity'], request
+
+
+def _local_device_identity():
+    state_dir = os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw'
+    sqlite_path = _state_sqlite_path(state_dir)
+    if os.path.lexists(sqlite_path):
+        records, _database_metadata = read_openclaw_pairing_state(state_dir, timeout=1)
+        identity = records['identity']
+    else:
+        identity = _read_json_object(os.path.join(state_dir, 'identity', 'device.json'))
+        # Never accept legacy identity state once the canonical database has
+        # appeared. This closes the existence-check/read race fail-closed.
+        if os.path.lexists(sqlite_path):
+            raise RuntimeError('SQLite state appeared while reading legacy device identity')
+    device_id = str(identity.get('deviceId', '') or '').strip()
+    public_key = _identity_public_key(identity)
+    public_key_raw = base64.urlsafe_b64decode(public_key + '=' * (-len(public_key) % 4))
+    if (
+        not device_id
+        or len(public_key_raw) != 32
+        or hashlib.sha256(public_key_raw).hexdigest() != device_id
+    ):
+        raise RuntimeError('local device identity is invalid')
+    return device_id, public_key
+
+
+def is_local_cli_request(request):
+    if not isinstance(request, dict):
+        return False
+    try:
+        device_id, public_key = _local_device_identity()
+    except (OSError, ValueError, RuntimeError, binascii.Error, sqlite3.Error):
+        return False
+    return (
+        request.get('deviceId') == device_id
+        and request.get('publicKey') == public_key
+        and request.get('clientId') == 'cli'
+        and request.get('clientMode') == 'cli'
+    )
+
+
 def initial_cli_request_is_allowlisted(request_id):
     # SOURCE_OF_TRUTH_REVIEW (NemoClaw#6113 gated-list bootstrap):
     # Invalid state: `devices list --json` can be gated by the same initial
@@ -2753,17 +2925,23 @@ def initial_cli_request_is_allowlisted(request_id):
     # exposes that bootstrap/list API and NemoClaw no longer supports gated
     # list behavior for first-run CLI pairing.
     state_dir = os.environ.get('OPENCLAW_STATE_DIR') or '/sandbox/.openclaw'
+    sqlite_path = _state_sqlite_path(state_dir)
     pending_path = os.path.join(state_dir, 'devices', 'pending.json')
     identity_path = os.path.join(state_dir, 'identity', 'device.json')
     try:
-        pending = _read_json_object(pending_path)
-        identity = _read_json_object(identity_path)
-        request = pending.get(request_id)
+        if os.path.lexists(sqlite_path):
+            identity, request = _sqlite_initial_pairing_snapshot(sqlite_path, request_id)
+        else:
+            pending = _read_json_object(pending_path)
+            identity = _read_json_object(identity_path)
+            if os.path.lexists(sqlite_path):
+                raise RuntimeError('SQLite state appeared while reading legacy pairing state')
+            request = pending.get(request_id)
         if not isinstance(request, dict):
             return False
-        # The map key is the authoritative request id. Reject a record whose
-        # embedded requestId is missing or disagrees with its key, so a
-        # malformed/tampered pending.json cannot approve a mismatched request.
+        # The stored primary key is the authoritative request id. Reject a
+        # record whose embedded requestId is missing or disagrees with it, so
+        # malformed/tampered pending state cannot approve a mismatched request.
         # (PR #6330 review, cv item 3.)
         if str(request.get('requestId', '') or '').strip() != str(request_id).strip():
             return False
@@ -2816,7 +2994,7 @@ def initial_cli_request_is_allowlisted(request_id):
         if scopes != {'operator.pairing'}:
             return False
         return approval_request_decision(request)['allowed'] is True
-    except (OSError, ValueError, RuntimeError, binascii.Error) as err:
+    except (OSError, ValueError, RuntimeError, binascii.Error, sqlite3.Error) as err:
         print(f'[auto-pair] initial CLI pairing validation skipped request={request_id}: {brief_child_error("", str(err))}')
         return False
 
@@ -2837,7 +3015,7 @@ def is_pairing_required_list_failure(out, err):
     return 'pairing required' in message and 'device is not approved yet' in message
 
 
-REQUEST_ID_RE = re.compile(r'^[A-Za-z0-9._:-]{1,128}$')
+REQUEST_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
 
 
 def _structured_request_ids(text):
@@ -2915,15 +3093,113 @@ def brief_child_error(out, err):
     lines = [line.strip() for line in f'{err}\n{out}'.splitlines() if line.strip()]
     return (lines[-1] if lines else '')[:400]
 
+
+def report_request_observed(request_id, publish_sanitized=True):
+    if request_id in OBSERVED_REQUEST_IDS:
+        return
+    OBSERVED_REQUEST_IDS.add(request_id)
+    if publish_sanitized:
+        publish_status('request-observed')
+    print(f'[auto-pair] stage=request-creation observed request={request_id}')
+
+
+def report_request_validation(request_id, accepted, reason, publish_sanitized=True):
+    if request_id in VALIDATED_REQUEST_IDS:
+        return
+    VALIDATED_REQUEST_IDS.add(request_id)
+    outcome = 'accepted' if accepted else 'rejected'
+    if not accepted and publish_sanitized:
+        publish_status('request-rejected')
+    print(f'[auto-pair] stage=validation {outcome} request={request_id} reason={reason}')
+
+
+def exact_string_set(value, expected):
+    return (
+        isinstance(value, list)
+        and len(value) == len(expected)
+        and all(isinstance(item, str) for item in value)
+        and set(value) == expected
+    )
+
+
+def canonical_cli_baseline_settled(paired, pending):
+    try:
+        local_device_id, local_public_key = _local_device_identity()
+    except (OSError, ValueError, RuntimeError, binascii.Error, sqlite3.Error):
+        return False
+    baseline_request_scopes = {'operator.pairing', 'operator.write'}
+    baseline_token_scopes = {'operator.pairing', 'operator.read', 'operator.write'}
+    admin_request_scopes = {'operator.admin', 'operator.pairing', 'operator.write'}
+    admin_token_scopes = {
+        'operator.admin', 'operator.pairing', 'operator.read', 'operator.write',
+    }
+    candidates = [
+        device for device in paired
+        if isinstance(device, dict)
+        and device.get('deviceId') == local_device_id
+        and device.get('publicKey') == local_public_key
+        and device.get('clientId') == 'cli'
+        and device.get('clientMode') == 'cli'
+        and device.get('role') == 'operator'
+        and exact_string_set(device.get('roles'), {'operator'})
+        and (
+            (
+                exact_string_set(device.get('scopes'), baseline_request_scopes)
+                and exact_string_set(device.get('approvedScopes'), baseline_request_scopes)
+            )
+            or (
+                # An explicit admin approval can persist across a rebuild.
+                # Recognizing its exact settled shape only controls polling;
+                # the watcher still never approves operator.admin requests.
+                exact_string_set(device.get('scopes'), admin_request_scopes)
+                and exact_string_set(device.get('approvedScopes'), admin_request_scopes)
+            )
+        )
+    ]
+    if len(candidates) != 1:
+        return False
+    device = candidates[0]
+    device_id = str(device.get('deviceId', '') or '').strip()
+    expected_token_scopes = (
+        admin_token_scopes
+        if exact_string_set(device.get('scopes'), admin_request_scopes)
+        else baseline_token_scopes
+    )
+    tokens = device.get('tokens')
+    operator = tokens.get('operator') if isinstance(tokens, dict) and set(tokens) == {'operator'} else None
+    if (
+        not device_id
+        or not isinstance(operator, dict)
+        or operator.get('role') != 'operator'
+        or operator.get('revokedAtMs') is not None
+        or not exact_string_set(operator.get('scopes'), expected_token_scopes)
+    ):
+        return False
+    return not any(
+        isinstance(request, dict) and str(request.get('deviceId', '') or '').strip() == device_id
+        for request in pending
+    )
+
+
+def list_failure_reason(rc, out, err):
+    if rc == 124:
+        return 'timeout'
+    if is_pairing_required_list_failure(out, err):
+        return 'pairing-required'
+    if rc != 0:
+        return 'command-failed'
+    return 'empty-output'
+
 # Workaround boundary (NemoClaw#4462): the watcher child sources the trusted
 # runtime environment, so its first list call resolves the live gateway through
 # local loopback and retains the shared token plus a private child marker. The
-# reviewed 2026.7.1 dist patch uses that marker to retain CLI identity before a
-# stored device credential exists. Once OpenClaw issues that credential, the
-# patch retains identity for ordinary loopback CLI calls automatically. Later
-# list and approval calls drop the gateway env triplet and use the stored device
-# credential. Remove both pieces when upstream supports that flow.
-def run(*args, strip_gateway_env=False, force_device_pairing=False):
+# reviewed 2026.9.1 dist patch uses that marker to retain CLI identity before a
+# stored device credential exists. Once OpenClaw issues that credential, later
+# list calls drop the gateway env triplet and use the reviewed settlement marker
+# to select pairing-only stored-device auth. Approval calls keep their separate
+# bounded credential selection. Remove these pieces when upstream supports that
+# flow.
+def run(*args, strip_gateway_env=False, force_device_pairing=False, pairing_settlement=False):
     # Bound every openclaw CLI invocation so a wedged child cannot pin
     # the watcher beyond DEADLINE (CodeRabbit #4292): subprocess.run with
     # no timeout would hold a hung `openclaw devices list/approve` past
@@ -2931,8 +3207,12 @@ def run(*args, strip_gateway_env=False, force_device_pairing=False):
     env = None
     if strip_gateway_env:
         env = gateway_approval_env(os.environ)
+        env.pop('NEMOCLAW_OPENCLAW_PAIRING_SETTLEMENT', None)
+        if pairing_settlement:
+            env['NEMOCLAW_OPENCLAW_PAIRING_SETTLEMENT'] = '1'
     elif force_device_pairing:
         env = dict(os.environ)
+        env.pop('NEMOCLAW_OPENCLAW_PAIRING_SETTLEMENT', None)
         env['NEMOCLAW_OPENCLAW_FORCE_DEVICE_PAIRING'] = '1'
     try:
         proc = subprocess.run(
@@ -2971,16 +3251,6 @@ def sleep_for_next_poll(default_seconds, productive=True):
 
 
 while time.time() < DEADLINE:
-    # Fast-to-slow transition is checked at the TOP of every iteration — before
-    # any list/approve-failure `continue` below — so a permanently failing gated
-    # list/approve (or a sticky pending request) cannot hold the watcher in 1s
-    # polling for the full DEADLINE window; after FAST_DEADLINE it drops to
-    # SLOW_INTERVAL. Preventing that long-timeline re-creation of the
-    # NemoClaw#2484 connect-handler pile-up is exactly the point.
-    # (PR #6330 review, cv item 2.)
-    if not SLOW_MODE and time.time() >= FAST_DEADLINE:
-        SLOW_MODE = True
-        print(f'[auto-pair] fast-mode deadline reached; switching to slow-mode approvals={APPROVED}')
     rc, out, err = run(
         OPENCLAW,
         'devices',
@@ -2988,72 +3258,142 @@ while time.time() < DEADLINE:
         '--json',
         strip_gateway_env=PAIRING_BOOTSTRAPPED,
         force_device_pairing=not PAIRING_BOOTSTRAPPED,
+        pairing_settlement=PAIRING_BOOTSTRAPPED,
     )
     if rc != 0 or not out:
+        failure_reason = list_failure_reason(rc, out, err)
+        if failure_reason != LAST_LIST_FAILURE_REASON:
+            print(f'[auto-pair] stage=listing failed reason={failure_reason}')
+            LAST_LIST_FAILURE_REASON = failure_reason
         initial_request_id = pairing_required_request_id(out, err)
-        if (
-            initial_request_id
-            and initial_request_id not in HANDLED
-            and initial_cli_request_is_allowlisted(initial_request_id)
-        ):
+        if initial_request_id and initial_request_id not in HANDLED:
+            live_request_ids = {initial_request_id}
+            HANDLED.intersection_update(live_request_ids)
+            OBSERVED_REQUEST_IDS.intersection_update(live_request_ids)
+            VALIDATED_REQUEST_IDS.intersection_update(live_request_ids)
+            FAST_REENTRY_BUMPED_REQUEST_IDS.intersection_update(live_request_ids)
+            report_request_observed(initial_request_id)
+            initial_request_allowed = initial_cli_request_is_allowlisted(initial_request_id)
+            report_request_validation(
+                initial_request_id,
+                initial_request_allowed,
+                'allowlisted-initial-cli' if initial_request_allowed else 'not-allowlisted',
+            )
+        else:
+            initial_request_allowed = False
+        if initial_request_id and initial_request_id not in HANDLED and initial_request_allowed:
+            print(f'[auto-pair] stage=approval attempting request={initial_request_id}')
             arc, aout, aerr = run(
                 OPENCLAW, 'devices', 'approve', initial_request_id, '--json', strip_gateway_env=True,
             )
             if arc == 0:
                 HANDLED.add(initial_request_id)
                 APPROVED += 1
+                publish_status('approval-completed')
                 print(f'[auto-pair] approved initial CLI pairing request={initial_request_id}')
                 FAST_REENTRY_REMAINING = max(FAST_REENTRY_REMAINING, FAST_REENTRY_POLLS)
                 sleep_for_next_poll(FAST_REENTRY_INTERVAL)
                 continue
+            approval_failure_reason = 'timeout' if arc == 124 else 'command-failed'
+            publish_status('approval-timeout' if arc == 124 else 'approval-failed')
+            print(f'[auto-pair] stage=approval failed reason={approval_failure_reason}')
             failure = brief_child_error(aout, aerr)
             if arc != 124 and failure:
                 print(f'[auto-pair] initial CLI approve failed request={initial_request_id}: {failure}')
         sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
         continue
-    if not PAIRING_BOOTSTRAPPED:
-        PAIRING_BOOTSTRAPPED = True
-        print('[auto-pair] loopback CLI pairing bootstrap completed')
     try:
         data = json.loads(out)
     except Exception:
+        if LAST_LIST_FAILURE_REASON != 'invalid-json':
+            print('[auto-pair] stage=listing failed reason=invalid-json')
+            LAST_LIST_FAILURE_REASON = 'invalid-json'
         sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
         continue
+    if not isinstance(data, dict):
+        if LAST_LIST_FAILURE_REASON != 'invalid-response':
+            print('[auto-pair] stage=listing failed reason=invalid-response')
+            LAST_LIST_FAILURE_REASON = 'invalid-response'
+        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
+        continue
+    pending = data.get('pending')
+    paired = data.get('paired')
+    if not isinstance(pending, list) or not isinstance(paired, list):
+        if LAST_LIST_FAILURE_REASON != 'invalid-response':
+            print('[auto-pair] stage=listing failed reason=invalid-response')
+            LAST_LIST_FAILURE_REASON = 'invalid-response'
+        sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1, productive=False)
+        continue
+    LAST_LIST_FAILURE_REASON = None
+    has_cli_pairing = any(
+        d.get('clientId') == 'cli' and d.get('clientMode') == 'cli'
+        for d in paired
+        if isinstance(d, dict)
+    )
+    if not PAIRING_BOOTSTRAPPED and has_cli_pairing:
+        PAIRING_BOOTSTRAPPED = True
+        print('[auto-pair] loopback CLI pairing bootstrap completed')
+    normalized_pending = []
+    saw_malformed_request_id = False
+    for device in pending:
+        request_id = device.get('requestId') if isinstance(device, dict) else None
+        if not isinstance(request_id, str) or REQUEST_ID_RE.fullmatch(request_id) is None:
+            saw_malformed_request_id = True
+            if not MALFORMED_REQUEST_ID_REPORTED:
+                print('[auto-pair] stage=validation rejected reason=malformed-request-id')
+                MALFORMED_REQUEST_ID_REPORTED = True
+            continue
+        normalized_pending.append((request_id, device))
+    if not saw_malformed_request_id:
+        MALFORMED_REQUEST_ID_REPORTED = False
+    pending_request_ids = {request_id for request_id, _device in normalized_pending}
+    HANDLED.intersection_update(pending_request_ids)
+    OBSERVED_REQUEST_IDS.intersection_update(pending_request_ids)
+    VALIDATED_REQUEST_IDS.intersection_update(pending_request_ids)
+    FAST_REENTRY_BUMPED_REQUEST_IDS.intersection_update(pending_request_ids)
 
-    pending = data.get('pending') or []
-    paired = data.get('paired') or []
-    has_browser = any((d.get('clientId') == 'openclaw-control-ui') or (d.get('clientMode') == 'webchat') for d in paired if isinstance(d, dict))
+    if not normalized_pending and not paired and APPROVED == 0 and not REQUEST_CREATION_WAITING_REPORTED:
+        publish_status('request-not-produced')
+        print('[auto-pair] stage=request-creation waiting reason=no-request')
+        REQUEST_CREATION_WAITING_REPORTED = True
 
-    if pending:
-        QUIET_POLLS = 0
+    if normalized_pending:
         attempted_request_ids = set()
-        pending_request_ids = set()
-        for device in pending:
-            if not isinstance(device, dict):
-                continue
-            request_id = device.get('requestId')
-            if not request_id:
-                continue
-            pending_request_ids.add(request_id)
+        for request_id, device in normalized_pending:
             if request_id in HANDLED:
                 continue
+            tracks_canonical_cli = is_local_cli_request(device)
+            report_request_observed(request_id, tracks_canonical_cli)
             decision = approval_request_decision(device)
             client_id = decision['client_id']
             client_mode = decision['client_mode']
             if decision['reason'] == 'unknown-client':
                 HANDLED.add(request_id)
+                report_request_validation(
+                    request_id, False, 'unknown-client', tracks_canonical_cli,
+                )
                 print(f'[auto-pair] rejected unknown client={client_id} mode={client_mode}')
                 continue
             if decision['reason'] == 'malformed-scopes':
                 HANDLED.add(request_id)
+                report_request_validation(
+                    request_id, False, 'malformed-scopes', tracks_canonical_cli,
+                )
                 print(f'[auto-pair] rejected malformed scopes client={client_id} mode={client_mode}')
                 continue
             if decision['reason'] == 'disallowed-scopes':
                 HANDLED.add(request_id)
                 scopes = decision['scopes']
+                report_request_validation(
+                    request_id, False, 'disallowed-scopes', tracks_canonical_cli,
+                )
                 print(f'[auto-pair] rejected disallowed scopes={sorted(scopes)} client={client_id} mode={client_mode}')
                 continue
+            report_request_validation(
+                request_id, True, 'allowlisted-request', tracks_canonical_cli,
+            )
             attempted_request_ids.add(request_id)
+            print(f'[auto-pair] stage=approval attempting request={request_id}')
             arc, aout, aerr = run(
                 OPENCLAW, 'devices', 'approve', request_id, '--json', strip_gateway_env=True,
             )
@@ -3063,27 +3403,27 @@ while time.time() < DEADLINE:
             # retryable too; only intentionally rejected unknown clients
             # and confirmed successful approvals are marked handled.
             if arc == 124:
+                if tracks_canonical_cli:
+                    publish_status('approval-timeout')
+                print('[auto-pair] stage=approval failed reason=timeout')
                 continue
             if arc == 0:
                 HANDLED.add(request_id)
                 APPROVED += 1
+                if tracks_canonical_cli:
+                    publish_status('approval-completed')
                 print(f'[auto-pair] approved request={request_id} client={client_id} mode={client_mode}')
             else:
+                if tracks_canonical_cli:
+                    publish_status('approval-failed')
+                print('[auto-pair] stage=approval failed reason=command-failed')
                 failure = brief_child_error(aout, aerr)
                 if failure:
                     print(f'[auto-pair] approve failed request={request_id}: {failure}')
-        # Drop previously-bumped requestIds that the gateway no longer reports
-        # as pending so a future re-appearance of the same id (very unlikely,
-        # but kept robust) can bump again. The set is otherwise small and
-        # never crosses out of the watcher process.
-        FAST_REENTRY_BUMPED_REQUEST_IDS.intersection_update(pending_request_ids)
-        # Fast-reentry is armed on the rising edge per requestId — once for
-        # each freshly-observed allowlisted attempt. A sticky pending request
-        # that fails approval repeatedly therefore stops bumping the counter
-        # after the first attempt, so it cannot keep the watcher in fast
-        # polling for the rest of DEADLINE; the next slow-cadence poll
-        # decides whether to retry. Cascading approvals from new ids still
-        # bump as they appear, which is the case the override targets.
+        # Fast reentry is armed once for each freshly observed allowlisted
+        # request. After canonical settlement, a sticky failure cannot
+        # repeatedly rearm the temporary 1s cadence. Cascading approvals from
+        # new request IDs still trigger the bounded override.
         new_attempted_ids = attempted_request_ids - FAST_REENTRY_BUMPED_REQUEST_IDS
         # Bump in fast mode too: the cadence override is a no-op there
         # (min(FAST_REENTRY_INTERVAL=1, default=1) = 1) but the requestId
@@ -3098,46 +3438,28 @@ while time.time() < DEADLINE:
         sleep_for_next_poll(SLOW_INTERVAL if SLOW_MODE else 1)
         continue
 
-    QUIET_POLLS += 1
-    # Convergence conditions, checked in order of strength:
-    #   1. Browser device paired — original control-UI workflow
-    #   2. Any paired device — covers dangerouslyDisableDeviceAuth setups
-    #      where the gateway auto-pairs CLI clients directly without the
-    #      watcher running `openclaw devices approve` (so APPROVED stays
-    #      0 forever in those configurations)
-    #   3. We approved at least one device explicitly
-    # On convergence the watcher used to exit. That left late CLI scope
-    # upgrades pending forever (NemoClaw#4263). Now we transition to a slow
-    # polling cadence (default 30s) so late allowlisted scope upgrades for
-    # already-paired clients still get approved without saturating the
-    # gateway connect handler (NemoClaw#2484: WS handshake-timeout). The
-    # fast-deadline transition is now evaluated above (before the pending
-    # branch) so a stuck pending request cannot defer it.
-    if not SLOW_MODE and QUIET_POLLS >= 4:
-        if has_browser:
-            SLOW_MODE = True
-            print(f'[auto-pair] browser pairing converged; entering slow-mode approvals={APPROVED}')
-        elif paired:
-            SLOW_MODE = True
-            print(f'[auto-pair] devices paired ({len(paired)}); entering slow-mode approvals={APPROVED}')
-        elif APPROVED > 0:
-            SLOW_MODE = True
-            print(f'[auto-pair] non-browser pairing converged; entering slow-mode approvals={APPROVED}')
+    # Fresh onboarding relies on this watcher as the only scope-upgrade
+    # approver. Keep the one-second cadence until the canonical CLI record has
+    # the exact baseline scopes and no same-device pending request. Browser
+    # pairing, an unrelated paired device, or elapsed time cannot establish
+    # this transition.
+    if not SLOW_MODE and canonical_cli_baseline_settled(paired, pending):
+        SLOW_MODE = True
+        publish_status('canonical-settled')
+        print(f'[auto-pair] canonical CLI baseline settled; entering slow-mode approvals={APPROVED}')
 
-    # Back off polling: 1s in fast mode while waiting for first pairing,
-    # 5s in fast mode once anything is paired/approved, and SLOW_INTERVAL
-    # (default 5s) after convergence. Slow-mode keepalive lets late CLI
+    # Poll every 1s until canonical CLI settlement, then use SLOW_INTERVAL
+    # (default 5s). Slow-mode keepalive lets late CLI
     # scope upgrades get approved through the rest of DEADLINE without
     # hammering the gateway. The bounded fast-reentry counter (bumped above
     # when an allowlisted upgrade was attempted) overrides whichever tier
     # is selected here so the next few polls catch cascading upgrades.
     if SLOW_MODE:
         sleep_for_next_poll(SLOW_INTERVAL)
-    elif APPROVED > 0 or paired:
-        sleep_for_next_poll(5)
     else:
         sleep_for_next_poll(1)
 else:
+    publish_status('stopped')
     print(f'[auto-pair] watcher deadline reached approvals={APPROVED}')
 PYAUTOPAIR
   AUTO_PAIR_PID=$!
@@ -3403,7 +3725,7 @@ export JITI_FS_CACHE="false"
 PROXYEOF
     local _openclaw_env_name _openclaw_env_value _escaped_openclaw_env_value
     local _escaped_gateway_port _escaped_gateway_url _escaped_gateway_token
-    for _openclaw_env_name in OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_OAUTH_DIR OPENCLAW_WORKSPACE_DIR; do
+    for _openclaw_env_name in OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_OAUTH_DIR OPENCLAW_WORKSPACE_DIR SQLITE_TMPDIR; do
       _openclaw_env_value="${!_openclaw_env_name:-}"
       [ -n "$_openclaw_env_value" ] || continue
       _escaped_openclaw_env_value="$(printf '%s' "$_openclaw_env_value" | sed "s/'/'\\\\''/g")"
@@ -3416,6 +3738,10 @@ PROXYEOF
       # connect shells aligned with the topology selected by PID 1.
       printf 'unset NEMOCLAW_OPENCLAW_SHARED_STATE\n'
     fi
+    # The pairing observer variables are set only for the bounded observer
+    # children; connect shells must not inherit a stale observer pin.
+    printf 'unset NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_DIR\n'
+    printf 'unset NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_UID\n'
     if [ -n "${OPENCLAW_GATEWAY_PORT:-}" ]; then
       _escaped_gateway_port="$(printf '%s' "$OPENCLAW_GATEWAY_PORT" | sed "s/'/'\\\\''/g")"
       printf "export OPENCLAW_GATEWAY_PORT='%s'\n" "$_escaped_gateway_port"
@@ -5580,6 +5906,63 @@ handle_openclaw_gateway_control_request() {
   gateway_control_complete ok "$old_pid" "$GATEWAY_PID"
 }
 
+# OpenShell confines newly-created SQLite temporary files more narrowly than
+# ordinary container execution. FTS5 schema initialization otherwise falls
+# back to a denied host temporary directory and reports the misleading error
+# "unable to open database file". The current native lifecycle runs every
+# OpenClaw child as the sandbox identity, so one owner-only directory serves
+# gateway, doctor, one-shot, auto-pair, and agent paths.
+prepare_openshell_sqlite_tmpdir() {
+  local sqlite_tmpdir="/sandbox/.openclaw/tmp"
+  local run_prefix=()
+  if [ "$(id -u)" -eq 0 ]; then
+    run_prefix=("${STEP_DOWN_PREFIX_SANDBOX[@]}")
+  fi
+  if ! "${run_prefix[@]+"${run_prefix[@]}"}" python3 -I - "$sqlite_tmpdir" <<'PY_SQLITE_TMPDIR'; then
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+parent_path = os.path.dirname(path)
+entry_name = os.path.basename(path)
+directory_flags = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+parent_fd = os.open(parent_path, directory_flags)
+directory_fd = -1
+try:
+    try:
+        os.mkdir(entry_name, 0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    directory_fd = os.open(entry_name, directory_flags, dir_fd=parent_fd)
+    metadata = os.fstat(directory_fd)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise OSError("unsafe OpenClaw SQLite temporary directory")
+    os.fchmod(directory_fd, 0o700)
+    metadata = os.fstat(directory_fd)
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise OSError("unsafe OpenClaw SQLite temporary directory mode")
+finally:
+    if directory_fd >= 0:
+        os.close(directory_fd)
+    os.close(parent_fd)
+PY_SQLITE_TMPDIR
+    echo "[SECURITY] Refusing unsafe OpenClaw SQLite temporary directory: $sqlite_tmpdir" >&2
+    return 1
+  fi
+  export SQLITE_TMPDIR="$sqlite_tmpdir"
+}
+
 # ── Main ─────────────────────────────────────────────────────────
 
 # OpenClaw 2026.7.1 enforces owner-only SQLite and models-file modes on every
@@ -5610,6 +5993,11 @@ if [ "$(openclaw_config_dir_owner /sandbox/.openclaw)" = "root" ] \
   echo "[SECURITY] OPENCLAW_LOCKED_PARENT_UNPROTECTED: /sandbox must be root:sandbox 1775 while OpenClaw shields are up; restore from a trusted backup and recreate the sandbox" >&2
   exit 1
 fi
+
+# OpenShell confines newly-created SQLite temporary files more narrowly than
+# ordinary container execution. Prepare the sandbox-owned directory before any
+# OpenClaw child (gateway, doctor, one-shot, auto-pair, agent) opens a database.
+prepare_openshell_sqlite_tmpdir || exit 1
 
 # Migrate legacy symlink layout before anything else reads .openclaw
 migrate_legacy_layout "/sandbox/.openclaw" "/sandbox/.openclaw-data" "openclaw" || exit 1

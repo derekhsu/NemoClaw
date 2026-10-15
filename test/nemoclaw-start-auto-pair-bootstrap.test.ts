@@ -626,13 +626,11 @@ exit 2
     }
   }, 40_000);
 
-  it("drops a permanently-failing gated approve to slow-mode instead of 1s-looping to the deadline (#6113)", () => {
-    // cv #6330 item 2: the fast->slow transition must be reached even when the
-    // gated list/approve path keeps failing and `continue`s. With a near-zero
-    // FAST_DEADLINE the first iteration must emit the slow-mode transition
-    // (proving the check runs before the failure `continue`), and the watcher
-    // must exit within the short deadline rather than busy-polling at 1s.
-    // (`_env_seconds` rejects a literal 0 as non-positive, so use a tiny value.)
+  it("keeps retrying a permanently-failing gated approve until the watcher deadline (#6113)", () => {
+    // cv #6330 item 2 / #10269: slow-mode is reached only when the canonical
+    // CLI baseline settles; a gated approve that keeps failing stays on the
+    // 1s poll cadence and the watcher exits cleanly at DEADLINE instead of
+    // wedging. With a tiny DEADLINE the run must terminate quickly.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-auto-pair-permfail-"));
     const fakeOpenclaw = path.join(tmpDir, "openclaw");
     const stateDir = path.join(tmpDir, "state");
@@ -691,7 +689,6 @@ exit 2
           ...process.env,
           OPENCLAW_BIN: fakeOpenclaw,
           OPENCLAW_STATE_DIR: stateDir,
-          NEMOCLAW_AUTO_PAIR_FAST_DEADLINE_SECS: "0.01",
           NEMOCLAW_AUTO_PAIR_DEADLINE_SECS: "1",
           NEMOCLAW_AUTO_PAIR_SLOW_INTERVAL_SECS: "1",
         },
@@ -699,13 +696,12 @@ exit 2
       });
 
       expect(run.status).toBe(0);
-      // The transition fired on the permanently-failing gated path (loop-top check).
-      expect(run.stdout).toContain(
-        "[auto-pair] fast-mode deadline reached; switching to slow-mode",
-      );
+      // The request keeps retrying on the fast cadence (no baseline settled),
+      // then the watcher exits at the deadline rather than wedging.
       expect(run.stdout).toContain(
         "[auto-pair] initial CLI approve failed request=request-1: gateway permanently unavailable",
       );
+      expect(run.stdout).toContain("[auto-pair] watcher deadline reached approvals=0");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

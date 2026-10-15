@@ -213,6 +213,7 @@ describe("sandbox build context staging", () => {
     writeFixture(path.join("scripts", "lib", "gateway-supervisor.sh"));
     writeFixture(path.join("scripts", "lib", "sandbox-rlimits.sh"));
     writeFixture(path.join("scripts", "lib", "openclaw_device_approval_policy.py"));
+    writeFixture(path.join("scripts", "lib", "openclaw_pairing_state.py"));
     writeFixture(path.join("scripts", "lib", "clean_runtime_shell_env_shim.py"));
     writeFixture(path.join("scripts", "lib", "normalize_mutable_config_perms.py"));
     writeFixture(
@@ -221,6 +222,7 @@ describe("sandbox build context staging", () => {
     writeFixture(
       path.join("src", "lib", "messaging", "channels", "fixture", "hooks", "example.ts"),
     );
+    writeFixture(path.join("src", "lib", "extra-agents-validation.ts"));
     writeFixture(path.join("src", "lib", "tool-disclosure.ts"));
     for (const relativePath of [
       path.join("core", "json-types.ts"),

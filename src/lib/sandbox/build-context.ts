@@ -184,6 +184,10 @@ function stageLegacySandboxBuildContext(
     { recursive: true },
   );
   fs.copyFileSync(
+    path.join(rootDir, "src", "lib", "extra-agents-validation.ts"),
+    path.join(buildCtx, "src", "lib", "extra-agents-validation.ts"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "src", "lib", "tool-disclosure.ts"),
     path.join(buildCtx, "src", "lib", "tool-disclosure.ts"),
   );
@@ -347,6 +351,10 @@ function stageOptimizedSandboxBuildContext(
     path.join(stagedScriptsDir, "lib", "openclaw_device_approval_policy.py"),
   );
   fs.copyFileSync(
+    path.join(rootDir, "scripts", "lib", "openclaw_pairing_state.py"),
+    path.join(stagedScriptsDir, "lib", "openclaw_pairing_state.py"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "scripts", "lib", "clean_runtime_shell_env_shim.py"),
     path.join(stagedScriptsDir, "lib", "clean_runtime_shell_env_shim.py"),
   );
@@ -359,6 +367,10 @@ function stageOptimizedSandboxBuildContext(
     path.join(rootDir, "src", "lib", "messaging"),
     path.join(buildCtx, "src", "lib", "messaging"),
     { recursive: true },
+  );
+  fs.copyFileSync(
+    path.join(rootDir, "src", "lib", "extra-agents-validation.ts"),
+    path.join(buildCtx, "src", "lib", "extra-agents-validation.ts"),
   );
   fs.copyFileSync(
     path.join(rootDir, "src", "lib", "tool-disclosure.ts"),

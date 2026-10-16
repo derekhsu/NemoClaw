@@ -77,7 +77,7 @@ upstream APIs.
   - `https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz`
   - `MIT`; dependencies `forwarded@0.2.0` and `ipaddr.js@1.9.1`; Node `>= 0.10`
 - `mcporter@0.7.3` committed runtime lock
-  - SHA-256: `962dee34f6b0a493521d1619d1cf030e2630cbdfce8bf0598217202f57078793`
+  - SHA-256: `3c81d752d50113a2781b2aa1e8f1faade088f6fe3ed0bdde6ad0fb67a364f958`
 
 ## Audit result and temporary dependency remediations
 

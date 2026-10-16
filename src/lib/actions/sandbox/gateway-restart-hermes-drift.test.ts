@@ -142,6 +142,7 @@ it("sanitizes an injected Hermes reconciliation refusal before post-restart muta
       getSessionAgent: () => hermesAgent,
       getSandbox: () => ({ agent: "hermes" }),
       resolveSandboxDashboardPort: () => 18789,
+      buildOpenClawReadinessProbeCommand: () => "readyz-probe",
       requestGatewaySupervisorAction: vi.fn(() => ({
         status: 0,
         stdout: "GATEWAY_PID=123",

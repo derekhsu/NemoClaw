@@ -566,18 +566,29 @@ export function restartSandboxGateway(
         getSessionAgent: agentRuntime.getSessionAgent,
         getSandbox: registry.getSandbox,
         resolveSandboxDashboardPort,
+        buildOpenClawReadinessProbeCommand: (name) => {
+          // OpenClaw 2026.3.11+ exposes { ready: boolean } here:
+          // https://github.com/openclaw/openclaw/blob/v2026.3.11/src/gateway/server-http.ts
+          const url = new URL(getSandboxHealthProbeUrl(name));
+          url.pathname = "/readyz";
+          url.search = "";
+          url.hash = "";
+          return `curl --noproxy '*' --silent --show-error --fail --write-out '\\n%{http_code}' --max-time 3 ${shellQuote(url.href)}`;
+        },
         requestGatewaySupervisorAction: executeGatewaySupervisorAction,
         executeSandboxExecCommand,
         waitForRecoveredSandboxGateway: (name, options) =>
           waitForRecoveredSandboxGateway(name, {
             ...options,
-            initialManagedHealthPassed: true,
+            initialManagedHealthPassed: options?.initialManagedHealthPassed ?? true,
             timeoutSeconds: gatewayRecoveryTimeoutSeconds(agentRuntime.getSessionAgent(name)),
-            managedProbeImpl: (sandboxName) =>
-              confirmRecoveredSandboxGatewayManaged(sandboxName, {
-                requestGatewaySupervisorActionImpl:
-                  deps.requestGatewaySupervisorAction ?? executeGatewaySupervisorAction,
-              }),
+            managedProbeImpl:
+              options?.managedProbeImpl ??
+              ((sandboxName) =>
+                confirmRecoveredSandboxGatewayManaged(sandboxName, {
+                  requestGatewaySupervisorActionImpl:
+                    deps.requestGatewaySupervisorAction ?? executeGatewaySupervisorAction,
+                })),
           }),
         ensureSandboxPortForward,
         ensureHermesDashboardPortForwardIfEnabled,

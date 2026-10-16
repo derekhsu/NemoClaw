@@ -58,6 +58,7 @@ const fs = require("fs");
 const path = require("path");
 const dir = path.join(${JSON.stringify(fakeRoot)}, ".openclaw");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 function readStdin() {
   const chunks = [];
   for (;;) {
@@ -170,7 +171,14 @@ describe("OpenClaw durable config file (#5027)", () => {
       const backup = sandboxState.backupSandboxState("alpha");
       expect(backup.success).toBe(true);
       expect(backup.backedUpFiles).toEqual(["openclaw.json"]);
-      expect(backup.manifest?.stateFiles).toEqual([{ path: "openclaw.json", strategy: "copy" }]);
+      expect(backup.manifest?.stateFiles).toEqual([
+        { path: "openclaw.json", strategy: "copy" },
+        {
+          path: "state/openclaw.sqlite",
+          strategy: "sqlite_backup",
+          sanitize: "machine-authority",
+        },
+      ]);
 
       // The local backup is sanitized: secret stripped, gateway removed,
       // restorable references preserved.

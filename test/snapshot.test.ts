@@ -702,6 +702,7 @@ describe("sandbox directory backup semantics", () => {
         path.join(binDir, "ssh"),
         `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 if (cmd.includes("[ -d ")) process.stdout.write("workspace\\n");
 if (cmd.includes("openclaw.json") && cmd.includes("cat --")) process.exit(2);
 process.exit(0);
@@ -758,6 +759,7 @@ process.exit(0);
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 fs.appendFileSync(${JSON.stringify(sshLog)}, JSON.stringify({ cmd }) + "\\n");
 function readStdin() {
@@ -866,6 +868,7 @@ process.exit(0);
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -929,6 +932,7 @@ process.exit(0);
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 const openclawDir = ${JSON.stringify(openclawDir)};
 if (cmd.includes("[ -d ")) {
@@ -988,6 +992,7 @@ process.exit(0);
         path.join(binDir, "ssh"),
         `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1041,6 +1046,7 @@ process.exit(0);
         path.join(binDir, "ssh"),
         `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1098,6 +1104,7 @@ process.exit(0);
         path.join(binDir, "ssh"),
         `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1150,6 +1157,7 @@ process.exit(0);
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1214,6 +1222,7 @@ process.exit(0);
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1289,6 +1298,7 @@ process.exit(0);
         path.join(binDir, "ssh"),
         `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const existingDirs = ${JSON.stringify(existingDirs)};
 if (cmd.includes("[ -d ")) {
   process.stdout.write(existingDirs.join("\\n") + "\\n");
@@ -1391,6 +1401,7 @@ const { spawnSync } = require("child_process");
 const root = ${JSON.stringify(fakeRoot)};
 const log = ${JSON.stringify(sshLog)};
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 fs.appendFileSync(log, JSON.stringify({ cmd }) + "\\n");
 const deepAgentsDir = path.join(root, ".deepagents");
 if (cmd.includes("config.toml") && cmd.includes("cat --")) {

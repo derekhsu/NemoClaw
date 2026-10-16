@@ -238,6 +238,18 @@ describe("OpenClaw Tool Search pinned-runtime validator", () => {
     expect(result.runtimeModulePath).toMatch(/agent-tools-fixture\.js$/);
   });
 
+  it("selects the exact 2026.9.2 local-model-lean and agent-tools runtime layout", async () => {
+    const fixture = writeFixture({
+      runtimeFileName: "local-model-lean-fixture.js",
+      secondRuntimeFileName: "agent-tools-fixture.js",
+      secondSource: RUNTIME_FIXTURE_SOURCE,
+      version: "2026.9.2",
+    });
+    const result = await validateFixture(fixture, "progressive", "2026.9.2");
+
+    expect(result.runtimeModulePath).toMatch(/agent-tools-fixture\.js$/);
+  });
+
   it("fails closed when package metadata does not match the expected pin", async () => {
     const fixture = writeFixture({ version: "2026.5.28" });
 

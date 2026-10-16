@@ -53,6 +53,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Guard production build args
+        run: |
+          set -euo pipefail
+          scripts/check-production-build-args.sh
+
       # Push only the canonical digest. Named tags are created by the manifest
       # job after both platform digests exist.
       - name: Build and push ${{ matrix.platform }} image by digest

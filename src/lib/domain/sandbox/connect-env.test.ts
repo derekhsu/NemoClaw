@@ -41,11 +41,7 @@ describe("sandbox connect environment helpers", () => {
       model: "test",
     };
     expect(
-      shouldRemoveHermesLightSkin(
-        { name: "hermes" },
-        { TERM_PROGRAM: "Apple_Terminal" },
-        config,
-      ),
+      shouldRemoveHermesLightSkin({ name: "hermes" }, { TERM_PROGRAM: "Apple_Terminal" }, config),
     ).toBe(true);
     expect(
       shouldRemoveHermesLightSkin(

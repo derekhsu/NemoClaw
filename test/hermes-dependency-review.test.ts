@@ -153,20 +153,14 @@ describe("Hermes 0.20.6 dependency review", () => {
     // Hermes 0.20.6 natively selects aiohttp, cryptography, mcp, Pillow,
     // starlette, tornado, and python-multipart; the patch only needs to floor
     // the two remaining deltas.
-    for (const selection of [
-      '"alibabacloud-dingtalk==2.2.54"',
-      '"httpx2==2.12.0"',
-    ]) {
+    for (const selection of ['"alibabacloud-dingtalk==2.2.54"', '"httpx2==2.12.0"']) {
       expect(securityDependenciesPatch).toContain(selection);
     }
     const addedPatchLines = securityDependenciesPatch
       .split("\n")
       .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
       .join("\n");
-    for (const supersededSelection of [
-      '"alibabacloud-dingtalk==2.2.42"',
-      '"httpx2==2.7.0"',
-    ]) {
+    for (const supersededSelection of ['"alibabacloud-dingtalk==2.2.42"', '"httpx2==2.7.0"']) {
       expect(addedPatchLines).not.toContain(supersededSelection);
     }
     for (const installedVersion of [

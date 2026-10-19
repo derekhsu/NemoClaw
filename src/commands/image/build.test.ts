@@ -69,7 +69,10 @@ describe("ImageBuildCommand", () => {
 
   it("rejects an unsupported agent before dispatch", async () => {
     await expect(
-      ImageBuildCommand.run(["--agent", "invalid-runtime", "--tag", "ghcr.io/example/test"], rootDir),
+      ImageBuildCommand.run(
+        ["--agent", "invalid-runtime", "--tag", "ghcr.io/example/test"],
+        rootDir,
+      ),
     ).rejects.toThrow(/Expected .* to be one of|agent/i);
 
     expect(runImageBuildAction).not.toHaveBeenCalled();

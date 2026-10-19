@@ -1728,6 +1728,19 @@ describe("generate-openclaw-config.mts: config generation", () => {
     expect(config.plugins.entries.bonjour.config).toBeUndefined();
   });
 
+  it("disables the remote model catalog refresh under default-deny egress (#2)", () => {
+    const config = runConfigScript();
+    expect(config.models.catalogRefresh).toEqual({ enabled: false });
+  });
+
+  it("grants the nemoclaw plugin conversation hook access (#2)", () => {
+    const config = runConfigScript();
+    expect(config.plugins.entries.nemoclaw).toEqual({
+      enabled: true,
+      hooks: { allowConversationAccess: true },
+    });
+  });
+
   it("omits stale disabled entries for optional bundled plugins", () => {
     const config = runConfigScript({ NEMOCLAW_PROVIDER_KEY: "inference" });
     expect(Object.keys(config.plugins.entries)).toEqual(["bonjour", "nemoclaw"]);

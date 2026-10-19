@@ -978,7 +978,9 @@ export function buildConfig(env: Env = process.env): JsonObject {
 
   const pluginEntries: JsonObject = {
     bonjour: { enabled: false },
-    nemoclaw: { enabled: true },
+    // OpenClaw 2026.9.x blocks conversation hooks on non-bundled plugins
+    // unless they opt in through plugins.entries.<id>.hooks.
+    nemoclaw: { enabled: true, hooks: { allowConversationAccess: true } },
   };
   const managedImageCapabilityUnion = readBooleanBuildFlag(
     env,
@@ -1048,7 +1050,10 @@ export function buildConfig(env: Env = process.env): JsonObject {
       defaults: agentDefaults,
       entries: buildAgentEntries(extraAgents, extraAgentsPayload.main),
     },
-    models: { mode: "merge", providers },
+    // Sandbox egress is default-deny, so the remote model catalog refresh
+    // can never succeed. Keep the pinned provider models instead of paying a
+    // guaranteed-failing fetch on every gateway start.
+    models: { mode: "merge", providers, catalogRefresh: { enabled: false } },
     channels,
     tools: openclawTools,
     // NemoClaw bakes a reviewed, image-only configuration: the managed

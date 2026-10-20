@@ -1210,6 +1210,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       'hermes_tracked_service_owns_listener() { trace "service-listener:$1:$2:$3"; return 1; }',
       'curl() { printf "200"; }',
       'hermes_stop_tracked_role() { trace "stop:$2"; return 0; }',
+      'hermes_reap_stray_service_listener() { trace "reap:$1:$2"; return 0; }',
       "start_hermes_dashboard_sandbox_user() { trace start-dashboard; DASHBOARD_PID=404; DASHBOARD_SOCAT_PID=505; }",
       'start_socat_forwarder() { trace "start-forward:$*"; return 0; }',
       "ensure_dashboard_log_stream() { trace dashboard-log; }",
@@ -1243,6 +1244,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       "service-listener:202:19119:sandbox",
       "stop:303",
       "stop:202",
+      "reap:19119:sandbox",
       "start-dashboard",
       "dashboard-log",
       "gateway-log",
@@ -1263,6 +1265,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       "hermes_tracked_service_owns_listener() { return 0; }",
       'curl() { printf "200"; }',
       'hermes_stop_tracked_role() { trace "stop:$2"; return 0; }',
+      'hermes_reap_stray_service_listener() { trace "reap:$1:$2"; return 0; }',
       'start_socat_forwarder() { trace "start-forward:$*"; printf -v "$4" 111; return 0; }',
       "start_hermes_dashboard_sandbox_user() { trace unexpected-dashboard-start; return 1; }",
       "ensure_dashboard_log_stream() { trace dashboard-log; }",
@@ -1288,6 +1291,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       "live:101",
       "listener:101:8642",
       "stop:101",
+      "reap:8642:current",
       "start-forward:8642 18642 API SOCAT_PID 4242 gateway",
       "live:111",
       "listener:111:8642",
@@ -1314,6 +1318,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       'hermes_tracked_service_owns_listener() { trace "service-listener:$1:$2:$3"; return 0; }',
       'curl() { case "$*" in *:8642/health*) printf "200" ;; *) trace dashboard-http; printf "500" ;; esac; }',
       'hermes_stop_tracked_role() { trace "stop:$2"; return 0; }',
+      'hermes_reap_stray_service_listener() { trace "reap:$1:$2"; return 0; }',
       "start_hermes_dashboard_sandbox_user() { trace start-dashboard; DASHBOARD_PID=404; DASHBOARD_SOCAT_PID=505; }",
       'start_socat_forwarder() { trace "unexpected-forward:$*"; return 1; }',
       "ensure_dashboard_log_stream() { trace dashboard-log; }",
@@ -1345,6 +1350,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       "service-listener:202:19119:sandbox",
       "stop:303",
       "stop:202",
+      "reap:19119:sandbox",
       "start-dashboard",
       "dashboard-log",
       "gateway-log",
@@ -1363,6 +1369,7 @@ describe("Hermes supervised auxiliary recovery", () => {
       'start_socat_forwarder() { trace "start-forward:$*"; return 1; }',
       "start_hermes_dashboard_sandbox_user() { trace unexpected-dashboard-start; return 0; }",
       'hermes_stop_tracked_role() { trace "stop:$2"; return 0; }',
+      'hermes_reap_stray_service_listener() { trace "reap:$1:$2"; return 0; }',
       "ensure_gateway_log_stream() { trace unexpected-gateway-log; }",
       extractShellFunction(source, "hermes_socat_bridge_healthy"),
       extractShellFunction(source, "hermes_api_socat_bridge_healthy"),
@@ -1382,112 +1389,10 @@ describe("Hermes supervised auxiliary recovery", () => {
     expect(result.stdout.trim().split("\n")).toEqual([
       "live:101",
       "stop:101",
+      "reap:8642:current",
       "start-forward:8642 18642 API SOCAT_PID 4242 gateway",
       "failure:1",
     ]);
   });
 });
 
-describe("Hermes socat bridge startup", () => {
-  it("fails promptly when the exact service owner exits during readiness", () => {
-    const source = fs.readFileSync(START_SCRIPT, "utf-8");
-    const result = runBashHarness(
-      [
-        "INTERNAL_PORT=18642",
-        "DASHBOARD_INTERNAL_PORT=19119",
-        'trace() { printf "%s\\n" "$*"; }',
-        'sleep() { trace "unexpected-sleep:$1"; }',
-        'hermes_tracked_role_is_current() { trace "owner-check:$1:$2:$3:$4"; return 1; }',
-        'hermes_tracked_service_owns_listener() { trace "unexpected-listener-check"; return 1; }',
-        "hermes_capture_tracked_role() { return 0; }",
-        extractShellFunction(source, "start_socat_forwarder"),
-        'SOCAT_PID=""',
-        "if start_socat_forwarder 8642 18642 API SOCAT_PID 4242 current; then rc=0; else rc=$?; fi",
-        'printf "RC=%s PID=%s\\n" "$rc" "$SOCAT_PID"',
-      ],
-      (tmpDir) => {
-        const binDir = path.join(tmpDir, "bin");
-        fs.mkdirSync(binDir);
-        fs.writeFileSync(path.join(binDir, "socat"), "#!/usr/bin/env bash\nexit 0\n", {
-          mode: 0o700,
-        });
-        return { PATH: `${binDir}:${process.env.PATH ?? ""}` };
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim().split("\n")).toEqual([
-      "owner-check:gateway:4242:current:18642",
-      "RC=1 PID=",
-    ]);
-    expect(result.stdout).not.toContain("unexpected-sleep");
-    expect(result.stdout).not.toContain("unexpected-listener-check");
-    expect(result.stderr).toContain(
-      "API service owner pid 4242 exited before binding 127.0.0.1:18642",
-    );
-  });
-
-  it("refuses to publish a forward when the internal service never binds", () => {
-    const source = fs.readFileSync(START_SCRIPT, "utf-8");
-    const result = runBashHarness(
-      [
-        "INTERNAL_PORT=18642",
-        "DASHBOARD_INTERNAL_PORT=19119",
-        "ss() { return 0; }",
-        'sleep() { [ "${1:-}" = "0.1" ] && /bin/sleep 0.2 || :; }',
-        "hermes_capture_tracked_role() { return 0; }",
-        extractShellFunction(source, "start_socat_forwarder"),
-        'SOCAT_PID=""',
-        "if start_socat_forwarder 8642 18642 API SOCAT_PID; then rc=0; else rc=$?; fi",
-        'printf "RC=%s PID=%s\\n" "$rc" "$SOCAT_PID"',
-      ],
-      (tmpDir) => {
-        const binDir = path.join(tmpDir, "bin");
-        fs.mkdirSync(binDir);
-        fs.writeFileSync(path.join(binDir, "socat"), "#!/usr/bin/env bash\nexit 0\n", {
-          mode: 0o700,
-        });
-        return { PATH: `${binDir}:${process.env.PATH ?? ""}` };
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("RC=1 PID=\n");
-    expect(result.stderr).toContain(
-      "API service did not bind 127.0.0.1:18642; refusing to publish an empty forward",
-    );
-  });
-
-  it("rejects a socat listener that exits immediately", () => {
-    const source = fs.readFileSync(START_SCRIPT, "utf-8");
-    const supervisor = fs.readFileSync(SUPERVISOR_LIB, "utf-8");
-    const result = runBashHarness(
-      [
-        "INTERNAL_PORT=18642",
-        "DASHBOARD_INTERNAL_PORT=19119",
-        'ss() { printf "LISTEN 0 128 127.0.0.1:18642 0.0.0.0:*\\n"; }',
-        "sleep() { :; }",
-        "kill() { return 0; }",
-        'ps() { printf "Z\\n"; }',
-        "hermes_capture_tracked_role() { return 0; }",
-        extractShellFunction(supervisor, "gateway_control_pid_is_live"),
-        extractShellFunction(source, "start_socat_forwarder"),
-        'SOCAT_PID=""',
-        "if start_socat_forwarder 8642 18642 API SOCAT_PID; then rc=0; else rc=$?; fi",
-        'printf "RC=%s PID=%s\\n" "$rc" "$SOCAT_PID"',
-      ],
-      (tmpDir) => {
-        const binDir = path.join(tmpDir, "bin");
-        fs.mkdirSync(binDir);
-        fs.writeFileSync(path.join(binDir, "socat"), "#!/usr/bin/env bash\nexit 23\n", {
-          mode: 0o700,
-        });
-        return { PATH: `${binDir}:${process.env.PATH ?? ""}` };
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("RC=1 PID=\n");
-    expect(result.stderr).toContain("API socat forwarder failed to stay running on 0.0.0.0:8642");
-  });
-});

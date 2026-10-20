@@ -461,6 +461,10 @@ STEP_DOWN_PREFIX_SANDBOX=(
 STEP_DOWN_PREFIX_GATEWAY=(
   /bin/sh -c 'echo "[SECURITY] setpriv unavailable: refusing to execute a root privilege transition" >&2; exit 1' --
 )
+# shellcheck disable=SC2034  # consumed by agents/hermes/start.sh for the api-profile gateway
+STEP_DOWN_PREFIX_API=(
+  /bin/sh -c 'echo "[SECURITY] setpriv unavailable: refusing to execute a root privilege transition" >&2; exit 1' --
+)
 
 init_step_down_prefixes() {
   local setpriv_path
@@ -487,22 +491,29 @@ init_step_down_prefixes() {
   local -a gateway_prefix=(
     "$setpriv_path" "--reuid=gateway" "--regid=gateway" --init-groups
   )
+  local -a api_prefix=(
+    "$setpriv_path" "--reuid=hermesapi" "--regid=api" --init-groups
+  )
 
   if command -v capsh >/dev/null 2>&1 && capsh --has-p=cap_setpcap 2>/dev/null; then
     # setpriv cap names are unprefixed (per `setpriv --list`); capsh uses cap_*.
     local drop="-setuid,-setgid,-fowner,-chown,-kill"
     sandbox_prefix+=("--bounding-set=$drop")
     gateway_prefix+=("--bounding-set=$drop")
+    api_prefix+=("--bounding-set=$drop")
   else
     echo "[SECURITY WARNING] CAP_SETPCAP unavailable: setpriv will change identity without dropping the remaining privilege-separation capabilities from the bounding set" >&2
   fi
 
   sandbox_prefix+=(--)
   gateway_prefix+=(--)
+  api_prefix+=(--)
   # shellcheck disable=SC2034  # consumed by entrypoint scripts (cross-file)
   STEP_DOWN_PREFIX_SANDBOX=("${sandbox_prefix[@]}")
   # shellcheck disable=SC2034  # consumed by entrypoint scripts (cross-file)
   STEP_DOWN_PREFIX_GATEWAY=("${gateway_prefix[@]}")
+  # shellcheck disable=SC2034  # consumed by agents/hermes/start.sh for the api-profile gateway
+  STEP_DOWN_PREFIX_API=("${api_prefix[@]}")
 }
 init_step_down_prefixes
 

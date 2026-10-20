@@ -202,6 +202,15 @@ HERMES="$(command -v hermes)" # Resolve once, use absolute path everywhere
 HERMES_DIR="/sandbox/.hermes"
 HERMES_HASH_FILE="/etc/nemoclaw/hermes.config-hash"
 
+# Dedicated api-profile contract (opt-in via NEMOCLAW_REQUIRE_API_PROFILE):
+# the image-owned `api` profile is served by a separate hermesapi-uid gateway
+# behind a prefix proxy on the public API port, both launched and supervised
+# by nemoclaw-api-runtime through the privileged exec path. This script runs
+# as the sandbox uid under OpenShell and cannot step down to hermesapi, so it
+# never owns those processes — it only skips the socat forwarder and probes
+# the public listener over HTTP.
+API_PROFILE_PUBLIC_PREFIX="/p/api"
+
 # Resolve the standalone secret-boundary validator. The container ships it at
 # the installed path; the dev fallback resolves against the script directory so
 # ad-hoc bash invocations from a checkout work without copying the file. The
@@ -289,6 +298,13 @@ truthy_env() {
     *) return 1 ;;
   esac
 }
+
+HERMES_DASHBOARD_SOURCE_CONFIG="${HERMES_DIR}/config.yaml"
+HERMES_DASHBOARD_SOURCE_ENV="${HERMES_DIR}/.env"
+if truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"; then
+  HERMES_DASHBOARD_SOURCE_CONFIG="/sandbox/.hermes-api/profiles/api/config.yaml"
+  HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"
+fi
 
 validate_tcp_port() {
   local name="$1"
@@ -1344,6 +1360,35 @@ hermes_tracked_service_owns_listener() {
   esac
 }
 
+hermes_reap_stray_service_listener() {
+  # Identity-pinned stop cannot reach children orphaned outside the tracked
+  # set, such as a service left bound by a previous supervisor. Reap whatever
+  # still owns the service port before the relaunch loses the bind race.
+  local port="$1" service_user="$2"
+
+  if [ "$(id -u)" -ne 0 ] || [ "$service_user" = "current" ]; then
+    gateway_control_reap_port_listener "$port"
+    return $?
+  fi
+  case "$service_user" in
+    gateway)
+      # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
+      "${STEP_DOWN_PREFIX_GATEWAY[@]}" env -u BASH_ENV \
+        bash --noprofile --norc -c \
+        'source "$1"; gateway_control_reap_port_listener "$2"' \
+        bash "$_GATEWAY_SUPERVISOR" "$port"
+      ;;
+    sandbox)
+      # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
+      "${STEP_DOWN_PREFIX_SANDBOX[@]}" env -u BASH_ENV \
+        bash --noprofile --norc -c \
+        'source "$1"; gateway_control_reap_port_listener "$2"' \
+        bash "$_GATEWAY_SUPERVISOR" "$port"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 start_socat_forwarder() {
   local public_port="$1"
   local internal_port="$2"
@@ -1475,6 +1520,8 @@ prepare_hermes_dashboard_home() {
       _HERMES_PYTHON="$_HERMES_PYTHON" \
       _HERMES_DASHBOARD_CONFIG_SEEDER="$_HERMES_DASHBOARD_CONFIG_SEEDER" \
       _HERMES_MANAGED_POLICY="$_HERMES_MANAGED_POLICY" \
+      HERMES_DASHBOARD_SOURCE_CONFIG="$HERMES_DASHBOARD_SOURCE_CONFIG" \
+      HERMES_DASHBOARD_SOURCE_ENV="$HERMES_DASHBOARD_SOURCE_ENV" \
       "${STEP_DOWN_PREFIX_SANDBOX[@]}" sh -c '
         if [ -L "$HERMES_DASHBOARD_HOME" ]; then
           echo "[SECURITY] Refusing Hermes dashboard startup because ${HERMES_DASHBOARD_HOME} is a symlink" >&2
@@ -1493,8 +1540,8 @@ prepare_hermes_dashboard_home() {
         rm -f "${HERMES_DASHBOARD_HOME}/gateway_state.json" 2>/dev/null || true
         exec "$_HERMES_PYTHON" "$_HERMES_DASHBOARD_CONFIG_SEEDER" \
           "$_HERMES_MANAGED_POLICY" \
-          "${HERMES_DIR}/config.yaml" "${HERMES_DASHBOARD_HOME}/config.yaml" \
-          "${HERMES_DIR}/.env" "${HERMES_DASHBOARD_HOME}/.env"
+          "$HERMES_DASHBOARD_SOURCE_CONFIG" "${HERMES_DASHBOARD_HOME}/config.yaml" \
+          "$HERMES_DASHBOARD_SOURCE_ENV" "${HERMES_DASHBOARD_HOME}/.env"
       ' || rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "[dashboard] ERROR: config seed exited ${rc}; refusing dashboard startup" >&2
@@ -1534,8 +1581,8 @@ seed_hermes_dashboard_config() {
   rm -f "${HERMES_DASHBOARD_HOME}/gateway_state.json" 2>/dev/null || true
   env "$_HERMES_PYTHON" "$_HERMES_DASHBOARD_CONFIG_SEEDER" \
     "$_HERMES_MANAGED_POLICY" \
-    "${HERMES_DIR}/config.yaml" "$dst" \
-    "${HERMES_DIR}/.env" "$env_dst" || rc=$?
+    "$HERMES_DASHBOARD_SOURCE_CONFIG" "$dst" \
+    "$HERMES_DASHBOARD_SOURCE_ENV" "$env_dst" || rc=$?
 
   if [ "$rc" -ne 0 ]; then
     echo "[dashboard] ERROR: config seed exited ${rc}; refusing dashboard startup" >&2
@@ -1773,7 +1820,7 @@ export NO_PROXY="$_NO_PROXY_VAL"
 export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
-export HERMES_HOME="${HERMES_DIR}"
+export HERMES_HOME="\${HERMES_HOME:-${HERMES_DIR}}"
 PROXYEOF
     cat <<'TUIENVEOF'
 if [ -f /opt/hermes/ui-tui/dist/entry.js ]; then
@@ -2524,8 +2571,33 @@ hermes_dashboard_healthy() {
   esac
 }
 
+hermes_api_public_endpoint_healthy() {
+  # The api prefix proxy and the api-profile gateway are owned by
+  # nemoclaw-api-runtime (privileged exec), so this supervisor can only probe
+  # the public listener over HTTP. /health proves the proxy is bound and the
+  # main gateway answers behind it; /p/api/health proves the split route
+  # reaches the dedicated api gateway end to end.
+  local code
+  code="$(curl -so /dev/null -w '%{http_code}' --max-time 2 \
+    "http://127.0.0.1:${PUBLIC_PORT}/health" 2>/dev/null || echo 000)"
+  case "$code" in
+    200 | 401) ;;
+    *) return 1 ;;
+  esac
+  code="$(curl -so /dev/null -w '%{http_code}' --max-time 2 \
+    "http://127.0.0.1:${PUBLIC_PORT}${API_PROFILE_PUBLIC_PREFIX}/health" 2>/dev/null || echo 000)"
+  case "$code" in
+    200 | 401) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 hermes_auxiliaries_need_recovery() {
-  hermes_api_socat_bridge_healthy "${SOCAT_PID:-}" "$PUBLIC_PORT" || return 0
+  if truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"; then
+    hermes_api_public_endpoint_healthy || return 0
+  else
+    hermes_api_socat_bridge_healthy "${SOCAT_PID:-}" "$PUBLIC_PORT" || return 0
+  fi
   hermes_dashboard_healthy "${DASHBOARD_PID:-}" || return 0
   hermes_socat_bridge_healthy dashboard-socat "${DASHBOARD_SOCAT_PID:-}" "$DASHBOARD_PUBLIC_PORT" || return 0
   return 1
@@ -2566,18 +2638,27 @@ ensure_hermes_supervised_auxiliaries() {
     dashboard_user=sandbox
   fi
 
-  # Structural identity/listener loss requires exact relay replacement. A
-  # transient public HTTP miss does not: forked socat accepts each request on
-  # a fresh backend connection, so churning its proven listener can prolong
-  # the outage while the replacement gateway is still settling. Preserve the
-  # exact parent and let the supervised recovery loop retry readiness instead.
-  if ! hermes_socat_bridge_healthy api-socat "${SOCAT_PID:-}" "$PUBLIC_PORT"; then
-    hermes_stop_tracked_role api-socat "${SOCAT_PID:-0}" current "$PUBLIC_PORT" || return 1
-    SOCAT_PID=""
-    start_socat_forwarder \
-      "$PUBLIC_PORT" "$INTERNAL_PORT" "API" SOCAT_PID "$GATEWAY_PID" "$gateway_user" || return 1
+  if truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"; then
+    # The public API port is owned by the privileged api prefix proxy, never
+    # by a socat child of this supervisor. Probe it over HTTP and let the
+    # external supervisor repair any failure.
+    hermes_api_public_endpoint_healthy || return 1
+  else
+    # Structural identity/listener loss requires exact relay replacement. A
+    # transient public HTTP miss does not: forked socat accepts each request
+    # on a fresh backend connection, so churning its proven listener can
+    # prolong the outage while the replacement gateway is still settling.
+    # Preserve the exact parent and let the supervised recovery loop retry
+    # readiness instead.
+    if ! hermes_socat_bridge_healthy api-socat "${SOCAT_PID:-}" "$PUBLIC_PORT"; then
+      hermes_stop_tracked_role api-socat "${SOCAT_PID:-0}" current "$PUBLIC_PORT" || return 1
+      SOCAT_PID=""
+      hermes_reap_stray_service_listener "$PUBLIC_PORT" current || return 1
+      start_socat_forwarder \
+        "$PUBLIC_PORT" "$INTERNAL_PORT" "API" SOCAT_PID "$GATEWAY_PID" "$gateway_user" || return 1
+    fi
+    hermes_api_socat_bridge_healthy "$SOCAT_PID" "$PUBLIC_PORT" || return 1
   fi
-  hermes_api_socat_bridge_healthy "$SOCAT_PID" "$PUBLIC_PORT" || return 1
   if ! hermes_dashboard_healthy "${DASHBOARD_PID:-}"; then
     # A live PID is not sufficient: it may be reused, alive without the exact
     # dashboard listener, or serving a wedged HTTP process. Stop both tracked
@@ -2586,6 +2667,7 @@ ensure_hermes_supervised_auxiliaries() {
     DASHBOARD_SOCAT_PID=""
     hermes_stop_tracked_role dashboard "${DASHBOARD_PID:-0}" "$dashboard_user" "$DASHBOARD_INTERNAL_PORT" || return 1
     DASHBOARD_PID=""
+    hermes_reap_stray_service_listener "$DASHBOARD_INTERNAL_PORT" "$dashboard_user" || return 1
     if [ "$(id -u)" -eq 0 ]; then
       start_hermes_dashboard_sandbox_user || return 1
     else
@@ -2594,6 +2676,7 @@ ensure_hermes_supervised_auxiliaries() {
   elif ! hermes_socat_bridge_healthy dashboard-socat "${DASHBOARD_SOCAT_PID:-}" "$DASHBOARD_PUBLIC_PORT"; then
     hermes_stop_tracked_role dashboard-socat "${DASHBOARD_SOCAT_PID:-0}" current "$DASHBOARD_PUBLIC_PORT" || return 1
     DASHBOARD_SOCAT_PID=""
+    hermes_reap_stray_service_listener "$DASHBOARD_PUBLIC_PORT" current || return 1
     start_socat_forwarder \
       "$DASHBOARD_PUBLIC_PORT" "$DASHBOARD_INTERNAL_PORT" "dashboard" DASHBOARD_SOCAT_PID \
       "$DASHBOARD_PID" "$dashboard_user" || return 1

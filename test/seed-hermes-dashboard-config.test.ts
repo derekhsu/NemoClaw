@@ -970,4 +970,44 @@ raise SystemExit(0 if not ok and dashboard_fd is None else 2)
     expect(res.stderr).toContain("[SECURITY]");
     expect(fs.readFileSync(realTarget, "utf-8")).toBe("SECRET=do-not-touch\n");
   });
+
+  it("appends the api-profile design note to an existing dashboard SOUL.md", () => {
+    const src = writeYaml("gw.yaml", GATEWAY_CONFIG);
+    const dst = path.join(tmpDir, "dash.yaml");
+    fs.writeFileSync(path.join(tmpDir, "SOUL.md"), "original soul\n");
+
+    const res = runSeed(src, dst);
+    expect(res.status).toBe(0);
+
+    const soul = fs.readFileSync(path.join(tmpDir, "SOUL.md"), "utf-8");
+    expect(soul).toContain("original soul");
+    expect(soul).toContain("## API profile design surface");
+    expect(soul).toContain("/sandbox/.hermes-api/profiles/api");
+  });
+
+  it("does not duplicate the design note on reseed", () => {
+    const src = writeYaml("gw.yaml", GATEWAY_CONFIG);
+    const dst = path.join(tmpDir, "dash.yaml");
+    fs.writeFileSync(path.join(tmpDir, "SOUL.md"), "original soul\n");
+
+    expect(runSeed(src, dst).status).toBe(0);
+    expect(runSeed(src, dst).status).toBe(0);
+
+    const soul = fs.readFileSync(path.join(tmpDir, "SOUL.md"), "utf-8");
+    const occurrences = soul.split("## API profile design surface").length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it("does not follow a symlinked dashboard SOUL.md", () => {
+    const src = writeYaml("gw.yaml", GATEWAY_CONFIG);
+    const dst = path.join(tmpDir, "dash.yaml");
+    const realTarget = path.join(tmpDir, "real-soul.md");
+    fs.writeFileSync(realTarget, "real soul\n");
+    fs.symlinkSync(realTarget, path.join(tmpDir, "SOUL.md"));
+
+    const res = runSeed(src, dst);
+    expect(res.status).toBe(0);
+    expect(res.stderr).toContain("could not add the api profile note to SOUL.md");
+    expect(fs.readFileSync(realTarget, "utf-8")).toBe("real soul\n");
+  });
 });

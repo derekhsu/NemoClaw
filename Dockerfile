@@ -2116,6 +2116,8 @@ os.chmod(path, 0o600)"
 # user, so runtime migration cannot rely on root privileges inside the pod.
 # Doing this in the image build guarantees new PR images have only the unified
 # .openclaw layout even when sandbox-base:latest has not been rebuilt yet.
+# Retire zero-byte exec approvals placeholders inherited from older bases.
+# Preserve nonempty legacy policy for OpenClaw Doctor to migrate to SQLite.
 # hadolint ignore=DL3002
 USER root
 # hadolint ignore=DL4006
@@ -2246,9 +2248,14 @@ RUN set -eu; \
         || { echo "ERROR: refusing unsafe OpenClaw state file: $exec_approvals" >&2; exit 1; }; \
     [ ! -e "$exec_approvals" ] || [ "$(stat -c '%h' "$exec_approvals")" = "1" ] \
         || { echo "ERROR: refusing unsafe OpenClaw state file: $exec_approvals" >&2; exit 1; }; \
-    touch "$exec_approvals"; \
-    chown sandbox:sandbox "$exec_approvals"; \
-    chmod 660 "$exec_approvals"; \
+    if [ -f "$exec_approvals" ]; then \
+        if [ ! -s "$exec_approvals" ]; then \
+            rm -f "$exec_approvals"; \
+        else \
+            chown sandbox:sandbox "$exec_approvals"; \
+            chmod 660 "$exec_approvals"; \
+        fi; \
+    fi; \
     for file in \
         "$config_dir/state/openclaw.sqlite" \
         "$config_dir/state/openclaw.sqlite-wal" \
@@ -2313,7 +2320,8 @@ RUN set -eu; \
 # three artifacts are guaranteed by the base image and covered by
 # test/sandbox-provisioning.test.ts.
 # Ref: https://github.com/NVIDIA/NemoClaw/issues/2704
-# hadolint ignore=SC2028,DL4006
+# Keep variable expansion literal until the generated shell hook runs.
+# hadolint ignore=SC2016,SC2028,DL4006
 RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
     && if ! grep -q "sandbox-rlimits.sh" /etc/profile.d/nemoclaw-rlimits.sh 2>/dev/null; then \
         printf '%s\n' \
@@ -2322,10 +2330,12 @@ RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
             > /etc/profile.d/nemoclaw-rlimits.sh \
         && chmod 444 /etc/profile.d/nemoclaw-rlimits.sh; \
     fi \
-    && if ! grep -q "/tmp/nemoclaw-proxy-env.sh" /etc/profile.d/nemoclaw-proxy.sh 2>/dev/null; then \
+    && if ! grep -q "/tmp/nemoclaw-proxy-env.sh" /etc/profile.d/nemoclaw-proxy.sh 2>/dev/null \
+        || ! grep -Fqx 'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' /etc/profile.d/nemoclaw-proxy.sh 2>/dev/null; then \
         printf '%s\n' \
             '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
             '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
+            'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
             > /etc/profile.d/nemoclaw-proxy.sh \
         && chmod 444 /etc/profile.d/nemoclaw-proxy.sh; \
     fi \
@@ -2333,11 +2343,13 @@ RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
     && { printf '%s\n' \
           '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
           '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
+          'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
           '' \
           '# NemoClaw sandbox resource limits — see sandbox-rlimits.sh (#2173)' \
           '[ -f /usr/local/lib/nemoclaw/sandbox-rlimits.sh ] && . /usr/local/lib/nemoclaw/sandbox-rlimits.sh && harden_resource_limits --quiet && verify_resource_limits --quiet || true' \
           ''; \
-        grep -Ev 'NemoClaw runtime proxy config|nemoclaw-proxy-env[.]sh|NemoClaw sandbox resource limits|sandbox-rlimits[.]sh' /etc/bash.bashrc || true; \
+        grep -Ev 'NemoClaw runtime proxy config|nemoclaw-proxy-env[.]sh|NemoClaw sandbox resource limits|sandbox-rlimits[.]sh' /etc/bash.bashrc \
+          | grep -Fvx 'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' || true; \
       } > /etc/bash.bashrc.new \
     && mv /etc/bash.bashrc.new /etc/bash.bashrc \
     && chmod 444 /etc/bash.bashrc
@@ -2546,6 +2558,10 @@ RUN set -eu; \
     vim.tiny --version | head -n 1 | grep -Eq '^VIM - Vi IMproved 9[.]2 '; \
     test -z "$(dpkg --audit)"
 # End completed-image security package verification.
+
+# SQLite can select /var/tmp even when OpenShell denies writes there.
+# Use the sandbox-writable directory for SQLite temporary files.
+ENV SQLITE_TMPDIR=/tmp
 
 # Stock builds use a non-root OCI default for OpenShell compatibility.
 # Deployments that require gateway and agent UID isolation can override

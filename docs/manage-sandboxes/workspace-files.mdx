@@ -48,6 +48,24 @@ Those paths resolve to `/sandbox/USER.md` and `/sandbox/SOUL.md`, which are outs
 Use `$OPENCLAW_WORKSPACE_DIR/USER.md` and `$OPENCLAW_WORKSPACE_DIR/SOUL.md` instead.
 </Warning>
 
+## Exec Approval State
+
+OpenClaw 2026.9.2 stores exec approval policy in `/sandbox/.openclaw/state/openclaw.sqlite`.
+OpenClaw manages this database and any required migration of legacy policy.
+NemoClaw images do not create the legacy `/sandbox/.openclaw/exec-approvals.json` placeholder.
+During image builds, NemoClaw removes an inherited zero-byte legacy file only after rejecting symlinks, hard links, and non-regular files.
+The image build preserves nonempty legacy policy files and existing SQLite state.
+This legacy-file repair step does not invoke OpenClaw Doctor or change approval defaults.
+
+## SQLite Temporary Files
+
+NemoClaw's OpenClaw images declare `SQLITE_TMPDIR=/tmp` so SQLite can create temporary files during database initialization inside the sandbox.
+Login shells and interactive Bash shells also set this value when `SQLITE_TMPDIR` is unset or empty.
+This shell default covers OpenShell login sessions that do not inherit the image environment.
+The shells preserve an existing runtime value, including a private SQLite temporary directory supplied by the NemoClaw entrypoint.
+Without a writable temporary directory, SQLite can select `/var/tmp`, where the sandbox blocks these writes.
+These defaults do not change the sandbox filesystem policy.
+
 ## Multi-Agent Deployments
 
 A single NemoClaw sandbox can host more than one OpenClaw agent.

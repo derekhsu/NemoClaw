@@ -292,6 +292,8 @@ RUN groupadd -r -g 999 gateway && useradd -r -u 999 -g gateway -d /sandbox -s /u
 # empty or populated file as a fatal migration warning when the separate
 # gateway user cannot archive it through a shields-protected parent.
 # Ref: https://github.com/NVIDIA/NemoClaw/issues/514
+# OpenClaw 2026.9.2 stores exec approvals in SQLite. An existing legacy
+# exec-approvals.json file requires Doctor migration, even when empty.
 RUN mkdir -p /sandbox/.openclaw/agents/main/agent \
         /sandbox/.openclaw/extensions \
         /sandbox/.openclaw/workspace \
@@ -309,7 +311,6 @@ RUN mkdir -p /sandbox/.openclaw/agents/main/agent \
         /sandbox/.openclaw/state \
         /sandbox/.openclaw/telegram \
         /sandbox/.openclaw/plugin-runtime-deps \
-    && touch /sandbox/.openclaw/exec-approvals.json \
     && chown -R sandbox:sandbox /sandbox/.openclaw \
     && chmod -R g+w /sandbox/.openclaw \
     && find /sandbox/.openclaw -type d -exec chmod g+s {} +
@@ -344,7 +345,8 @@ RUN printf '%s\n' \
 #
 # Both files are root-owned and not writable by the sandbox user.
 # Ref: https://github.com/NVIDIA/NemoClaw/issues/2704
-# hadolint ignore=SC2028
+# Keep variable expansion literal until the generated shell hook runs.
+# hadolint ignore=SC2016,SC2028
 RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
     && printf '%s\n' \
         '# NemoClaw sandbox resource limits — see sandbox-rlimits.sh (#2173)' \
@@ -354,11 +356,13 @@ RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
     && printf '%s\n' \
         '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
         '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
+        'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
         > /etc/profile.d/nemoclaw-proxy.sh \
     && chmod 444 /etc/profile.d/nemoclaw-proxy.sh \
     && { printf '%s\n' \
             '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
             '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
+            'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
             '' \
             '# NemoClaw sandbox resource limits — see sandbox-rlimits.sh (#2173)' \
             '[ -f /usr/local/lib/nemoclaw/sandbox-rlimits.sh ] && . /usr/local/lib/nemoclaw/sandbox-rlimits.sh && harden_resource_limits --quiet && verify_resource_limits --quiet || true' \
@@ -442,8 +446,8 @@ ENV JITI_FS_CACHE=false
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install OpenClaw CLI + PyYAML.
-# .openclaw is now writable by default, so exec-approvals writes to
-# ~/.openclaw/exec-approvals.json natively — no sed patch needed.
+# .openclaw is writable by default. OpenClaw owns exec approvals storage
+# and the migration of any existing legacy exec-approvals.json policy.
 # Reviewed-archive invariants (#5896): registry SRI, packed-byte SRI, contained
 # basename in a fresh directory, local-archive-only install, and cleanup.
 # hadolint ignore=DL3016
@@ -675,3 +679,7 @@ RUN { \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- env HOME=/sandbox bash -lc 'command -v brew' | grep -qx /usr/local/bin/brew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- env HOME=/sandbox bash -lc 'brew --prefix' | grep -qx /home/linuxbrew/.linuxbrew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- env HOME=/sandbox bash -lc "case \":\${PATH}:\" in *:/home/linuxbrew/.linuxbrew/bin:*) exit 0 ;; *) exit 1 ;; esac"
+
+# SQLite can select /var/tmp even when OpenShell denies writes there.
+# Use the sandbox-writable directory for SQLite temporary files.
+ENV SQLITE_TMPDIR=/tmp

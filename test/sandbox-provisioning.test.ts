@@ -263,6 +263,54 @@ function collectDockerfileEnvExports(file: string): string[] {
   return dockerfileEnvDirectives(text).flatMap(envDirectiveToExports);
 }
 
+describe("sandbox provisioning: SQLite temporary files", () => {
+  it.each([
+    ["base", DOCKERFILE_BASE],
+    ["derived", DOCKERFILE],
+  ])("selects /tmp for SQLite temporary files in the %s runtime", (_name, file) => {
+    const stage = completedDockerStage(fs.readFileSync(file, "utf-8"));
+    const exports = dockerfileEnvDirectives(stage).flatMap(envDirectiveToExports);
+    const result = spawnSync(
+      "bash",
+      ["-c", [...exports, 'printf "%s" "$SQLITE_TMPDIR"'].join("\n")],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, SQLITE_TMPDIR: "/var/tmp" },
+        timeout: 5000,
+      },
+    );
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe("/tmp");
+  });
+});
+
+function expectSqliteTempDirectoryFromShellHook(file: string, tmp: string) {
+  const runtimeEnv = path.join(tmp, "runtime-env.sh");
+  const probeHook = path.join(tmp, "probe-hook.sh");
+  fs.writeFileSync(
+    probeHook,
+    fs.readFileSync(file, "utf-8").replaceAll("/tmp/nemoclaw-proxy-env.sh", runtimeEnv),
+  );
+  for (const selected of [undefined, "", "/sandbox/.openclaw/tmp"]) {
+    fs.rmSync(runtimeEnv, { force: true });
+    if (selected !== undefined) fs.writeFileSync(runtimeEnv, `export SQLITE_TMPDIR=${selected}\n`);
+    const result = spawnSync(
+      "bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        'unset SQLITE_TMPDIR; . "$1"; printf "%s" "$SQLITE_TMPDIR"',
+        "--",
+        probeHook,
+      ],
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+    expect(result.stdout).toBe(selected || "/tmp");
+  }
+}
+
 function linuxProcStat(pid: string, starttime: string, ppid = "1", state = "S"): string {
   return `${pid} (openclaw) ${state} ${ppid} ${Array(17).fill("0").join(" ")} ${starttime}\n`;
 }
@@ -796,7 +844,7 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       "wechat",
       "workspace",
     ]);
-    expect(modern.filesAfterCleanup).toEqual(["exec-approvals.json"]);
+    expect(modern.filesAfterCleanup).toEqual([]);
     expect(modern.cleanup.calls.split("\n").filter(Boolean)).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/^find /)]),
     );
@@ -844,7 +892,7 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       expect(layout.result.status).toBe(0);
       const openclawDir = path.join(sandboxRoot, ".openclaw");
       expect(fs.statSync(openclawDir).isDirectory()).toBe(true);
-      expect(fs.statSync(path.join(openclawDir, "exec-approvals.json")).isFile()).toBe(true);
+      expect(fs.existsSync(path.join(openclawDir, "exec-approvals.json"))).toBe(false);
       expect(fs.existsSync(path.join(openclawDir, "update-check.json"))).toBe(false);
       for (const dir of ["credentials", "devices", "identity", "logs", "state", "telegram"]) {
         const stateDir = path.join(openclawDir, dir);
@@ -854,9 +902,6 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
         expect(fs.statSync(stateDir).mode & 0o2000).toBe(0o2000);
       }
       expect(fs.existsSync(path.join(sandboxRoot, ".openclaw-data"))).toBe(false);
-      expect(fs.lstatSync(path.join(openclawDir, "exec-approvals.json")).isSymbolicLink()).toBe(
-        false,
-      );
       expect(layout.calls).toContain(`chown -R sandbox:sandbox ${openclawDir}`);
 
       const rc = runDockerShell(
@@ -915,6 +960,7 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       expect((fs.statSync(rlimitLib).mode & 0o777).toString(8)).toBe("444");
       expect(fs.readFileSync(profileHook, "utf-8").split(runtimeEnvShim).length - 1).toBe(1);
       expect((fs.statSync(profileHook).mode & 0o777).toString(8)).toBe("444");
+      expectSqliteTempDirectoryFromShellHook(profileHook, tmp);
 
       const bashrcContent = fs.readFileSync(bashrc, "utf-8");
       expect(bashrcContent.split(rlimitShim).length - 1).toBe(1);
@@ -923,12 +969,16 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       expect(bashrcContent.split("\n").slice(0, 2).join("\n")).toContain(runtimeEnvShim);
       expect(bashrcContent).toContain("# existing bashrc");
       expect((fs.statSync(bashrc).mode & 0o777).toString(8)).toBe("444");
+      expectSqliteTempDirectoryFromShellHook(bashrc, tmp);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("repairs stale OpenClaw base images with system-wide rlimit hooks", () => {
+  it.each([
+    "missing",
+    "existing proxy hook",
+  ])("repairs stale OpenClaw base images with %s shell hooks", (state) => {
     const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-thin-rlimits-"));
     const profileHook = path.join(tmp, "profile.d", "nemoclaw-proxy.sh");
@@ -942,6 +992,9 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       fs.mkdirSync(path.dirname(profileHook), { recursive: true });
       fs.writeFileSync(rlimitLib, "# rlimit fixture\n");
       fs.writeFileSync(bashrc, "# stale base bashrc\n");
+      if (state === "existing proxy hook") {
+        fs.writeFileSync(profileHook, `${runtimeEnvShim}\n`);
+      }
       const command = dockerRunCommandBetween(
         dockerfile,
         "# System-wide shell hooks",
@@ -956,6 +1009,7 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       expect(result.status).toBe(0);
       expect(fs.readFileSync(rlimitHook, "utf-8").split(rlimitShim).length - 1).toBe(1);
       expect(fs.readFileSync(profileHook, "utf-8").split(runtimeEnvShim).length - 1).toBe(1);
+      expectSqliteTempDirectoryFromShellHook(profileHook, tmp);
 
       const bashrcContent = fs.readFileSync(bashrc, "utf-8");
       expect(bashrcContent.split(rlimitShim).length - 1).toBe(1);
@@ -964,6 +1018,7 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
       expect(bashrcContent.split("\n").slice(0, 2).join("\n")).toContain(runtimeEnvShim);
       expect(bashrcContent).toContain("# stale base bashrc");
       expect((fs.statSync(bashrc).mode & 0o777).toString(8)).toBe("444");
+      expectSqliteTempDirectoryFromShellHook(bashrc, tmp);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

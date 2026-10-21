@@ -1,0 +1,19 @@
+{
+  "track_id": "exec_approvals_sqlite_20261019",
+  "type": "bug",
+  "status": "in_progress",
+  "created_at": "2026-10-19T10:11:49Z",
+  "updated_at": "2026-10-21T01:42:34Z",
+  "description": "Fix fork issue #3 by removing empty legacy exec approvals placeholders and selecting /tmp for SQLite temporary files, preserving existing policy and SQLite state.",
+  "current_phase": 1,
+  "current_task": "1.5",
+  "tasks": {
+    "total": 9,
+    "completed": 7
+  },
+  "phases": {
+    "total": 2,
+    "completed": 0
+  },
+  "commits": []
+}

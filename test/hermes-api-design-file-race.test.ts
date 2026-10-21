@@ -86,3 +86,69 @@ print("denied")
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout.trim()).toBe("denied");
 });
+
+it.each([
+  "symlink",
+  "rename-out",
+])("never repairs a file outside the profile when an enumerated ancestor is replaced by a %s", (replacement) => {
+  const guard = path.resolve(import.meta.dirname, "../agents/hermes/runtime-config-guard.py");
+  const result = spawnSync(
+    "python3",
+    [
+      "-I",
+      "-c",
+      String.raw`
+import importlib.util, os, pathlib, shutil, stat, sys, tempfile
+replacement = sys.argv[2]
+spec = importlib.util.spec_from_file_location("guard", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = m
+spec.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as root:
+    home = pathlib.Path(root) / "api"
+    home.mkdir()
+    (home / "SOUL.md").write_text("design")
+    skills = home / "skills"
+    nested = skills / "nested"
+    nested.mkdir(parents=True)
+    (nested / "SKILL.md").write_text("skill")
+    outside = pathlib.Path(root) / "outside"
+    outside.mkdir()
+    victim = outside / "passwd"
+    victim.write_text("private")
+    victim.chmod(0o600)
+    m.HERMES_API_PROFILE_DIR = str(home)
+    original_listdir = os.listdir
+    swapped = False
+    def swap_after_enumeration(fd_or_path="."):
+        global swapped
+        entries = original_listdir(fd_or_path)
+        if not swapped and "nested" in entries:
+            swapped = True
+            if replacement == "symlink":
+                nested.rename(nested.with_name("nested-real"))
+                nested.symlink_to(outside, target_is_directory=True)
+            else:
+                shutil.move(str(nested), str(outside / "nested"))
+                nested.symlink_to(outside, target_is_directory=True)
+        return entries
+    m.os.listdir = swap_after_enumeration
+    try:
+        m._api_ensure_design_surface(os.getuid(), os.getgid())
+    except (OSError, m.UnsafePathError):
+        pass
+    finally:
+        m.os.listdir = original_listdir
+    assert swapped, "ancestor replacement probe did not run"
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o600
+    assert victim.stat().st_uid == os.getuid()
+print("contained")
+`,
+      guard,
+      replacement,
+    ],
+    { encoding: "utf8", timeout: 3000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toBe("contained");
+});

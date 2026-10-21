@@ -5537,38 +5537,60 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
     _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
     # Skills installed before the contract change remain runtime-owned inside
     # the now admin-owned dir; re-own the whole tree so installed skill
-    # content is read-only to the api runtime as well.
-    for parent, dirs, files in os.walk(skills_dir):
-        for name in dirs + files:
-            entry = os.path.join(parent, name)
-            try:
-                entry_stat = os.lstat(entry)
-            except FileNotFoundError:
-                continue
-            # lchown never follows the final component, so a symlink planted
-            # by the runtime uid cannot redirect the ownership repair.
-            if stat.S_ISLNK(entry_stat.st_mode):
-                os.lchown(entry, admin_uid, api_gid)
-                continue
-            if not (stat.S_ISREG(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode)):
-                raise UnsafePathError("refusing special file in api skills tree")
-            fd = os.open(
-                entry, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
+    # content is read-only to the api runtime as well. Path-based traversal
+    # would let the runtime uid rename an enumerated ancestor and redirect the
+    # root-owned repair outside the profile, so every lookup stays relative
+    # to a pinned directory descriptor.
+    skills_fd = os.open(
+        skills_dir,
+        os.O_RDONLY | _directory_flag() | _no_follow_flag() | _cloexec_flag(),
+    )
+    try:
+        _api_reown_design_tree(skills_fd, admin_uid, api_gid)
+    finally:
+        os.close(skills_fd)
+
+
+def _api_reown_design_tree(dir_fd: int, admin_uid: int, api_gid: int) -> None:
+    for name in os.listdir(dir_fd):
+        try:
+            entry_stat = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        # lchown never follows the final component, so a symlink planted
+        # by the runtime uid cannot redirect the ownership repair.
+        if stat.S_ISLNK(entry_stat.st_mode):
+            os.chown(
+                name,
+                admin_uid,
+                api_gid,
+                dir_fd=dir_fd,
+                follow_symlinks=False,
             )
-            try:
-                opened_stat = os.fstat(fd)
-                if stat.S_IFMT(opened_stat.st_mode) != stat.S_IFMT(entry_stat.st_mode) or (
-                    opened_stat.st_dev, opened_stat.st_ino
-                ) != (
-                    entry_stat.st_dev, entry_stat.st_ino
-                ):
-                    raise UnsafePathError("api design entry changed during ownership repair")
-                os.fchown(fd, admin_uid, api_gid)
-                # Installed skills are readable by the API gid and writable only by admin.
-                # codeql[py/overly-permissive-file]
-                os.fchmod(fd, 0o750 if stat.S_ISDIR(opened_stat.st_mode) else 0o640)
-            finally:
-                os.close(fd)
+            continue
+        if not (stat.S_ISREG(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode)):
+            raise UnsafePathError("refusing special file in api skills tree")
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag(),
+            dir_fd=dir_fd,
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if stat.S_IFMT(opened_stat.st_mode) != stat.S_IFMT(entry_stat.st_mode) or (
+                opened_stat.st_dev, opened_stat.st_ino
+            ) != (
+                entry_stat.st_dev, entry_stat.st_ino
+            ):
+                raise UnsafePathError("api design entry changed during ownership repair")
+            os.fchown(fd, admin_uid, api_gid)
+            # Installed skills are readable by the API gid and writable only by admin.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, 0o750 if stat.S_ISDIR(opened_stat.st_mode) else 0o640)
+            if stat.S_ISDIR(opened_stat.st_mode):
+                _api_reown_design_tree(fd, admin_uid, api_gid)
+        finally:
+            os.close(fd)
 
 
 def _seal_api_profile(admin_uid: int, api_gid: int) -> None:

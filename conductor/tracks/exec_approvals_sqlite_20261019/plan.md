@@ -34,6 +34,10 @@
   missing shell-session values through the existing environment hooks. Add
   failing environment regression tests first, update the owning documentation, and
   rebuild the image for the authorized live acceptance checks.
+  Review follow-up: ensure the derived shell repair keeps exactly one generated
+  SQLite default on current bases and repeated runs, preserves other Bash
+  configuration, and aligns the added printf arguments. The user accepted
+  retaining replacement of the NemoClaw-owned profile hook.
 - [x] Task: Conductor - User Manual Verification 'Repair Image Provisioning' (Protocol in workflow.md).
   On 2026-10-21, the user approved proceeding after the completed implementation
   and acceptance evidence were summarized. This records approval to continue;
@@ -99,3 +103,7 @@ this fork PR only. The implementation track is complete; final committed
 documentation review, GitHub commit verification, PR publication, and CI
 follow-up remain publication tasks. The PR must target `derekhsu/NemoClaw`,
 with base `feat/image-only-cli`, as the user requested.
+
+Review follow-up validation: all three shell-hook cases reproduced duplicate
+SQLite defaults before the fix. After the fix, focused validation passed
+78 tests across three files; two existing unrelated fixtures remain skipped.

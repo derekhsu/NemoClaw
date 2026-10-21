@@ -349,3 +349,26 @@ or repeated live run. The local comparison record is
   signed commit are explicit, and failed fixture/test gates remain visible.
   Suggestions to advance `current_task`, clarify the committed-source boundary,
   and describe the outstanding manual checkpoint were applied.
+
+## PR #5 Review Follow-up (2026-10-21)
+
+The review of `468a74d` identified duplicate SQLite defaults in the derived
+image's Bash startup file. The repair now removes only the exact generated
+`export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"` line before prepending one copy.
+Other SQLite configuration remains unchanged. The added printf arguments now
+use the same indentation as their neighbors in both OpenClaw Dockerfiles.
+
+Three cases execute the actual Dockerfile shell operations: missing hooks,
+existing proxy hooks, and hooks created by the current base Dockerfile.
+Each case repeats the derived repair twice and requires one generated default,
+preserved custom SQLite configuration, mode 444, and the existing environment
+behavior. All three failed with two copies before the production fix.
+After the fix and formatting, the three-file focused command above passed
+78 tests with the same two unrelated fixtures skipped.
+
+The user accepted retaining replacement of the NemoClaw-owned profile hook.
+No public documentation change is required: the SQLite default and override
+behavior remain the same. No image was rebuilt and no live acceptance was
+repeated for this follow-up. The accepted image and recipe binding above apply
+to `7fa6bb8`, before this deduplication change. Existing fork CI failures remain
+tracked in fork issue #4; the four-hook waiver remains limited to this PR.

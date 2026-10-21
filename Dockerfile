@@ -2335,7 +2335,7 @@ RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
         printf '%s\n' \
             '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
             '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
-        'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
+            'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
             > /etc/profile.d/nemoclaw-proxy.sh \
         && chmod 444 /etc/profile.d/nemoclaw-proxy.sh; \
     fi \
@@ -2343,12 +2343,13 @@ RUN chmod 444 /usr/local/lib/nemoclaw/sandbox-rlimits.sh \
     && { printf '%s\n' \
           '# NemoClaw runtime proxy config — see /tmp/nemoclaw-proxy-env.sh (#2704)' \
           '[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh' \
-        'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
+          'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' \
           '' \
           '# NemoClaw sandbox resource limits — see sandbox-rlimits.sh (#2173)' \
           '[ -f /usr/local/lib/nemoclaw/sandbox-rlimits.sh ] && . /usr/local/lib/nemoclaw/sandbox-rlimits.sh && harden_resource_limits --quiet && verify_resource_limits --quiet || true' \
           ''; \
-        grep -Ev 'NemoClaw runtime proxy config|nemoclaw-proxy-env[.]sh|NemoClaw sandbox resource limits|sandbox-rlimits[.]sh' /etc/bash.bashrc || true; \
+        grep -Ev 'NemoClaw runtime proxy config|nemoclaw-proxy-env[.]sh|NemoClaw sandbox resource limits|sandbox-rlimits[.]sh' /etc/bash.bashrc \
+          | grep -Fvx 'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"' || true; \
       } > /etc/bash.bashrc.new \
     && mv /etc/bash.bashrc.new /etc/bash.bashrc \
     && chmod 444 /etc/bash.bashrc

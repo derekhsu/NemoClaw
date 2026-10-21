@@ -978,7 +978,8 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
   it.each([
     "missing",
     "existing proxy hook",
-  ])("repairs stale OpenClaw base images with %s shell hooks", (state) => {
+    "current base",
+  ])("repairs OpenClaw images with %s shell hooks", (state) => {
     const dockerfile = fs.readFileSync(DOCKERFILE, "utf-8");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-thin-rlimits-"));
     const profileHook = path.join(tmp, "profile.d", "nemoclaw-proxy.sh");
@@ -987,13 +988,28 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
     const bashrc = path.join(tmp, "bash.bashrc");
     const runtimeEnvShim = "[ -f /tmp/nemoclaw-proxy-env.sh ] && . /tmp/nemoclaw-proxy-env.sh";
     const rlimitShim = `[ -f ${rlimitLib} ] && . ${rlimitLib} && harden_resource_limits --quiet && verify_resource_limits --quiet || true`;
+    const sqliteTempDefault = 'export SQLITE_TMPDIR="${SQLITE_TMPDIR:-/tmp}"';
+    const customSqliteHook = "custom_sqlite_tmpdir() { export SQLITE_TMPDIR=/sandbox/custom-tmp; }";
 
     try {
       fs.mkdirSync(path.dirname(profileHook), { recursive: true });
       fs.writeFileSync(rlimitLib, "# rlimit fixture\n");
-      fs.writeFileSync(bashrc, "# stale base bashrc\n");
+      fs.writeFileSync(bashrc, `# stale base bashrc\n${customSqliteHook}\n`);
       if (state === "existing proxy hook") {
         fs.writeFileSync(profileHook, `${runtimeEnvShim}\n`);
+      }
+      if (state === "current base") {
+        const baseCommand = dockerRunCommandBetween(
+          fs.readFileSync(DOCKERFILE_BASE, "utf-8"),
+          "# System-wide proxy hooks",
+          "# Install OpenClaw CLI + PyYAML",
+        )
+          .replaceAll("/usr/local/lib/nemoclaw/sandbox-rlimits.sh", rlimitLib)
+          .replaceAll("/etc/profile.d/nemoclaw-rlimits.sh", rlimitHook)
+          .replaceAll("/etc/profile.d/nemoclaw-proxy.sh", profileHook)
+          .replaceAll("/etc/bash.bashrc", bashrc);
+        const base = runLoggedDockerShell(baseCommand, tmp);
+        expect(base.result.status, `stderr: ${base.result.stderr}`).toBe(0);
       }
       const command = dockerRunCommandBetween(
         dockerfile,
@@ -1005,20 +1021,26 @@ describe("sandbox provisioning: unified .openclaw layout (#2227)", () => {
         .replaceAll("/etc/profile.d/nemoclaw-proxy.sh", profileHook)
         .replaceAll("/etc/bash.bashrc", bashrc);
 
-      const { result } = runLoggedDockerShell(command, tmp);
-      expect(result.status).toBe(0);
-      expect(fs.readFileSync(rlimitHook, "utf-8").split(rlimitShim).length - 1).toBe(1);
-      expect(fs.readFileSync(profileHook, "utf-8").split(runtimeEnvShim).length - 1).toBe(1);
-      expectSqliteTempDirectoryFromShellHook(profileHook, tmp);
+      for (let replay = 0; replay < 2; replay += 1) {
+        const { result } = runLoggedDockerShell(command, tmp);
+        expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+        expect(fs.readFileSync(rlimitHook, "utf-8").split(rlimitShim).length - 1).toBe(1);
+        expect(fs.readFileSync(profileHook, "utf-8").split(runtimeEnvShim).length - 1).toBe(1);
+        expectSqliteTempDirectoryFromShellHook(profileHook, tmp);
 
-      const bashrcContent = fs.readFileSync(bashrc, "utf-8");
-      expect(bashrcContent.split(rlimitShim).length - 1).toBe(1);
-      expect(bashrcContent.split(runtimeEnvShim).length - 1).toBe(1);
-      expect(bashrcContent.indexOf(runtimeEnvShim)).toBeLessThan(bashrcContent.indexOf(rlimitShim));
-      expect(bashrcContent.split("\n").slice(0, 2).join("\n")).toContain(runtimeEnvShim);
-      expect(bashrcContent).toContain("# stale base bashrc");
-      expect((fs.statSync(bashrc).mode & 0o777).toString(8)).toBe("444");
-      expectSqliteTempDirectoryFromShellHook(bashrc, tmp);
+        const bashrcContent = fs.readFileSync(bashrc, "utf-8");
+        expect(bashrcContent.split(sqliteTempDefault).length - 1).toBe(1);
+        expect(bashrcContent.split(rlimitShim).length - 1).toBe(1);
+        expect(bashrcContent.split(runtimeEnvShim).length - 1).toBe(1);
+        expect(bashrcContent.indexOf(runtimeEnvShim)).toBeLessThan(
+          bashrcContent.indexOf(rlimitShim),
+        );
+        expect(bashrcContent.split("\n").slice(0, 2).join("\n")).toContain(runtimeEnvShim);
+        expect(bashrcContent).toContain("# stale base bashrc");
+        expect(bashrcContent).toContain(customSqliteHook);
+        expect((fs.statSync(bashrc).mode & 0o777).toString(8)).toBe("444");
+        expectSqliteTempDirectoryFromShellHook(bashrc, tmp);
+      }
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

@@ -6,7 +6,7 @@
 **Track ID:** `exec_approvals_sqlite_20261019`
 **Spec:** [spec.md](spec.md)
 **Issue:** derekhsu/NemoClaw #3
-**Status:** [~] In Progress
+**Status:** [x] Implementation Complete
 
 ## Phase 1: Repair Image Provisioning
 
@@ -27,9 +27,9 @@
   77 passed and 2 skipped. The two excluded cases and the previously recorded
   integrity-pin failures are tracked separately in fork issue #4 at the user's
   request. No passing full-suite result is claimed.
-- [~] Task 1.5: Documentation impact is addressed and independently reviewed;
-  `npm run docs` passed. Commit the logical repair with the required signing
-  configuration and record its short SHA beside completed tasks.
+- [x] Task 1.5: Documentation impact is addressed and independently reviewed;
+  `npm run docs` passed with 0 errors and 2 warnings. Signed implementation
+  commit: `7fa6bb8b5`. All non-waived commit hooks and commitlint passed.
 - [x] Task 1.6: Set `SQLITE_TMPDIR=/tmp` in both runtime images and default
   missing shell-session values through the existing environment hooks. Add
   failing environment regression tests first, update the owning documentation, and
@@ -41,46 +41,52 @@
 
 ## Phase 2: Verify Fresh Sandbox Startup
 
-- [~] Task 2.1: The user approved live sandbox testing and the repaired image
+- [x] Task 2.1: The user approved live sandbox testing and the repaired image
   was built without publication. Acceptance used the uncommitted worktree based
   on `163de2d5c`, bound to Dockerfile diff SHA-256
-  `e70224bdd3b5c13923e2a6ec29c62819fe6246f0e395a61ab15bb5d21cdc9ada`. Record
-  the required signed task commit and commit-bound source revision before
-  closing this task.
+  `e70224bdd3b5c13923e2a6ec29c62819fe6246f0e395a61ab15bb5d21cdc9ada`.
+  Signed commit `7fa6bb8b5` is now bound to that source: both Dockerfiles have
+  identical executable content, with only Hadolint comments changed after
+  the live run. See the committed-source binding in `verification.md`.
 - [x] Task 2.2: Started a fresh sandbox with the final image. Gateway startup,
   Agent exec before and after process restart, SQLite approvals state, absent
   legacy JSON, and absent legacy warning are recorded in
   [live-acceptance.md](live-acceptance.md#post-restart-final-image-acceptance).
-- [x] Task 2.3: Reconciled live evidence and remaining gates. The track remains
-  in progress because required hook checks and the signed task commit remain
-  incomplete. Existing unrelated failures are tracked in fork issue #4.
+- [x] Task 2.3: Reconciled live evidence, source commit `7fa6bb8b5`, user phase
+  approvals, and the PR-specific waiver. Existing unrelated failures remain
+  tracked in fork issue #4. PR publication and CI follow-up use the contributor
+  publication workflow.
 - [x] Task: Conductor - User Manual Verification 'Fresh Sandbox Startup' (Protocol in workflow.md).
   The user's 2026-10-21 approval to continue covers the recorded live acceptance
   results. No additional Gateway or Agent operation was run for this approval.
 
 ## Final Verification
 
-- [ ] All acceptance criteria in `spec.md` have named evidence.
+- [x] All acceptance criteria in `spec.md` have named evidence.
 - [x] Changed provisioning, state-repair, and shell contracts pass. Existing
   unrelated failures are disclosed and tracked in fork issue #4.
-- [~] Required commit and push hooks pass, or the fork maintainer explicitly
+- [x] Required commit and push hooks pass, or the fork maintainer explicitly
   accepts the named existing failures and records their disposition. On
   2026-10-21, the user approved a waiver for this fork PR only for
   `repository-checks`, `source-shape-test-budget`, `test-file-size-budget`, and
-  `hadolint`. All other hooks must run normally.
+  `hadolint`. All other commit hooks passed. The pre-push checks against
+  `origin/feat/image-only-cli` passed, including CLI TypeScript and version
+  synchronization; the actual push must also run its normal hooks.
 - [x] Nonempty legacy policy and SQLite state are preserved by the focused
   filesystem tests.
 - [x] Documentation writer review is complete for the implementation diff.
-- [ ] Fresh sandbox startup evidence identifies the tested commit and image.
-- [ ] Update `conductor/tracks.md` and `metadata.json` when the track completes.
+- [x] Fresh sandbox startup evidence identifies the accepted image and its
+  matching signed source commit `7fa6bb8b5`. The original live run used the
+  uncommitted source; no later rebuild or repeated live run is claimed.
+- [x] Update `conductor/tracks.md` and `metadata.json` for implementation completion.
 
 ## Implementation Evidence
 
 See [verification.md](verification.md) for completed checks, test failures,
-commit prerequisites, and the remaining source-revision and publication gates.
-Phase 1 is incomplete because normal commit hooks fail and no task commit exists.
+publication prerequisites. Tasks 1.1 through 1.6 and the source-binding evidence
+for Task 2.1 are recorded with signed implementation commit `7fa6bb8b5`.
 The user selected and registered the existing SSH signing key on 2026-10-21.
-Repository-local Git signing is now configured.
+Repository-local Git signing and local signature verification succeeded.
 
 The user authorized a live acceptance attempt before the required task commit.
 See [live-acceptance.md](live-acceptance.md). The final `:20261020-sqlite-shell`
@@ -88,6 +94,8 @@ image passed fresh-sandbox Gateway and Agent checks before and after process
 SIGTERM and Gateway Start, with no temp-directory override. It also reported
 the SQLite approvals path, no legacy JSON, and no legacy warning. Phase 2 live
 verification is recorded as complete. The user approved continuing on
-2026-10-21; required hook failures, the signed task commit, and committed-source
-binding remain incomplete. The PR must target `derekhsu/NemoClaw`, with base
-`feat/image-only-cli`, as the user requested.
+2026-10-21 and explicitly waived the four named baseline hook failures for
+this fork PR only. The implementation track is complete; final committed
+documentation review, GitHub commit verification, PR publication, and CI
+follow-up remain publication tasks. The PR must target `derekhsu/NemoClaw`,
+with base `feat/image-only-cli`, as the user requested.

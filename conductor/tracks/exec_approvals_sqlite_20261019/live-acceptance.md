@@ -419,6 +419,8 @@ The final image's fresh-sandbox Gateway startup, approval-state query, no-legacy
 warning, and Agent execution before and after process restart passed without a
 temp-directory override. On 2026-10-21, the user requested separate tracking of
 unrelated failures in fork issue #4 and approved continuing from both phase
-checkpoints. Signing configuration is now complete. Required hook failures,
-the signed task commit, and committed-source binding remain pending; see
-[verification.md](verification.md#fork-pr-finalization-2026-10-21).
+checkpoints. Signed implementation commit `7fa6bb8b5` records matching
+executable Dockerfile content; only Hadolint comments differ from the source
+used by this live run. The fork maintainer approved a PR-specific waiver for
+the four reproduced baseline hook failures. No new build or live run is
+claimed. See [verification.md](verification.md#committed-source-binding).

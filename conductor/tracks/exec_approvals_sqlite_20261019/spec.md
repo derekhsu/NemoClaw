@@ -6,7 +6,7 @@
 **Track ID:** `exec_approvals_sqlite_20261019`
 **Type:** Bug fix
 **Created:** 2026-10-19
-**Status:** In Progress
+**Status:** Implementation Complete
 **Issue:** derekhsu/NemoClaw #3
 
 ## Outcome and Scope
@@ -60,8 +60,11 @@ initialization uses a directory writable under the existing sandbox policy.
 - [x] A rebuilt image starts Gateway and completes Agent exec before and
   after process SIGTERM and Gateway Start without a runtime temp-directory
   override. The ClawShell Stop endpoint remains tracked separately in issue #157.
-- [ ] A fresh sandbox built from the repaired image starts without this
-  migration warning. Record the tested commit, image, scenario, and result.
+- [x] A fresh sandbox built from the repaired image starts without this
+  migration warning. Record the source revision, image, scenario, and result.
+  The original run used an uncommitted worktree; signed commit `7fa6bb8b5`
+  now binds the accepted executable Dockerfile content, as recorded in
+  `verification.md`.
 
 ## Implementation Direction
 
@@ -88,6 +91,8 @@ repair. Leave SQLite initialization to OpenClaw.
 The isolated migration diagnostic supports the cause and repair direction.
 Fresh-sandbox behavior was subsequently tested with explicit user approval;
 Gateway and Agent checks passed before and after process restart. The result is
-bound to the uncommitted worktree base and Dockerfile diff hash in
-[live-acceptance.md](live-acceptance.md), not to a task commit. Record the signed
-commit and its source revision before closing the remaining acceptance item.
+originally bound to the uncommitted worktree base and Dockerfile diff hash in
+[live-acceptance.md](live-acceptance.md). Signed commit `7fa6bb8b5` subsequently
+recorded the same executable Dockerfile content, with only Hadolint comment
+changes. The source comparison is recorded in
+[verification.md](verification.md#committed-source-binding).

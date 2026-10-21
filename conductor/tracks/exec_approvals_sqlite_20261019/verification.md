@@ -6,7 +6,9 @@
 ## Revision and Scope
 
 - Starting commit: `163de2d5c` on `issue/3-exec-approvals-json`, created from
-  `feat/image-only-cli`. The implementation remains uncommitted.
+  `feat/image-only-cli`.
+- Signed implementation commit: `7fa6bb8b55ab639c8d277435b7fca4164274fddf`.
+  Local signature verification passed. GitHub verification is a publication gate.
 - Local verification date: 2026-10-20, on macOS arm64 with Node.js 24.15.0.
 - The derived image removes only zero-byte regular legacy exec approvals files
   after the existing file-type and link checks. Nonempty files retain their
@@ -83,7 +85,7 @@ The derived build intentionally used the earlier
 Image inspection confirms that both rebuilt images provide `/tmp`.
 The Dockerfile diff SHA-256 is
 `38b7aac0c5979ba0917057f1b4d073de31cfad807812b462e0cd78833059784d`.
-The source remains uncommitted at the starting commit listed above.
+At that build, the source was uncommitted at the starting commit listed above.
 
 An isolated candidate container, with networking disabled and no environment
 override, initialized the installed OpenClaw Agent schema with incremental
@@ -279,6 +281,30 @@ Only those four hooks may be skipped for this PR's commits; all other commit
 and push hooks must run normally. The waiver changes no repository hook or CI
 configuration and does not authorize skipping an unrelated failure.
 
+## Committed Source Binding
+
+Signed implementation commit
+`7fa6bb8b55ab639c8d277435b7fca4164274fddf` records the accepted image recipe.
+Its Git signature verifies locally for `derekhsu@hotmail.com`. All non-waived
+pre-commit checks and commitlint passed. The pre-push checks against the selected
+base `origin/feat/image-only-cli` passed CLI TypeScript and version
+synchronization. Plugin and JS-config checks had no matching files.
+
+The accepted derived image is
+`sha256:33ff039f83cdb325eb12c62a1f3a710f3212a47a9b1d1287c5986c8544893633`.
+The committed Dockerfile blobs are:
+
+- `Dockerfile`: `8ea130a7ac67ad7cf76ee8d25af19f74f300a908`.
+- `Dockerfile.base`: `a7c6b582f14ae75a83a59ccaea993313267ee9f9`.
+
+Comparing each committed file with the saved accepted source after removing
+full-line comments confirms identical executable content. The only intervening
+Dockerfile edits added the two Hadolint explanations and RUN-specific SC2016
+annotations. The live run still occurred before the commit; this comparison
+binds its recipe to a committed revision without claiming a later image build
+or repeated live run. The local comparison record is
+`/private/tmp/issue3-pr-finalization-20261021/committed-source-binding.json`.
+
 ## Security Review by the Implementer
 
 | Category | Reviewed boundary and evidence |
@@ -293,26 +319,27 @@ configuration and does not authorize skipping an unrelated failure.
 | Security Testing | Focused tests run the actual Dockerfile shell operations against filesystem fixtures, including zero-byte hard links and dangling symlinks. |
 | System Security | Repeated repair leaves missing legacy state absent. SQLite initialization and migration stay with OpenClaw. The build step assumes no concurrent writer, as before. |
 
-## Remaining Gates
+## Publication Handoff
 
-- Apply the fork maintainer's PR-specific waiver for the four named baseline
-  hooks while running all other commit and push hooks normally. Record the
-  signed commit, GitHub verification, and final documentation review receipt.
+- The implementation track is complete. Signed source, matching accepted
+  image content, passing behavior tests, user phase approvals, and the
+  PR-specific waiver are recorded above. Publication must retain the waiver's
+  scope and run all other commit and push hooks normally.
 - The earlier doctor reported Docker memory below its 8 GiB minimum and a host CLI
   pointing to another installation. Neither host setting was changed.
 - Refresh the documentation writer review if later implementation changes
   alter the reviewed behavior or text. The post-recovery evidence received an
   independent no-blocker review; its three consistency suggestions were applied.
-- Record the signed task commit and bind its source to the accepted image
-  recipe. Both manual phase checkpoints have the user's approval to continue.
+- Complete the final committed-revision documentation review, push only to the
+  user's fork, verify each new commit through GitHub, and record the PR receipt.
 - Final image live acceptance passed after OrbStack recovery: Gateway health and
   Agent exec passed before and after process SIGTERM followed by Gateway Start,
   with no temp-directory override. See [live-acceptance.md](live-acceptance.md)
   for the chronological evidence. ClawShell Stop remains out of this check
   and is tracked in issue #157.
 - No image publication has run for this repair.
-- No branch push or pull request was created. The user separately authorized
-  creation of ClawShell issue #157 for its Gateway Stop compatibility problem.
+- The PR target is `derekhsu/NemoClaw:feat/image-only-cli`. Branch publication
+  and PR CI/review follow-up belong to the contributor publication workflow.
 
 - After OrbStack recovery, an independent documentation writer reviewed the
   updated `live-acceptance.md`, `verification.md`, `plan.md`, `spec.md`, and

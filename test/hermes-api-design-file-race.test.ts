@@ -42,17 +42,17 @@ with tempfile.TemporaryDirectory() as root:
     original_fstat = os.fstat
     target_stat = original(target)
     swapped = False
-    def swap_after_check(name, *args, **kwargs):
+    original_open = os.open
+    def swap_before_open(name, flags, *args, **kwargs):
         global swapped
-        before = original(name, *args, **kwargs)
-        if str(name) == str(target) and not swapped:
+        if str(name) in {str(target), target.name} and not swapped:
             swapped = True
             target.unlink()
             if replacement == "fifo":
                 os.mkfifo(target)
             else:
                 target.symlink_to(victim)
-        return before
+        return original_open(name, flags, *args, **kwargs)
     def recycled_fifo_identity(fd):
         opened = original_fstat(fd)
         if replacement == "fifo" and stat.S_ISFIFO(opened.st_mode):
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory() as root:
             fields[2] = target_stat.st_dev
             return os.stat_result(fields)
         return opened
-    m.os.lstat = swap_after_check
+    m.os.open = swap_before_open
     m.os.fstat = recycled_fifo_identity
     try:
         m._api_ensure_design_surface(os.getuid(), os.getgid())
@@ -72,8 +72,9 @@ with tempfile.TemporaryDirectory() as root:
     else:
         raise AssertionError("accepted design-file replacement")
     finally:
-        m.os.lstat = original
+        m.os.open = original_open
         m.os.fstat = original_fstat
+    assert swapped, "design-file replacement probe did not run"
     assert stat.S_IMODE(victim.stat().st_mode) == 0o600
 print("denied")
 `,
@@ -90,7 +91,7 @@ print("denied")
 it.each([
   "symlink",
   "rename-out",
-])("never repairs a file outside the profile when an enumerated ancestor is replaced by a %s", (replacement) => {
+])("does not follow a replaced skill ancestor into an unrelated file (%s)", (replacement) => {
   const guard = path.resolve(import.meta.dirname, "../agents/hermes/runtime-config-guard.py");
   const result = spawnSync(
     "python3",
@@ -111,19 +112,27 @@ with tempfile.TemporaryDirectory() as root:
     skills = home / "skills"
     nested = skills / "nested"
     nested.mkdir(parents=True)
-    (nested / "SKILL.md").write_text("skill")
+    (nested / "passwd").write_text("skill")
     outside = pathlib.Path(root) / "outside"
     outside.mkdir()
     victim = outside / "passwd"
     victim.write_text("private")
     victim.chmod(0o600)
     m.HERMES_API_PROFILE_DIR = str(home)
-    original_listdir = os.listdir
+    original_lstat = os.lstat
+    original_stat = os.stat
+    nested_identity = original_stat(nested)
     swapped = False
-    def swap_after_enumeration(fd_or_path="."):
+    def swap_before_descendant_stat(name, *args, **kwargs):
         global swapped
-        entries = original_listdir(fd_or_path)
-        if not swapped and "nested" in entries:
+        parent_fd = kwargs.get("dir_fd")
+        pinned_parent = os.fstat(parent_fd) if parent_fd is not None else None
+        descendant = str(name) == str(nested / "passwd") or (
+            str(name) == "passwd" and pinned_parent is not None and
+            (pinned_parent.st_dev, pinned_parent.st_ino) ==
+            (nested_identity.st_dev, nested_identity.st_ino)
+        )
+        if not swapped and descendant:
             swapped = True
             if replacement == "symlink":
                 nested.rename(nested.with_name("nested-real"))
@@ -131,17 +140,25 @@ with tempfile.TemporaryDirectory() as root:
             else:
                 shutil.move(str(nested), str(outside / "nested"))
                 nested.symlink_to(outside, target_is_directory=True)
-        return entries
-    m.os.listdir = swap_after_enumeration
+    def racing_lstat(name, *args, **kwargs):
+        swap_before_descendant_stat(name, *args, **kwargs)
+        return original_lstat(name, *args, **kwargs)
+    def racing_stat(name, *args, **kwargs):
+        swap_before_descendant_stat(name, *args, **kwargs)
+        return original_stat(name, *args, **kwargs)
+    m.os.lstat = racing_lstat
+    m.os.stat = racing_stat
     try:
         m._api_ensure_design_surface(os.getuid(), os.getgid())
     except (OSError, m.UnsafePathError):
         pass
     finally:
-        m.os.listdir = original_listdir
+        m.os.lstat = original_lstat
+        m.os.stat = original_stat
     assert swapped, "ancestor replacement probe did not run"
     assert stat.S_IMODE(victim.stat().st_mode) == 0o600
     assert victim.stat().st_uid == os.getuid()
+    assert victim.read_text() == "private"
 print("contained")
 `,
       guard,

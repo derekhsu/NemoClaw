@@ -38,7 +38,7 @@ async def test_allowed_file_returns_gateway_signed_download_link(tmp_path) -> No
         )
 
     assert "[Runtime report](/download/signed-report)" in str(result)
-    client.upload_file.assert_called_once_with(str(allowed_file))
+    client.upload_file.assert_called_once_with(file_path=str(allowed_file), description="Runtime report")
 
 
 @pytest.mark.asyncio
@@ -84,3 +84,24 @@ async def test_retry_after_a_transient_gateway_error_is_safe(tmp_path) -> None:
     assert "Error: Request failed: temporary outage" in str(first)
     assert "[retry.txt](/download/retry-success)" in str(second)
     assert client.upload_file.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_real_vendor_client_accepts_tool_call_and_http_contract(tmp_path) -> None:
+    import httpx
+    from sandbox_mcp_server.gateway_client import GatewayClient
+    artifact = tmp_path / "delivery.txt"
+    artifact.write_text("delivery bytes")
+    requests = []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": {"download_url": "http://gateway.test/d/test-link"}})
+    client = GatewayClient("http://gateway.test", "test-key", "sbx-test")
+    client._client.close()
+    client._client = httpx.Client(base_url="http://gateway.test", transport=httpx.MockTransport(respond))
+    with patch("sandbox_mcp_server.server.GatewayClient.from_env", return_value=client):
+        result = await create_server().call_tool("upload_file", {"file_path": str(artifact)})
+    assert "http://gateway.test/d/test-link" in str(result)
+    assert requests[0].url.path == "/api/sandboxes/sbx-test/files/generate-download-url"
+    import json
+    assert json.loads(requests[0].content)["path"] == str(artifact)

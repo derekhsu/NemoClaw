@@ -153,6 +153,34 @@ function runAuthorizationCheck(options: AuthorizationOptions = {}) {
   );
 }
 
+describe("managed default transaction exit authorization", () => {
+  const token = "b".repeat(64);
+  const controllerCmdline = [
+    "/usr/bin/python3",
+    "-I",
+    "/usr/local/lib/nemoclaw/managed-gateway-control.py",
+    "reload-managed-default",
+    "a".repeat(64),
+    token,
+  ];
+  it("accepts an exact live root controller and transaction token", () => {
+    const result = runAuthorizationCheck({ version: "v2", extraField: token, controllerCmdline });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("authorized\n");
+  });
+  it.each([
+    { extraField: "c".repeat(64), controllerCmdline },
+    { extraField: token, controllerCmdline, controllerUid: "1000" },
+    { extraField: token, controllerCmdline, payloadStartIdentity: "999" },
+    { extraField: token, controllerCmdline, markerMetadata: "1000:1000 444 1" },
+    { extraField: token, controllerCmdline, controllerState: "Z" },
+  ])("rejects a foreign seal or controller identity %j", (options) => {
+    const result = runAuthorizationCheck({ version: "v2", ...options });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("counted\n");
+  });
+});
+
 describe("Hermes managed gateway exit authorization", () => {
   it("accepts an exact authorization while its root controller identity is live", () => {
     const result = runAuthorizationCheck();

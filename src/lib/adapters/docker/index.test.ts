@@ -19,6 +19,7 @@ import {
   dockerListVolumesByPrefix,
   dockerManifestInspect,
   dockerPull,
+  dockerPush,
   dockerRemoveVolumesByPrefix,
   dockerRename,
   dockerRmi,
@@ -51,6 +52,13 @@ describe("docker helpers", () => {
       [["docker", "rename", "example", "example-backup"], {}],
       [["docker", "rmi", "example:tag"], {}],
     ]);
+  });
+
+  it("preserves push options and returns the Docker failure result", () => {
+    const failure = { status: 17, stdout: "", stderr: "registry denied" };
+    runMock.mockReturnValue(failure);
+    expect(dockerPush("example:tag", { stdio: "inherit" })).toBe(failure);
+    expect(runMock).toHaveBeenCalledWith(["docker", "push", "example:tag"], { stdio: "inherit" });
   });
 
   it("adds --quiet to dockerBuild argv and drops the quiet key from options (#3584)", () => {

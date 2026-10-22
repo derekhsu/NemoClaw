@@ -13,6 +13,7 @@ import errno
 import fcntl
 import grp
 import hashlib
+import importlib.util
 import json
 import os
 import pwd
@@ -845,7 +846,17 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
         return
     host_actions = {
         "seal-restart",
+        "inspect-managed-default-capability",
+        "write-managed-default",
+        "inspect-managed-default-transaction",
+        "mark-managed-default-healthy",
+        "finish-managed-default",
         "write-config",
+        "register-api-uploader",
+        "inspect-api-uploader",
+        "bootstrap-api-profile",
+        "verify-api-profile",
+        "normalize-api-profile",
         "begin-shields-transition",
         "apply-shields-transition",
         "finish-shields-transition",
@@ -2675,6 +2686,7 @@ def seal_restart(
     purpose: str = "restart-seal",
     mutation_lock_token: str | None = None,
     expected_config_sha256: str | None = None,
+    managed_payload: dict | None = None,
 ) -> bool:
     if os.path.exists(state_file):
         raise UnsafePathError("Hermes restart seal is already active")
@@ -2791,20 +2803,92 @@ def seal_restart(
         # Validate before creating replacement inodes. On mismatch the recovery
         # token restores both directory modes and leaves file paths untouched.
         compat_hash_path = os.path.join(hermes_dir, ".config-hash")
-        try:
-            _verify_strict_hash(hermes_dir, hash_file)
-        except StrictHashMismatchError:
-            if purpose not in ("config-write", "shields-mutable") or expected_config_sha256 is None:
-                raise
-            _reconcile_nonroot_startup_api_key_hash(
-                hermes_dir,
-                hash_file,
-                expected_config_sha256,
-                hermes_meta,
-                file_states,
+        managed_hash_text = None
+        if managed_payload is not None:
+            if purpose != "managed-default" or expected_config_sha256 is None:
+                raise UnsafePathError("refusing invalid managed default seal")
+            if not _mutable_nonroot_reconciliation_posture_is_allowed(
+                hermes_meta, file_states
+            ):
+                raise UnsafePathError("managed default requires mutable Hermes posture")
+            config_text, config_snapshot = _read_text(
+                os.path.join(hermes_dir, "config.yaml"), MAX_CONFIG_INPUT_BYTES
             )
-            _verify_strict_hash(hermes_dir, hash_file)
-        _verify_compat_hash(hash_file, compat_hash_path)
+            env_text, env_snapshot = _read_text(
+                os.path.join(hermes_dir, ".env"), MAX_ENV_BYTES
+            )
+            if (
+                hashlib.sha256(config_text.encode()).hexdigest()
+                != expected_config_sha256
+            ):
+                raise UnsafePathError(
+                    "Hermes config changed after the host read it; retry the command"
+                )
+            opened_anchor = _open_regular(hash_file)
+            try:
+                if (
+                    opened_anchor.snapshot.uid != os.geteuid()
+                    or opened_anchor.snapshot.mode & 0o022
+                ):
+                    raise UnsafePathError(
+                        "managed default strict anchor must be root-owned and protected"
+                    )
+            finally:
+                opened_anchor.close()
+            strict_text = _read_hash_file(hash_file)
+            _validate_managed_default_replacement(config_text.encode(), config_text.encode())
+            try:
+                _verify_strict_hash(hermes_dir, hash_file)
+            except StrictHashMismatchError:
+                _prove_fresh_managed_uploader(
+                    hermes_dir,
+                    strict_text,
+                    config_text.encode(),
+                    env_text.encode(),
+                    managed_payload,
+                )
+            else:
+                _verify_compat_hash(hash_file, compat_hash_path)
+            _validate_managed_default_replacement(
+                config_text.encode(), managed_payload["replacement"]
+            )
+            old_state = _hash_state_from_file(
+                hash_file,
+                os.path.join(hermes_dir, "config.yaml"),
+                os.path.join(hermes_dir, ".env"),
+            )
+            managed_hash_text, cs, es = _hash_text(
+                os.path.join(hermes_dir, "config.yaml"),
+                os.path.join(hermes_dir, ".env"),
+                McpHashState(
+                    _canonical_mcp_servers_digest(config_text), old_state.applied
+                ),
+            )
+            if cs != config_snapshot or es != env_snapshot:
+                raise UnsafePathError("refusing raced managed default proof")
+            state_data["managed_default"] = {
+                "original_strict": strict_text,
+                "original_compat": _read_hash_file(compat_hash_path),
+            }
+            _write_restart_state(state_file, state_data, create=False)
+        else:
+            try:
+                _verify_strict_hash(hermes_dir, hash_file)
+            except StrictHashMismatchError:
+                if (
+                    purpose not in ("config-write", "shields-mutable")
+                    or expected_config_sha256 is None
+                ):
+                    raise
+                _reconcile_nonroot_startup_api_key_hash(
+                    hermes_dir,
+                    hash_file,
+                    expected_config_sha256,
+                    hermes_meta,
+                    file_states,
+                )
+                _verify_strict_hash(hermes_dir, hash_file)
+            _verify_compat_hash(hash_file, compat_hash_path)
 
         for name in SEALED_FILE_NAMES:
             path = os.path.join(hermes_dir, name)
@@ -2816,8 +2900,8 @@ def seal_restart(
                 opened.close()
             text, snapshot = _read_text(path, _sealed_file_limit(name))
             if name == ".config-hash":
-                strict_hash_text = _read_hash_file(hash_file)
-                if text != strict_hash_text:
+                strict_hash_text = managed_hash_text or _read_hash_file(hash_file)
+                if managed_hash_text is None and text != strict_hash_text:
                     raise UnsafePathError(
                         "compat hash changed during Hermes restart seal"
                     )
@@ -2840,6 +2924,8 @@ def seal_restart(
                 raise UnsafePathError(f"refusing unsafe sealed Hermes path: {name}")
             file_states[name]["sealed"] = _inode_metadata(sealed_st)
 
+        if managed_hash_text is not None:
+            _write_hash(hash_file, managed_hash_text)
         _verify_strict_hash(hermes_dir, hash_file)
         _verify_compat_hash(hash_file, compat_hash_path)
         state_data["phase"] = "sealed"
@@ -2863,6 +2949,8 @@ def seal_restart(
     except Exception:
         if state_created:
             try:
+                if managed_payload is not None and "managed_default" in state_data:
+                    _rollback_managed_default_anchors(hermes_dir, hash_file, state_file, state_data)
                 _restore_restart_seal(state_file, verify_hash=False)
             except Exception:
                 # Preserve the frozen root-owned state for explicit recovery
@@ -2887,6 +2975,8 @@ def unseal_restart(hermes_dir: str, state_file: str) -> None:
         raise UnsafePathError(
             "refusing restart unseal for a different Hermes directory"
         )
+    if "managed_default" in state_data:
+        raise UnsafePathError("managed default transaction requires verified lifecycle completion")
     if str(state_data.get("phase", "")).startswith("config-write"):
         _recover_config_write_transaction(hermes_dir, state_file)
     _restore_restart_seal(state_file, verify_hash=True)
@@ -4621,6 +4711,1267 @@ def write_config_transaction(
         raise
 
 
+# Fixed privileged update for fresh initialized defaults. Root hashes alone
+# authenticate the canonical Gateway uploader addition; no legacy migration.
+HERMES_MANAGED_DEFAULT_DIR = "/sandbox/.hermes"
+HERMES_MANAGED_DEFAULT_HASH = "/etc/nemoclaw/hermes.config-hash"
+
+
+def _managed_default_uploader(payload: dict) -> dict:
+    helper_path = os.path.join(
+        os.path.dirname(__file__), "hermes-mcp-config-transaction.py"
+    )
+    if (
+        not os.path.isfile(helper_path)
+        and os.path.abspath(__file__) != INSTALLED_RUNTIME_CONFIG_GUARD
+    ):
+        helper_path = os.path.join(
+            os.path.dirname(__file__), "mcp-config-transaction.py"
+        )
+    spec = importlib.util.spec_from_file_location(
+        "hermes_managed_default_mcp", helper_path
+    )
+    if spec is None or spec.loader is None:
+        raise UnsafePathError("managed uploader helper is unavailable")
+    helper = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = helper
+    opened = _open_regular(helper_path)
+    try:
+        if os.path.abspath(__file__) == INSTALLED_RUNTIME_CONFIG_GUARD and (
+            opened.snapshot.uid != 0 or opened.snapshot.mode & 0o022
+        ):
+            raise UnsafePathError("managed uploader helper must be image-owned")
+        source = opened.read_bytes(1024 * 1024)
+    finally:
+        opened.close()
+    exec(compile(source, helper_path, "exec"), helper.__dict__)
+    try:
+        helper._validate_local_uploader_payload("add-local-uploader", payload)
+        if helper.CLAW_SHELL_SCOPE_RE.fullmatch(payload["sandbox_id"]) is None:
+            raise ValueError("managed uploader requires signed sandbox scope")
+        return helper._managed_local_uploader_candidate(payload)
+    except (ValueError, TypeError) as exc:
+        raise UnsafePathError("invalid managed uploader authorization") from exc
+
+
+def _prove_fresh_managed_uploader(
+    hermes_dir: str, strict_text: str, config: bytes, env: bytes, payload: dict
+) -> None:
+    """Authenticate only a canonical uploader addition to initialized fresh inputs."""
+    cd, ed, state = _parse_config_hash(
+        strict_text,
+        os.path.join(hermes_dir, "config.yaml"),
+        os.path.join(hermes_dir, ".env"),
+    )
+    if hashlib.sha256(env).hexdigest() != ed:
+        raise UnsafePathError("fresh Hermes env contains unauthorized drift")
+    _validate_managed_default_replacement(config, config)
+    try:
+        document = yaml.safe_load(config)
+        authorized = {"sandbox-file-uploader": _managed_default_uploader(payload["local_uploader"])}
+        if document.get("mcp_servers") != authorized:
+            raise UnsafePathError("fresh Hermes MCP must be the authorized uploader")
+        # Reverse precisely the Gateway registration; root hashes authenticate
+        # the original bytes, including all non-routing options and credentials.
+        del document["mcp_servers"]
+        candidates = [dict(document), {**document, "mcp_servers": {}}]
+        for candidate in candidates:
+            original = yaml.safe_dump(candidate, sort_keys=False, allow_unicode=True).encode("utf-8")
+            if hashlib.sha256(original).hexdigest() != cd:
+                continue
+            original_mcp = _canonical_mcp_servers_digest(original.decode("utf-8"))
+            if state.intended != original_mcp or state.applied != original_mcp:
+                raise UnsafePathError("fresh Hermes MCP anchor has an unfinished change")
+            candidate["mcp_servers"] = authorized
+            expected = yaml.safe_dump(candidate, sort_keys=False).encode("utf-8")
+            if config == expected:
+                return
+        raise UnsafePathError("fresh Hermes inputs contain unauthorized drift")
+    except (yaml.YAMLError, UnicodeError) as exc:
+        raise UnsafePathError("invalid fresh Hermes inputs") from exc
+
+
+def _validate_managed_default_replacement(original: bytes, replacement: bytes) -> None:
+    try:
+        old, new = yaml.safe_load(original), yaml.safe_load(replacement)
+    except (yaml.YAMLError, UnicodeError) as exc:
+        raise UnsafePathError("invalid managed default config") from exc
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        raise UnsafePathError("managed default config must be a mapping")
+    routes = {"model", "providers", "custom_providers", "_nemoclaw_upstream"}
+    strip = lambda entry, keys: {k: v for k, v in entry.items() if k not in keys}
+    if strip(old, routes) != strip(new, routes):
+        raise UnsafePathError(
+            "managed default cannot change non-routing configuration or MCP"
+        )
+    model, upstream = new.get("model"), new.get("_nemoclaw_upstream")
+    if (
+        not isinstance(model, dict)
+        or not isinstance(upstream, dict)
+        or set(upstream) != {"provider", "provider_key", "model"}
+    ):
+        raise UnsafePathError("invalid managed default routing metadata")
+    provider, key = upstream["provider"], upstream["provider_key"]
+    mode, model_id = model.get("api_mode"), model.get("default")
+    url, sentinel = "https://inference.local/v1", "sk-OPENSHELL-PROXY-REWRITE"
+    if (
+        not isinstance(provider, str)
+        or not provider.strip()
+        or not isinstance(key, str)
+        or key
+        != provider.strip()
+        .lower()
+        .replace(" ", "-")
+        .replace("(", "")
+        .replace(")", "")
+        .replace("--", "-")
+        .strip("-")
+        or not isinstance(model_id, str)
+        or not model_id.strip()
+        or upstream["model"] != model_id
+        or mode not in {"chat_completions", "codex_responses"}
+        or model.get("provider") != "custom"
+        or model.get("base_url") != url
+        or model.get("api_key") != sentinel
+    ):
+        raise UnsafePathError("managed default requires fixed inference.local routing")
+    route_fields = {"default", "provider", "base_url", "api_key", "api_mode"}
+    if not isinstance(old.get("model", {}), dict) or strip(
+        old.get("model", {}), route_fields
+    ) != strip(model, route_fields):
+        raise UnsafePathError("managed default cannot change other model options")
+    pools, old_pools = new.get("providers"), old.get("providers", {})
+    if (
+        not isinstance(pools, dict)
+        or not isinstance(old_pools, dict)
+        or strip(pools, {"custom", key}) != strip(old_pools, {"custom", key})
+    ):
+        raise UnsafePathError("managed default cannot change unrelated provider pools")
+    for pool_key in {"custom", key}:
+        entry, previous = pools.get(pool_key), old_pools.get(pool_key, {})
+        fields = {"api", "api_key", "api_mode", "base_url"}
+        if pool_key == key:
+            fields |= {"name", "default_model", "discover_models"}
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(previous, dict)
+            or strip(entry, fields) != strip(previous, fields)
+            or entry.get("api") != url
+            or entry.get("api_key") != sentinel
+            or entry.get("api_mode") != mode
+            or ("base_url" in entry and entry["base_url"] != url)
+        ):
+            raise UnsafePathError("managed default provider pool is not normalized")
+        if pool_key == key and (
+            entry.get("name") != provider
+            or entry.get("default_model") != model_id
+            or entry.get("discover_models") is not True
+        ):
+            raise UnsafePathError("managed default upstream provider pool is invalid")
+    entries, prior = new.get("custom_providers"), old.get("custom_providers", [])
+    if (
+        not isinstance(entries, list)
+        or not isinstance(prior, list)
+        or any(not isinstance(e, dict) for e in entries + prior)
+    ):
+        raise UnsafePathError("invalid managed default custom provider list")
+    selected = [e for e in entries if e.get("name") == provider]
+    previous_selected = [e for e in prior if e.get("name") == provider]
+    if len(selected) != 1 or len(previous_selected) > 1:
+        raise UnsafePathError("ambiguous managed default upstream provider")
+    selected_fields = {"base_url", "api", "api_key", "api_mode", "discover_models"}
+    if (
+        strip(selected[0], selected_fields)
+        != strip(
+            previous_selected[0] if previous_selected else {"name": provider},
+            selected_fields,
+        )
+        or selected[0].get("base_url") != url
+        or selected[0].get("api_key") != sentinel
+        or selected[0].get("api_mode") != mode
+        or selected[0].get("discover_models") is not True
+        or ("api" in selected[0] and selected[0]["api"] != url)
+    ):
+        raise UnsafePathError("managed default upstream custom provider is invalid")
+    other, previous_other = [e for e in entries if e.get("name") != provider], [
+        e for e in prior if e.get("name") != provider
+    ]
+    if len(other) != len(previous_other):
+        raise UnsafePathError("managed default cannot remove custom providers")
+    for entry, previous in zip(other, previous_other, strict=True):
+        name = str(previous.get("name") or "").strip().lower()
+        fields = set()
+        if name == "custom":
+            fields = {"base_url", "api", "api_key", "api_mode"}
+            if (
+                entry.get("base_url") != url
+                or entry.get("api_key") != sentinel
+                or entry.get("api_mode") != mode
+                or ("api" in entry and entry["api"] != url)
+            ):
+                raise UnsafePathError(
+                    "managed default custom provider is not normalized"
+                )
+        elif (
+            str(previous.get("base_url") or previous.get("api") or "").rstrip("/")
+            == url
+        ):
+            fields = {"api_mode"}
+            if entry.get("api_mode") != mode:
+                raise UnsafePathError(
+                    "managed default existing local route has wrong protocol"
+                )
+        if strip(entry, fields) != strip(previous, fields):
+            raise UnsafePathError(
+                "managed default cannot change unrelated custom provider options"
+            )
+
+
+def _rollback_managed_default_anchors(
+    hermes_dir: str, hash_file: str, state_file: str, state_data: dict
+) -> None:
+    journal = state_data["managed_default"]
+    _write_hash(os.path.join(hermes_dir, ".config-hash"), journal["original_compat"])
+    _write_hash(hash_file, journal["original_strict"])
+    if "files" in state_data:
+        state_data["files"][".config-hash"]["sealed"] = _inode_metadata(
+            os.stat(os.path.join(hermes_dir, ".config-hash"), follow_symlinks=False)
+        )
+    _write_restart_state(state_file, state_data, create=False)
+
+
+def _managed_default_json_object(pairs: list) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate managed default JSON field")
+        result[key] = value
+    return result
+
+
+def write_managed_default(expected: str, encoded: bytes) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise UnsafePathError("managed default requires valid expected config SHA-256")
+    try:
+        payload = json.loads(encoded, object_pairs_hook=_managed_default_json_object)
+    except (ValueError, UnicodeError) as exc:
+        raise UnsafePathError("invalid managed default request") from exc
+    fields = {
+        "local_uploader",
+        "config_base64",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != fields
+        or any(not isinstance(payload[k], str) for k in fields - {"local_uploader"})
+        or not isinstance(payload["local_uploader"], dict)
+    ):
+        raise UnsafePathError("invalid managed default request fields")
+    _managed_default_uploader(payload["local_uploader"])
+    replacement = _decode_bounded_base64(
+        payload.pop("config_base64"), MAX_CONFIG_INPUT_BYTES, "managed config"
+    )
+    payload["replacement"] = replacement
+    hermes_dir, hash_file, state_file = (
+        HERMES_MANAGED_DEFAULT_DIR,
+        HERMES_MANAGED_DEFAULT_HASH,
+        HERMES_RESTART_STATE_FILE,
+    )
+    seal_restart(
+        hermes_dir,
+        hash_file,
+        state_file,
+        purpose="managed-default",
+        expected_config_sha256=expected,
+        managed_payload=payload,
+    )
+    state_data = _load_restart_state(state_file)
+    journal = state_data["managed_default"]
+    config_path = os.path.join(hermes_dir, "config.yaml")
+    original, snapshot = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)
+    journal["original_config_base64"] = base64.b64encode(original.encode()).decode()
+    state_data["phase"] = "managed-default-writing"
+    _write_restart_state(state_file, state_data, create=False)
+    try:
+        _atomic_replace(
+            config_path,
+            replacement,
+            expected=snapshot,
+            mode=0o444,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+        refresh_hashes(hermes_dir, hash_file, "both")
+        _record_current_sealed_inodes(
+            state_file, hermes_dir, ("config.yaml", ".config-hash")
+        )
+        if _read_text(config_path, MAX_CONFIG_INPUT_BYTES)[0].encode() != replacement:
+            raise UnsafePathError("managed default config readback failed")
+        state_data = _load_restart_state(state_file)
+        state_data["managed_default"]["config_sha256"] = hashlib.sha256(
+            replacement
+        ).hexdigest()
+        state_data["managed_default"]["env_sha256"] = hashlib.sha256(
+            _read_text(os.path.join(hermes_dir, ".env"), MAX_ENV_BYTES)[0].encode()
+        ).hexdigest()
+        state_data["phase"] = "managed-default-prepared"
+        _write_restart_state(state_file, state_data, create=False)
+        return str(state_data["mutation_lock_token"])
+    except Exception:
+        # Failed writes restore the authenticated old bytes and original anchors.
+        # A killed process keeps the protected journal and frozen namespace.
+        state_data = _load_restart_state(state_file)
+        current = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)[1]
+        _atomic_replace(
+            config_path,
+            original.encode(),
+            expected=current,
+            mode=0o444,
+            uid=os.geteuid(),
+            gid=os.getegid(),
+        )
+        _record_current_sealed_inodes(state_file, hermes_dir, ("config.yaml",))
+        state_data = _load_restart_state(state_file)
+        _rollback_managed_default_anchors(hermes_dir, hash_file, state_file, state_data)
+        _restore_restart_seal(state_file, verify_hash=False)
+        raise
+
+
+def inspect_managed_default_transaction(token: str) -> dict:
+    state = _load_restart_state(HERMES_RESTART_STATE_FILE)
+    lock_path = os.path.join(
+        os.path.dirname(HERMES_RESTART_STATE_FILE), "hermes-config-mutation.lock"
+    )
+    lock_fd, owner = _read_mutation_lock(lock_path)
+    os.close(lock_fd)
+    if owner.get("token") != token or state.get("mutation_lock_path") != lock_path:
+        raise UnsafePathError("managed default mutation lock changed")
+    if (
+        state.get("hermes_dir") != HERMES_MANAGED_DEFAULT_DIR
+        or state.get("hash_file") != HERMES_MANAGED_DEFAULT_HASH
+        or state.get("phase") != "managed-default-prepared"
+        or not secrets.compare_digest(str(state.get("mutation_lock_token", "")), token)
+    ):
+        raise UnsafePathError("managed default transaction requires verified recovery")
+    _verify_strict_hash(HERMES_MANAGED_DEFAULT_DIR, HERMES_MANAGED_DEFAULT_HASH)
+    _verify_compat_hash(
+        HERMES_MANAGED_DEFAULT_HASH,
+        os.path.join(HERMES_MANAGED_DEFAULT_DIR, ".config-hash"),
+    )
+    for name, key, limit in (
+        ("config.yaml", "config_sha256", MAX_CONFIG_INPUT_BYTES),
+        (".env", "env_sha256", MAX_ENV_BYTES),
+    ):
+        text, _ = _read_text(os.path.join(HERMES_MANAGED_DEFAULT_DIR, name), limit)
+        if hashlib.sha256(text.encode()).hexdigest() != state["managed_default"].get(
+            key
+        ):
+            raise UnsafePathError("managed default prepared snapshot changed")
+    return state
+
+
+def mark_managed_default_healthy(token: str) -> None:
+    state = inspect_managed_default_transaction(token)
+    parent = os.getppid()
+    cmd = _read_proc_file(f"{PROC_ROOT}/{parent}/cmdline").split(b"\0")
+    controller = b"/usr/local/lib/nemoclaw/managed-gateway-control.py"
+    if (
+        os.geteuid() != 0
+        or _process_effective_uid(parent) != 0
+        or len(cmd) != 7
+        or cmd[1] != b"-I"
+        or cmd[2] != controller
+        or cmd[3] != b"reload-managed-default"
+        or not re.fullmatch(rb"[0-9a-f]{64}", cmd[4])
+        or cmd[5] != token.encode()
+        or cmd[6] != b""
+    ):
+        raise UnsafePathError(
+            "managed default health receipt requires image-owned root controller"
+        )
+    try:
+        receipt = json.loads(sys.stdin.buffer.read(1025))
+    except (ValueError, UnicodeError) as exc:
+        raise UnsafePathError("invalid managed default health receipt") from exc
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != {"gateway_pid", "gateway_start_time"}
+        or type(receipt["gateway_pid"]) is not int
+        or receipt["gateway_pid"] <= 1
+        or not isinstance(receipt["gateway_start_time"], str)
+        or _process_start_time(receipt["gateway_pid"]) != receipt["gateway_start_time"]
+    ):
+        raise UnsafePathError("managed default gateway identity is not live")
+    state["managed_default"]["healthy"] = receipt
+    _write_restart_state(HERMES_RESTART_STATE_FILE, state, create=False)
+
+
+def _managed_default_gateway_is_live(receipt: object) -> bool:
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != {"gateway_pid", "gateway_start_time"}
+        or type(receipt["gateway_pid"]) is not int
+        or receipt["gateway_pid"] <= 1
+        or not isinstance(receipt["gateway_start_time"], str)
+        or not re.fullmatch(r"[0-9]+", receipt["gateway_start_time"])
+    ):
+        return False
+    pid = receipt["gateway_pid"]
+    proc_root_fd = -1
+    proc_pid_fd = -1
+    try:
+        proc_root_fd = _open_proc_root()
+        proc_pid_fd = _open_proc_pid(proc_root_fd, pid)
+        pinned_before = os.fstat(proc_pid_fd)
+        # A zombie retains its PID and start time. Read the pinned identity
+        # twice so a dead child or a changed identity cannot authorize unseal.
+        for _ in range(2):
+            raw = _read_proc_pid_file(
+                proc_pid_fd, "stat", f"{PROC_ROOT}/{pid}/stat"
+            )
+            text = raw.decode("utf-8")
+            fields = text[text.rfind(")") + 2 :].split()
+            if (
+                len(fields) <= 19
+                or fields[0] in {"Z", "X", "x"}
+                or _parse_process_start_time(raw) != receipt["gateway_start_time"]
+            ):
+                return False
+        pinned_after = os.fstat(proc_pid_fd)
+        return (
+            pinned_before.st_dev == pinned_after.st_dev
+            and pinned_before.st_ino == pinned_after.st_ino
+        )
+    except (OSError, UnsafePathError, UnicodeDecodeError):
+        return False
+    finally:
+        if proc_pid_fd >= 0:
+            os.close(proc_pid_fd)
+        if proc_root_fd >= 0:
+            os.close(proc_root_fd)
+
+
+def finish_managed_default(token: str) -> None:
+    state = inspect_managed_default_transaction(token)
+    receipt = state["managed_default"].get("healthy")
+    if not _managed_default_gateway_is_live(receipt):
+        raise UnsafePathError(
+            "managed default requires live authenticated reload health receipt"
+        )
+    refresh_hashes(
+        HERMES_MANAGED_DEFAULT_DIR,
+        HERMES_MANAGED_DEFAULT_HASH,
+        "both",
+        mcp_transition="apply",
+    )
+    _record_current_sealed_inodes(
+        HERMES_RESTART_STATE_FILE, HERMES_MANAGED_DEFAULT_DIR, (".config-hash",)
+    )
+    state = _load_restart_state(HERMES_RESTART_STATE_FILE)
+    state["phase"] = "sealed"
+    state.pop("managed_default")
+    _write_restart_state(HERMES_RESTART_STATE_FILE, state, create=False)
+    unseal_restart(HERMES_MANAGED_DEFAULT_DIR, HERMES_RESTART_STATE_FILE)
+
+
+# ── Fixed API-profile contract ───────────────────────────────────
+#
+# The `api` profile is image-owned and served by a dedicated gateway process
+# running as the `hermesapi` user (never the sandbox or gateway uid). The
+# profile home lives outside /sandbox/.hermes so the api runtime uid never
+# enters the default profile's tree:
+#
+#   /sandbox/.hermes-api/               root:root    0711 (traverse only)
+#   /sandbox/.hermes-api/profiles/      root:root    0711 (traverse only)
+#   .../profiles/api/                   sandbox:api  3770 (sticky+setgid)
+#   config.yaml, .env, SOUL.md          sandbox:api  0640 (admin writes,
+#   skills/                             sandbox:api  2750    runtime reads)
+#   .config-hash, .clawshell-tool-policy.json
+#                                       root:api     0440 (guard writes only)
+#   anchor + record                     under root-owned /sandbox/.nemoclaw
+#
+# The anchor pins the fixed policy digest and the structural contract (owner,
+# group, mode, directory identity). It deliberately does not pin config.yaml
+# or .env content: the default-side operator legitimately modifies them, and
+# --expected-config-sha256 on write-config is a compare-and-swap precondition,
+# not a trust baseline. Directory identity is pinned by inode alone: st_dev
+# changes when the container's overlay filesystem is remounted across a
+# sandbox stop/start, while st_ino survives and still catches replacement.
+
+HERMES_API_PROFILE_DIR = "/sandbox/.hermes-api/profiles/api"
+HERMES_API_ANCHOR_FILE = "/sandbox/.nemoclaw/hermes-api.config-hash"
+HERMES_API_RECORD_FILE = "/sandbox/.nemoclaw/hermes-api-profile.json"
+HERMES_API_STATE_FILE = "/run/nemoclaw/hermes-api-restart-seal.json"
+HERMES_API_INTERNAL_PORT = 18699
+HERMES_API_OWNER_UID = 0
+HERMES_API_OWNER_GID = 0
+HERMES_API_POLICY_VERSION = "clawshell-api-minimal-v1"
+HERMES_API_POLICY_BYTES = (
+    json.dumps(
+        {
+            "version": HERMES_API_POLICY_VERSION,
+            "allow": ["core.chat"],
+            "optional_allow": ["sandbox-file-uploader"],
+            "deny": [
+                "terminal",
+                "browser",
+                "delegation",
+                "subagent",
+                "cron",
+                "memory.write",
+                "arbitrary_mcp",
+                "unlisted_skills",
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    + "\n"
+).encode("utf-8")
+# The stock Hermes default soul (hermes_cli/default_soul.py DEFAULT_SOUL_MD),
+# the same bytes the image writes to /sandbox/.hermes/SOUL.md. Duplicated here
+# because the guard seals the api profile before the gateway ever runs — and
+# the runtime must never own it, or the api agent could rewrite its own soul.
+HERMES_API_SOUL_BYTES = (
+    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+    "range of tasks including answering questions, writing and editing code, "
+    "analyzing information, creative work, and executing actions via your "
+    "tools. You communicate clearly, admit uncertainty when appropriate, and "
+    "prioritize being genuinely useful over being verbose unless otherwise "
+    "directed below. Be targeted and efficient in your exploration and "
+    "investigations.\n"
+).encode("utf-8")
+HERMES_API_CONFIG_TEMPLATE = (
+    "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
+    "platforms:\n"
+    "  api_server:\n"
+    "    enabled: true\n"
+    "    extra:\n"
+    f"      port: {HERMES_API_INTERNAL_PORT}\n"
+    "      host: 127.0.0.1\n"
+    "platform_toolsets:\n"
+    "  api_server:\n"
+    "    - file\n"
+    "model:\n"
+    "  default: hermes-agent\n"
+)
+
+# The dashboard seeder mirrors the api profile's config into the dashboard
+# profile and refuses when the gateway's managed sections diverge from the
+# image policy. The api profile therefore carries those sections verbatim:
+# policy parity is part of the sealed contract, not caller-controlled bytes.
+HERMES_MANAGED_POLICY_PATH = "/usr/local/share/nemoclaw/hermes-managed-policy.json"
+
+
+def _api_managed_sections() -> dict:
+    """Return the image policy's managed top-level config sections.
+
+    Fails closed when the managed policy is unreadable or structurally
+    unexpected — bootstrap and write-config cannot seal a profile whose
+    policy parity cannot be proven.
+    """
+    try:
+        with open(HERMES_MANAGED_POLICY_PATH, "r", encoding="utf-8") as handle:
+            policy = json.load(handle)
+        managed_paths = policy["managed_paths"]
+        config = policy["config"]
+        if not isinstance(managed_paths, list) or not isinstance(config, dict):
+            raise ValueError("managed policy shape is unexpected")
+        sections: dict = {}
+        for path in managed_paths:
+            top = str(path).split(".", 1)[0]
+            sections[top] = copy.deepcopy(config[top])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise UnsafePathError(
+            f"managed policy is unavailable for the api profile: {exc}"
+        ) from exc
+    return sections
+
+
+def _api_config_bytes() -> bytes:
+    """Render the api profile config: fixed template plus managed sections."""
+    return (
+        HERMES_API_CONFIG_TEMPLATE
+        + yaml.safe_dump(_api_managed_sections(), sort_keys=True)
+    ).encode("utf-8")
+
+
+def _api_overlay_managed_sections(config_bytes: bytes) -> bytes:
+    """Pin the managed policy sections inside a caller-supplied api config.
+
+    The caller owns model routing and providers; the image owns the managed
+    policy posture. Overwriting those sections here keeps the api profile
+    sealed against policy weakening regardless of the submitted document.
+    """
+    try:
+        text = config_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnsafePathError("refusing non-UTF-8 Hermes api config input") from exc
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise UnsafePathError("refusing malformed Hermes api config input") from exc
+    if not isinstance(document, dict):
+        raise UnsafePathError("refusing non-mapping Hermes api config input")
+    document.update(_api_managed_sections())
+    rendered = yaml.safe_dump(document, sort_keys=False, allow_unicode=True)
+    header = "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
+    return (header + rendered).encode("utf-8")
+
+
+def _api_identities() -> tuple[int, int, int]:
+    """Return (admin_uid, admin_gid, api_gid) for the api profile contract.
+
+    The admin identity is the `sandbox` user (the default-side operator); the
+    api group scopes the dedicated `hermesapi` runtime's read access.
+    """
+    try:
+        admin = pwd.getpwnam("sandbox")
+        api_group = grp.getgrnam("api")
+    except KeyError as exc:
+        raise UnsafePathError(f"missing api profile identity: {exc}") from exc
+    return admin.pw_uid, admin.pw_gid, api_group.gr_gid
+
+
+def _api_contract_checks() -> list[tuple[str, int, int, int, bool]]:
+    """(path, uid, gid, mode, is_dir) entries for the fixed api contract."""
+    admin_uid, admin_gid, api_gid = _api_identities()
+    api_dir = HERMES_API_PROFILE_DIR
+    profiles_dir = os.path.dirname(api_dir)
+    api_root = os.path.dirname(profiles_dir)
+    return [
+        (api_root, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID, 0o711, True),
+        (profiles_dir, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID, 0o711, True),
+        (api_dir, admin_uid, api_gid, 0o3770, True),
+        (os.path.join(api_dir, "config.yaml"), admin_uid, api_gid, 0o640, False),
+        (os.path.join(api_dir, ".env"), admin_uid, api_gid, 0o640, False),
+        # The agent-design surface is admin-owned too: the default side edits
+        # SOUL.md and installs skills, while the api runtime group can only
+        # read them. skills/ keeps setgid so admin-added skill files stay
+        # group-readable for the runtime.
+        (os.path.join(api_dir, "SOUL.md"), admin_uid, api_gid, 0o640, False),
+        (os.path.join(api_dir, "skills"), admin_uid, api_gid, 0o2750, True),
+        (
+            os.path.join(api_dir, ".clawshell-tool-policy.json"),
+            HERMES_API_OWNER_UID,
+            api_gid,
+            0o440,
+            False,
+        ),
+        (os.path.join(api_dir, ".config-hash"), HERMES_API_OWNER_UID, api_gid, 0o440, False),
+        (HERMES_API_ANCHOR_FILE, HERMES_API_OWNER_UID, api_gid, 0o440, False),
+        (HERMES_API_RECORD_FILE, HERMES_API_OWNER_UID, api_gid, 0o440, False),
+    ]
+
+
+def _lstat_no_follow(path: str) -> os.stat_result:
+    try:
+        return os.lstat(path)
+    except OSError as exc:
+        raise UnsafePathError(
+            f"refusing unsafe api profile path {path}: {exc}"
+        ) from exc
+
+
+def _verify_api_contract() -> dict[str, object]:
+    """Verify the api profile structure, anchor, and record. Fail closed."""
+    api_dir_stat: os.stat_result | None = None
+    for path, uid, gid, mode, is_dir in _api_contract_checks():
+        st = _lstat_no_follow(path)
+        if is_dir:
+            if not stat.S_ISDIR(st.st_mode):
+                raise UnsafePathError(f"refusing non-directory api profile path: {path}")
+        else:
+            _validate_regular(path, st)
+        if st.st_uid != uid or st.st_gid != gid:
+            raise UnsafePathError(f"refusing mis-owned api profile path: {path}")
+        if stat.S_IMODE(st.st_mode) != mode:
+            raise UnsafePathError(f"refusing mis-moded api profile path: {path}")
+        if path == HERMES_API_PROFILE_DIR:
+            api_dir_stat = st
+
+    record_text, _record_snapshot = _read_text(HERMES_API_RECORD_FILE, MAX_HASH_BYTES * 4)
+    try:
+        record = json.loads(record_text)
+    except json.JSONDecodeError as exc:
+        raise UnsafePathError("refusing malformed api profile record") from exc
+    if not isinstance(record, dict) or record.get("version") != 1:
+        raise UnsafePathError("refusing unsupported api profile record")
+    if record.get("profile_dir") != HERMES_API_PROFILE_DIR:
+        raise UnsafePathError("refusing api profile record for a different directory")
+    if api_dir_stat is None or record.get("dir_ino") != api_dir_stat.st_ino:
+        raise UnsafePathError("api profile directory identity does not match its record")
+    policy_sha = record.get("policy_sha256")
+    if not isinstance(policy_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", policy_sha):
+        raise UnsafePathError("refusing malformed api profile policy digest")
+    if not secrets.compare_digest(
+        policy_sha, hashlib.sha256(HERMES_API_POLICY_BYTES).hexdigest()
+    ):
+        raise UnsafePathError("api profile record does not pin the fixed tool policy")
+
+    anchor_text_value, _anchor_snapshot = _read_text(HERMES_API_ANCHOR_FILE, MAX_HASH_BYTES)
+    policy_path = os.path.join(HERMES_API_PROFILE_DIR, ".clawshell-tool-policy.json")
+    expected_anchor_prefix = f"{policy_sha}  {policy_path}\n"
+    if not anchor_text_value.startswith(expected_anchor_prefix):
+        raise UnsafePathError("refusing malformed Hermes api profile anchor")
+    policy_file = _open_regular(policy_path)
+    try:
+        policy_bytes = policy_file.read_bytes(MAX_CONFIG_INPUT_BYTES)
+    finally:
+        policy_file.close()
+    if not secrets.compare_digest(
+        hashlib.sha256(policy_bytes).hexdigest(), policy_sha
+    ):
+        raise UnsafePathError("api profile policy drifted from its anchor")
+    return record
+
+
+def _api_env_key(env_path: str) -> str | None:
+    try:
+        text, _snapshot = _read_text(env_path, MAX_ENV_BYTES)
+    except (UnsafePathError, FileNotFoundError):
+        return None
+    key = _first_env_assignment_value(text, "API_SERVER_KEY")
+    if key and _is_generated_api_server_key(key):
+        return key
+    return None
+
+
+def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:
+    try:
+        fd = _open_directory(path)
+    except FileNotFoundError:
+        os.mkdir(path, 0o700)
+        fd = _open_directory(path)
+    try:
+        os.fchown(fd, uid, gid)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != mode:
+            # Directories need traversal; the API gid reads admin-owned design
+            # files and creates runtime state under the sticky profile directory.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+
+
+def _api_write_file(path: str, data: bytes, mode: int, uid: int, gid: int) -> None:
+    try:
+        opened = _open_regular(path)
+    except (FileNotFoundError, UnsafePathError):
+        opened = None
+    if opened is None:
+        _atomic_replace(path, data, expected=None, mode=mode, uid=uid, gid=gid)
+        return
+    try:
+        snapshot = opened.snapshot
+    finally:
+        opened.close()
+    _atomic_replace(path, data, expected=snapshot, mode=mode, uid=uid, gid=gid)
+
+
+def _api_compat_hash_text(api_dir: str) -> str:
+    config_path = os.path.join(api_dir, "config.yaml")
+    env_path = os.path.join(api_dir, ".env")
+    config_text, _config_snapshot = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)
+    mcp_digest = _canonical_mcp_servers_digest(config_text)
+    config_file = _open_regular(config_path)
+    try:
+        config_digest = hashlib.sha256(
+            config_file.read_bytes(MAX_CONFIG_INPUT_BYTES)
+        ).hexdigest()
+    finally:
+        config_file.close()
+    env_file = _open_regular(env_path)
+    try:
+        env_digest = hashlib.sha256(env_file.read_bytes(MAX_ENV_BYTES)).hexdigest()
+    finally:
+        env_file.close()
+    return (
+        f"{config_digest}  {config_path}\n"
+        f"{env_digest}  {env_path}\n"
+        f"# nemoclaw-hermes-mcp-state-v1 intended={mcp_digest} applied={mcp_digest}\n"
+    )
+
+
+def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
+    """Bring the admin-owned design files up to the sealed contract.
+
+    SOUL.md and skills/ shape what the api agent is; they must stay
+    admin-owned so the hermesapi runtime can read but never edit them.
+    Profiles sealed before this contract existed carry runtime-owned copies:
+    their content is adopted (the operator reviews it anyway) while ownership
+    and mode are restored. Missing entries are created — SOUL.md from the
+    stock default, skills/ as an empty setgid dir. A non-regular SOUL.md
+    (symlink, fifo) is never followed or rewritten — it fails closed.
+    """
+    api_dir = HERMES_API_PROFILE_DIR
+    soul_path = os.path.join(api_dir, "SOUL.md")
+    skills_dir = os.path.join(api_dir, "skills")
+    try:
+        soul_stat = os.lstat(soul_path)
+    except FileNotFoundError:
+        soul_stat = None
+    if soul_stat is None:
+        _api_write_file(soul_path, HERMES_API_SOUL_BYTES, 0o640, admin_uid, api_gid)
+    elif not stat.S_ISREG(soul_stat.st_mode):
+        raise UnsafePathError("refusing non-regular api profile SOUL.md")
+    else:
+        # Pre-contract files were runtime-owned. Open without following a
+        # replacement symlink or waiting for a FIFO before checking the inode.
+        fd = os.open(
+            soul_path, os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag()
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if not stat.S_ISREG(opened_stat.st_mode) or (
+                opened_stat.st_dev, opened_stat.st_ino
+            ) != (soul_stat.st_dev, soul_stat.st_ino):
+                raise UnsafePathError("api design file changed during ownership repair")
+            os.fchown(fd, admin_uid, api_gid)
+            # The API gid can read SOUL.md, but only the admin uid can write it.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, 0o640)
+        finally:
+            os.close(fd)
+    _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
+    # Skills installed before the contract change remain runtime-owned inside
+    # the now admin-owned dir; re-own the whole tree so installed skill
+    # content is read-only to the api runtime as well. Path-based traversal
+    # would let the runtime uid rename an enumerated ancestor and redirect the
+    # root-owned repair outside the profile, so every lookup stays relative
+    # to a pinned directory descriptor.
+    skills_fd = os.open(
+        skills_dir,
+        os.O_RDONLY | _directory_flag() | _no_follow_flag() | _cloexec_flag(),
+    )
+    try:
+        _api_reown_design_tree(skills_fd, admin_uid, api_gid)
+    finally:
+        os.close(skills_fd)
+
+
+def _api_reown_design_tree(dir_fd: int, admin_uid: int, api_gid: int) -> None:
+    for name in os.listdir(dir_fd):
+        try:
+            entry_stat = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        # lchown never follows the final component, so a symlink planted
+        # by the runtime uid cannot redirect the ownership repair.
+        if stat.S_ISLNK(entry_stat.st_mode):
+            os.chown(
+                name,
+                admin_uid,
+                api_gid,
+                dir_fd=dir_fd,
+                follow_symlinks=False,
+            )
+            continue
+        if not (stat.S_ISREG(entry_stat.st_mode) or stat.S_ISDIR(entry_stat.st_mode)):
+            raise UnsafePathError("refusing special file in api skills tree")
+        fd = os.open(
+            name,
+            os.O_RDONLY | os.O_NONBLOCK | _no_follow_flag() | _cloexec_flag(),
+            dir_fd=dir_fd,
+        )
+        try:
+            opened_stat = os.fstat(fd)
+            if stat.S_IFMT(opened_stat.st_mode) != stat.S_IFMT(entry_stat.st_mode) or (
+                opened_stat.st_dev, opened_stat.st_ino
+            ) != (
+                entry_stat.st_dev, entry_stat.st_ino
+            ):
+                raise UnsafePathError("api design entry changed during ownership repair")
+            os.fchown(fd, admin_uid, api_gid)
+            # Installed skills are readable by the API gid and writable only by admin.
+            # codeql[py/overly-permissive-file]
+            os.fchmod(fd, 0o750 if stat.S_ISDIR(opened_stat.st_mode) else 0o640)
+            if stat.S_ISDIR(opened_stat.st_mode):
+                _api_reown_design_tree(fd, admin_uid, api_gid)
+        finally:
+            os.close(fd)
+
+
+def _seal_api_profile(admin_uid: int, api_gid: int) -> None:
+    """(Re)write the complete api profile contract with a fresh key.
+
+    Never adopts surviving file content: the profile is re-sealed from the
+    fixed template and a newly minted API_SERVER_KEY.
+    """
+    api_dir = HERMES_API_PROFILE_DIR
+    profiles_dir = os.path.dirname(api_dir)
+    api_root = os.path.dirname(profiles_dir)
+    _api_ensure_dir(api_root, 0o711, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID)
+    _api_ensure_dir(profiles_dir, 0o711, HERMES_API_OWNER_UID, HERMES_API_OWNER_GID)
+    _api_ensure_dir(api_dir, 0o3770, admin_uid, api_gid)
+
+    config_path = os.path.join(api_dir, "config.yaml")
+    env_path = os.path.join(api_dir, ".env")
+    policy_path = os.path.join(api_dir, ".clawshell-tool-policy.json")
+    compat_path = os.path.join(api_dir, ".config-hash")
+
+    _api_write_file(
+        config_path,
+        _api_config_bytes(),
+        0o640,
+        admin_uid,
+        api_gid,
+    )
+    api_key = secrets.token_hex(32)
+    _api_write_file(
+        env_path, f"API_SERVER_KEY={api_key}\n".encode("utf-8"), 0o640, admin_uid, api_gid
+    )
+    _api_write_file(
+        policy_path, HERMES_API_POLICY_BYTES, 0o440, HERMES_API_OWNER_UID, api_gid
+    )
+    _api_write_file(
+        compat_path,
+        _api_compat_hash_text(api_dir).encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    _api_ensure_design_surface(admin_uid, api_gid)
+
+    policy_sha = hashlib.sha256(HERMES_API_POLICY_BYTES).hexdigest()
+    anchor_text_value = (
+        f"{policy_sha}  {policy_path}\n"
+        f"# nemoclaw-hermes-api-anchor-v1 profile={api_dir}\n"
+    )
+    _api_write_file(
+        HERMES_API_ANCHOR_FILE,
+        anchor_text_value.encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    dir_stat = _lstat_no_follow(api_dir)
+    record = {
+        "version": 1,
+        "profile_dir": api_dir,
+        "dir_ino": dir_stat.st_ino,
+        "policy_sha256": policy_sha,
+    }
+    _api_write_file(
+        HERMES_API_RECORD_FILE,
+        (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"),
+        0o440,
+        HERMES_API_OWNER_UID,
+        api_gid,
+    )
+    _verify_api_contract()
+
+
+def verify_api_profile() -> None:
+    """Read-only verification of the api profile contract. Fails closed.
+
+    The api runtime supervisor runs this before launching the dedicated
+    gateway and on every respawn: a drifted anchor, replaced path, missing
+    key, or interrupted config-write journal must never yield a running api
+    process. Recovery belongs to the next write-config transaction, which
+    re-enters through _recover_api_config_write.
+    """
+    _verify_api_contract()
+    env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+    if _api_env_key(env_path) is None:
+        raise UnsafePathError(
+            "refusing api profile without a readable generated API_SERVER_KEY"
+        )
+    if os.path.exists(HERMES_API_STATE_FILE):
+        raise UnsafePathError(
+            "refusing api runtime start with an interrupted config transaction"
+        )
+    print("verified=1")
+
+
+def normalize_api_profile() -> None:
+    """Restore the design-surface contract, then verify. Root-only.
+
+    The api runtime supervisor calls this instead of a bare verify before
+    every launch and respawn: admin edits land through ordinary file writes
+    and can drop the pinned owner/mode (umask 644, a replaced skills file),
+    so respawns repair the structure before asserting it. Sealed bytes —
+    the policy, anchor, record — are still only verified, never rewritten.
+    """
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError(
+            "normalize-api-profile requires the privileged executor identity"
+        )
+    if not os.path.isdir(HERMES_API_PROFILE_DIR):
+        raise UnsafePathError("api profile is not provisioned")
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    _api_ensure_design_surface(admin_uid, api_gid)
+    _verify_api_contract()
+    env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+    if _api_env_key(env_path) is None:
+        raise UnsafePathError(
+            "refusing api profile without a readable generated API_SERVER_KEY"
+        )
+    if os.path.exists(HERMES_API_STATE_FILE):
+        raise UnsafePathError(
+            "refusing api runtime start with an interrupted config transaction"
+        )
+    print("normalized=1")
+
+
+def bootstrap_api_profile() -> None:
+    """Create or verify the fixed image-owned api profile. Root-only."""
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError(
+            "bootstrap-api-profile requires the privileged executor identity"
+        )
+    admin_uid, _admin_gid, api_gid = _api_identities()
+
+    anchor_present = os.path.exists(HERMES_API_ANCHOR_FILE) and os.path.exists(
+        HERMES_API_RECORD_FILE
+    )
+    profile_present = os.path.isdir(HERMES_API_PROFILE_DIR) and not os.path.islink(
+        HERMES_API_PROFILE_DIR
+    )
+    if anchor_present and profile_present:
+        # Design files predate the sealed contract on older profiles; restore
+        # their admin ownership before verifying so the upgrade does not fail
+        # closed on entries the runtime used to own.
+        _api_ensure_design_surface(admin_uid, api_gid)
+        # Verified retry: the structure must match the sealed contract exactly;
+        # drift fails closed rather than re-sealing over a live anchor.
+        _verify_api_contract()
+        if _api_env_key(os.path.join(HERMES_API_PROFILE_DIR, ".env")) is None:
+            # The key was lost without anchor drift; re-mint it in place.
+            api_key = secrets.token_hex(32)
+            env_path = os.path.join(HERMES_API_PROFILE_DIR, ".env")
+            _api_write_file(
+                env_path,
+                f"API_SERVER_KEY={api_key}\n".encode("utf-8"),
+                0o640,
+                admin_uid,
+                api_gid,
+            )
+            _api_write_file(
+                os.path.join(HERMES_API_PROFILE_DIR, ".config-hash"),
+                _api_compat_hash_text(HERMES_API_PROFILE_DIR).encode("utf-8"),
+                0o440,
+                HERMES_API_OWNER_UID,
+                api_gid,
+            )
+        print("verified=1")
+        return
+
+    # Missing anchor (rebuild remnant), missing profile with a stale anchor,
+    # or first boot: re-seal from scratch with a fresh key. Surviving file
+    # content is never adopted.
+    _seal_api_profile(admin_uid, api_gid)
+    print("bootstrapped=1")
+
+
+def _recover_api_config_write(state_file: str) -> None:
+    state_data = _load_restart_state(state_file)
+    phase = str(state_data.get("phase", ""))
+    if not phase.startswith("config-write"):
+        raise UnsafePathError(
+            f"refusing unsupported api transaction phase: {phase or 'unknown'}"
+        )
+    write_state = state_data.get("config_write")
+    if not isinstance(write_state, dict):
+        raise UnsafePathError(
+            "refusing api config-write recovery without rollback metadata"
+        )
+    encoded_original = write_state.get("original_base64")
+    original_digest = write_state.get("original_sha256")
+    if not isinstance(encoded_original, str) or not isinstance(original_digest, str):
+        raise UnsafePathError("refusing malformed api config-write rollback metadata")
+    original_bytes = _decode_bounded_base64(
+        encoded_original, MAX_CONFIG_INPUT_BYTES, "api config-write rollback bytes"
+    )
+    if not secrets.compare_digest(
+        hashlib.sha256(original_bytes).hexdigest(), original_digest
+    ):
+        raise UnsafePathError("refusing invalid api config-write rollback digest")
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    api_dir = str(state_data.get("hermes_dir", ""))
+    if api_dir != HERMES_API_PROFILE_DIR:
+        raise UnsafePathError("refusing api config-write journal for a foreign profile")
+    compat_hash = os.path.join(api_dir, ".config-hash")
+    if phase == "config-write-prepared":
+        config_path = os.path.join(api_dir, "config.yaml")
+        opened = _open_regular(config_path)
+        try:
+            current_snapshot = opened.snapshot
+        finally:
+            opened.close()
+        _atomic_replace(
+            config_path,
+            original_bytes,
+            expected=current_snapshot,
+            mode=0o640,
+            uid=admin_uid,
+            gid=api_gid,
+        )
+        refresh_hashes(api_dir, compat_hash, "compat")
+
+
+def _api_uploader_config(document: dict, payload: dict) -> dict:
+    """Enable only the image-owned uploader alongside restricted file tools."""
+    candidate = copy.deepcopy(_managed_default_uploader(payload))
+    candidate["env"]["GATEWAY_API_KEY"] = "openshell:resolve:env:GATEWAY_API_KEY"
+    candidate["env"]["CLAWSHELL_UPLOADER_PROFILE"] = "api"
+    candidate["env"]["HERMES_HOME"] = HERMES_API_PROFILE_DIR
+    expected = {"sandbox-file-uploader": candidate}
+    existing = document.get("mcp_servers", {})
+    if existing not in ({}, expected):
+        if not isinstance(existing, dict) or set(existing) != {"sandbox-file-uploader"}:
+            raise UnsafePathError("API uploader refuses unrelated MCP entries")
+        prior = existing["sandbox-file-uploader"]
+        if not isinstance(prior, dict) or not isinstance(prior.get("env"), dict):
+            raise UnsafePathError("API uploader refuses malformed prior intent")
+        prior_payload = {**payload, "gateway_url": prior["env"].get("GATEWAY_URL")}
+        prior_candidate = copy.deepcopy(_managed_default_uploader(prior_payload))
+        prior_candidate["env"].update({
+            "GATEWAY_API_KEY": "openshell:resolve:env:GATEWAY_API_KEY",
+            "CLAWSHELL_UPLOADER_PROFILE": "api",
+            "HERMES_HOME": HERMES_API_PROFILE_DIR,
+        })
+        if existing != {"sandbox-file-uploader": prior_candidate}:
+            raise UnsafePathError("API uploader refuses unrelated prior intent")
+    updated = copy.deepcopy(document)
+    updated["mcp_servers"] = expected
+    updated.setdefault("platform_toolsets", {})["api_server"] = ["file", "mcp-sandbox-file-uploader"]
+    return updated
+
+
+def api_uploader_transaction(action: str, payload: dict) -> None:
+    """Register or inspect the fixed API uploader through the root guard."""
+    if os.geteuid() != HERMES_API_OWNER_UID or os.getegid() != HERMES_API_OWNER_GID:
+        raise UnsafePathError("API uploader requires the privileged executor identity")
+    _verify_api_contract()
+    config_path = os.path.join(HERMES_API_PROFILE_DIR, "config.yaml")
+    original, _ = _read_text(config_path, MAX_CONFIG_INPUT_BYTES)
+    document = yaml.safe_load(original)
+    if not isinstance(document, dict):
+        raise UnsafePathError("API uploader requires a mapping config")
+    replacement = _api_uploader_config(document, payload)
+    if action == "inspect-api-uploader":
+        expected_hash = _api_compat_hash_text(HERMES_API_PROFILE_DIR)
+        actual_hash, _ = _read_text(os.path.join(HERMES_API_PROFILE_DIR, ".config-hash"), MAX_HASH_BYTES)
+        matched = document == replacement and secrets.compare_digest(expected_hash, actual_hash)
+        print(json.dumps({"ok": matched, "state": "matched" if matched else "missing"}))
+        return
+    if action != "register-api-uploader":
+        raise UnsafePathError("unsupported API uploader action")
+    raw = yaml.safe_dump(replacement, sort_keys=False, allow_unicode=True).encode("utf-8")
+    write_api_config_transaction(hashlib.sha256(original.encode("utf-8")).hexdigest(), raw,
+                                 authorized_uploader=replacement["mcp_servers"])
+    print(json.dumps({"ok": True, "state": "matched"}))
+
+
+def write_api_config_transaction(
+    expected_config_sha256: str, config_bytes: bytes, *, authorized_uploader: dict | None = None
+) -> None:
+    """Profile-scoped api config write over fixed image paths.
+
+    The expected digest is a compare-and-swap precondition against the live
+    file; the structural contract comes from the root-owned anchor, not from
+    caller-supplied state.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_config_sha256):
+        raise UnsafePathError("write-config requires a valid expected config SHA-256")
+    if len(config_bytes) > MAX_CONFIG_INPUT_BYTES:
+        raise UnsafePathError("refusing oversized Hermes config input")
+
+    _verify_api_contract()
+    admin_uid, _admin_gid, api_gid = _api_identities()
+    api_dir = HERMES_API_PROFILE_DIR
+    state_file = HERMES_API_STATE_FILE
+    compat_hash = os.path.join(api_dir, ".config-hash")
+    config_path = os.path.join(api_dir, "config.yaml")
+
+    if os.path.exists(state_file):
+        _recover_api_config_write(state_file)
+        os.unlink(state_file)
+
+    token = secrets.token_hex(32)
+    mutation_lock_path = os.path.join(
+        os.path.dirname(state_file), os.path.basename(HERMES_MUTATION_LOCK_FILE)
+    )
+    _acquire_mutation_lock(mutation_lock_path, token, "api-config-write", state_file)
+    committed = False
+    try:
+        opened = _open_regular(config_path)
+        try:
+            original_bytes = opened.read_bytes(MAX_CONFIG_INPUT_BYTES)
+            original_snapshot = opened.snapshot
+        finally:
+            opened.close()
+        if not secrets.compare_digest(
+            hashlib.sha256(original_bytes).hexdigest(), expected_config_sha256
+        ):
+            raise UnsafePathError(
+                "Hermes api config changed after the host read it; retry the command"
+            )
+        try:
+            replacement_text = config_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise UnsafePathError("refusing non-UTF-8 Hermes config input") from exc
+        current_state = _hash_state_from_file(
+            compat_hash, config_path, os.path.join(api_dir, ".env")
+        )
+        replacement_mcp = _canonical_mcp_servers_digest(replacement_text)
+        if authorized_uploader is not None:
+            new_mcp = yaml.safe_load(replacement_text).get("mcp_servers", {})
+            if (new_mcp != authorized_uploader
+                    or _canonical_mcp_servers_digest(original_bytes.decode("utf-8")) != current_state.intended):
+                raise UnsafePathError("API uploader transaction contains unrelated MCP changes")
+        elif not secrets.compare_digest(replacement_mcp, current_state.intended):
+            raise UnsafePathError(
+                "non-MCP config transaction cannot change Hermes mcp_servers"
+            )
+        config_bytes = _api_overlay_managed_sections(config_bytes)
+
+        _write_restart_state(
+            state_file,
+            {
+                "version": 1,
+                "phase": "config-write-prepared",
+                "hermes_dir": api_dir,
+                "hash_file": compat_hash,
+                "config_write": {
+                    "original_base64": base64.b64encode(original_bytes).decode("ascii"),
+                    "original_sha256": hashlib.sha256(original_bytes).hexdigest(),
+                },
+            },
+            create=True,
+        )
+        _atomic_replace(
+            config_path,
+            config_bytes,
+            expected=original_snapshot,
+            mode=0o640,
+            uid=admin_uid,
+            gid=api_gid,
+        )
+        if authorized_uploader is None:
+            refresh_hashes(api_dir, compat_hash, "compat")
+        else:
+            _api_write_file(compat_hash, _api_compat_hash_text(api_dir).encode("utf-8"),
+                            0o440, HERMES_API_OWNER_UID, api_gid)
+        committed = True
+        os.unlink(state_file)
+    except Exception:
+        if not committed:
+            try:
+                if os.path.exists(state_file):
+                    _recover_api_config_write(state_file)
+                    os.unlink(state_file)
+            except Exception:
+                # Keep the journal for the next caller to recover; the lock is
+                # still released so the mutation lane is not wedged.
+                pass
+        raise
+    finally:
+        _release_mutation_lock(mutation_lock_path, token)
+
+
 def _parse_env_assignment(line: str) -> tuple[str, str, str] | None:
     stripped = line.rstrip("\n")
     prefix = ""
@@ -5004,11 +6355,22 @@ def main() -> int:
             "prepare-shields-abort",
             "abort-shields-transition",
             "write-config",
+            "inspect-managed-default-capability",
+            "write-managed-default",
+            "inspect-managed-default-transaction",
+            "mark-managed-default-healthy",
+            "finish-managed-default",
             "recover-prestate-lock",
             "run-state-dir-transition",
+        "register-api-uploader",
+        "inspect-api-uploader",
+        "bootstrap-api-profile",
+            "verify-api-profile",
+            "normalize-api-profile",
         ),
     )
-    parser.add_argument("--hermes-dir", required=True)
+    parser.add_argument("--hermes-dir", default="")
+    parser.add_argument("--profile", choices=("api",), default="")
     parser.add_argument("--hash-file", default="")
     parser.add_argument("--runtime-plan", default="")
     parser.add_argument("--boundary-validator", default="")
@@ -5035,8 +6397,149 @@ def main() -> int:
             raise UnsafePathError(
                 "--mcp-state-exit-code requires inspect-mcp-integrity"
             )
+        managed_actions = {
+            "inspect-managed-default-capability",
+            "write-managed-default",
+            "inspect-managed-default-transaction",
+            "mark-managed-default-healthy",
+            "finish-managed-default",
+        }
+        if args.action in managed_actions:
+            if (
+                os.geteuid() != 0
+                and os.path.abspath(__file__) == INSTALLED_RUNTIME_CONFIG_GUARD
+            ):
+                raise UnsafePathError(
+                    "managed default requires privileged root executor"
+                )
+            if os.path.abspath(__file__) == INSTALLED_RUNTIME_CONFIG_GUARD:
+                sandbox_uid, _sandbox_gid = _sandbox_identity()
+                if (
+                    not _startup_ready_marker_absent()
+                    or not _openshell_supervised_nonroot_start_is_live(0, sandbox_uid)
+                ):
+                    raise UnsafePathError(
+                        "managed default reload requires supported OpenShell non-root supervisor topology"
+                    )
+            if any(
+                (
+                    args.hermes_dir,
+                    args.hash_file,
+                    args.state_file,
+                    args.profile,
+                    args.runtime_plan,
+                    args.boundary_validator,
+                    args.state_action,
+                    args.state_lock_plan_json,
+                    args.shields_mode,
+                    args.rollback_shields_mode,
+                    args.startup_owner,
+                    args.mode != "strict",
+                )
+            ):
+                raise UnsafePathError(
+                    "managed default actions resolve fixed image paths"
+                )
+            if args.action != "write-managed-default" and args.expected_config_sha256:
+                raise UnsafePathError("unexpected managed default CAS selector")
+            if (
+                args.action
+                in {"inspect-managed-default-capability", "write-managed-default"}
+                and args.lock_token
+            ):
+                raise UnsafePathError("unexpected managed default lock selector")
+        elif args.action in (
+        "register-api-uploader",
+        "inspect-api-uploader",
+        "bootstrap-api-profile",
+            "verify-api-profile",
+            "normalize-api-profile",
+        ):
+            # The fixed api-profile actions resolve every path and identity
+            # from image constants; any caller-supplied selector is rejected.
+            if (
+                args.hermes_dir
+                or args.hash_file
+                or args.state_file
+                or args.profile
+                or args.expected_config_sha256
+                or args.runtime_plan
+                or args.boundary_validator
+                or args.lock_token
+                or args.state_action
+                or args.state_lock_plan_json
+                or args.shields_mode
+                or args.rollback_shields_mode
+                or args.startup_owner
+            ):
+                raise UnsafePathError(
+                    f"{args.action} accepts no path or selector arguments"
+                )
+        elif args.profile and args.action != "write-config":
+            raise UnsafePathError("--profile is only valid for write-config")
+        elif not args.hermes_dir and not (
+            args.action == "write-config" and args.profile == "api"
+        ):
+            raise UnsafePathError(f"{args.action} requires --hermes-dir")
         _validate_action_readiness(args.action, args.startup_owner)
-        if args.action == "ensure-api-key":
+        if args.action == "inspect-managed-default-capability":
+            for path, capability in (
+                ("/usr/local/bin/nemoclaw-gateway-control", b"reload-managed-default"),
+                (
+                    "/usr/local/lib/nemoclaw/managed-gateway-control.py",
+                    b"reload-managed-default",
+                ),
+                ("/usr/local/bin/nemoclaw-start", b"reload-managed-default"),
+                (
+                    "/usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py",
+                    b"--managed-default-routing",
+                ),
+            ):
+                opened = _open_regular(path)
+                try:
+                    if (
+                        opened.snapshot.uid != 0
+                        or opened.snapshot.mode & 0o022
+                        or not opened.snapshot.mode & 0o100
+                    ):
+                        raise UnsafePathError(
+                            "managed default lifecycle controller is unavailable"
+                        )
+                    if capability not in opened.read_bytes(1024 * 1024):
+                        raise UnsafePathError(
+                            "managed default lifecycle capability is unavailable"
+                        )
+                finally:
+                    opened.close()
+            print("managed_default_version=1")
+        elif args.action == "write-managed-default":
+            token = write_managed_default(
+                args.expected_config_sha256,
+                sys.stdin.buffer.read(
+                    MAX_CONFIG_INPUT_BYTES * 3 + MAX_ENV_BYTES * 2 + 1
+                ),
+            )
+            print("prepared=1")
+            print(f"lock_token={token}")
+        elif args.action in {
+            "inspect-managed-default-transaction",
+            "mark-managed-default-healthy",
+            "finish-managed-default",
+        }:
+            if not re.fullmatch(r"[0-9a-f]{64}", args.lock_token):
+                raise UnsafePathError(
+                    "managed default requires valid mutation lock token"
+                )
+            if args.action == "inspect-managed-default-transaction":
+                inspect_managed_default_transaction(args.lock_token)
+                print("prepared=1")
+            elif args.action == "mark-managed-default-healthy":
+                mark_managed_default_healthy(args.lock_token)
+                print("healthy=1")
+            else:
+                finish_managed_default(args.lock_token)
+                print("updated=1")
+        elif args.action == "ensure-api-key":
             if not args.hash_file:
                 raise UnsafePathError("ensure-api-key requires --hash-file")
             ensure_api_key(args.hermes_dir, args.hash_file, args.mode)
@@ -5164,23 +6667,55 @@ def main() -> int:
             abort_shields_transition(args.hermes_dir, args.state_file, args.lock_token)
             print("aborted=1")
         elif args.action == "write-config":
-            if (
-                not args.hash_file
-                or not args.state_file
-                or not args.expected_config_sha256
-            ):
-                raise UnsafePathError(
-                    "write-config requires --hash-file, --state-file, and --expected-config-sha256"
+            if args.profile == "api":
+                if args.hermes_dir or args.hash_file or args.state_file:
+                    raise UnsafePathError(
+                        "write-config --profile api resolves fixed image paths; "
+                        "caller-supplied paths are refused"
+                    )
+                if not args.expected_config_sha256:
+                    raise UnsafePathError(
+                        "write-config requires --expected-config-sha256"
+                    )
+                config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+                write_api_config_transaction(
+                    args.expected_config_sha256, config_bytes
                 )
-            config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
-            write_config_transaction(
-                args.hermes_dir,
-                args.hash_file,
-                args.state_file,
-                args.expected_config_sha256,
-                config_bytes,
-            )
+            else:
+                if (
+                    not args.hash_file
+                    or not args.state_file
+                    or not args.expected_config_sha256
+                ):
+                    raise UnsafePathError(
+                        "write-config requires --hash-file, --state-file, and --expected-config-sha256"
+                    )
+                config_bytes = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+                write_config_transaction(
+                    args.hermes_dir,
+                    args.hash_file,
+                    args.state_file,
+                    args.expected_config_sha256,
+                    config_bytes,
+                )
             print("updated=1")
+        elif args.action in {"register-api-uploader", "inspect-api-uploader"}:
+            raw = sys.stdin.buffer.read(MAX_CONFIG_INPUT_BYTES + 1)
+            if len(raw) > MAX_CONFIG_INPUT_BYTES:
+                raise UnsafePathError("API uploader payload is oversized")
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise UnsafePathError("invalid API uploader payload") from exc
+            if not isinstance(payload, dict):
+                raise UnsafePathError("API uploader payload must be a mapping")
+            api_uploader_transaction(args.action, payload)
+        elif args.action == "bootstrap-api-profile":
+            bootstrap_api_profile()
+        elif args.action == "verify-api-profile":
+            verify_api_profile()
+        elif args.action == "normalize-api-profile":
+            normalize_api_profile()
         elif args.action == "recover-prestate-lock":
             if not args.state_file:
                 raise UnsafePathError(

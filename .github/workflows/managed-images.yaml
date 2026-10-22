@@ -76,7 +76,7 @@ jobs:
           - agent: hermes
             display_name: Hermes
             dockerfile: agents/hermes/Dockerfile
-            base_alias: ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:latest
+            base_dockerfile: agents/hermes/Dockerfile.base
             base_repository: ghcr.io/nvidia/nemoclaw/hermes-sandbox-base
             image: nemoclaw-managed-pr/hermes
             repository: ghcr.io/nvidia/nemoclaw/hermes-sandbox
@@ -102,18 +102,52 @@ jobs:
         with:
           node-version: 22.19.0
 
+      - name: Build PR Hermes source base
+        if: matrix.agent == 'hermes'
+        id: hermes_source_base
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.base_dockerfile }}
+          platforms: linux/amd64
+          outputs: type=oci,dest=${{ runner.temp }}/pr-hermes-source-base,tar=false
+          push: false
+          provenance: false
+          sbom: false
+          cache-from: type=registry,ref=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:buildcache-amd64
+
       - name: Resolve exact linux/amd64 PR base
         id: base
         shell: bash
         env:
+          AGENT: ${{ matrix.agent }}
+          SOURCE_BASE_DIGEST: ${{ steps.hermes_source_base.outputs.digest }}
           BASE_ALIAS: ${{ matrix.base_alias }}
           BASE_REPOSITORY: ${{ matrix.base_repository }}
           DISPLAY_NAME: ${{ matrix.display_name }}
         run: |
           set -euo pipefail
+          if [ "$AGENT" = "hermes" ]; then
+            bash scripts/checks/resolve-hermes-pr-source-base.sh \
+              "$RUNNER_TEMP/pr-hermes-source-base" "$SOURCE_BASE_DIGEST"
+            exit 0
+          fi
           alias_raw="$RUNNER_TEMP/pr-base-alias.raw"
           exact_raw="$RUNNER_TEMP/pr-base-exact.raw"
           docker buildx imagetools inspect "$BASE_ALIAS" --raw > "$alias_raw"
+          if [[ "$BASE_ALIAS" == *@* ]]; then
+            pinned_digest="${BASE_ALIAS##*@}"
+            if [[ ! "$pinned_digest" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+              [ "$BASE_ALIAS" != "${BASE_REPOSITORY}@${pinned_digest}" ]; then
+              echo "ERROR: PR base pin is not an immutable reference in the expected repository." >&2
+              exit 1
+            fi
+            index_actual="sha256:$(sha256sum "$alias_raw" | awk '{print $1}')"
+            if [ "$index_actual" != "$pinned_digest" ]; then
+              echo "ERROR: PR base index bytes do not match the pinned digest." >&2
+              exit 1
+            fi
+          fi
           if ! digest="$(
             jq -er '
               if (
@@ -169,6 +203,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-contexts: ${{ steps.base.outputs.context }}
           platforms: linux/amd64
           load: true
           push: false
@@ -280,6 +315,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          build-contexts: ${{ steps.base.outputs.context }}
           platforms: linux/amd64
           outputs: type=image,name=${{ matrix.repository }},push-by-digest=true,name-canonical=true,push=true
           labels: |

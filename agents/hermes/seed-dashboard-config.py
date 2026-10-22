@@ -492,6 +492,59 @@ def _atomic_write_no_follow(
             os.close(opened_parent_fd)
 
 
+_API_PROFILE_NOTE_MARKER = "## API profile design surface"
+_API_PROFILE_NOTE = """\
+## API profile design surface
+
+The external API agent's design files live at
+/sandbox/.hermes-api/profiles/api/ — SOUL.md, config.yaml, and skills/. The
+parent directories are traverse-only, so use that path directly; it cannot be
+found by listing. This sandbox uid owns the files, so read and write them
+when asked to design or reconfigure the API agent. Design changes restart
+the api gateway automatically within a few seconds. Install anything the API
+agent must execute (MCP servers, helper binaries) under that profile
+directory so the hermesapi runtime uid can reach it — files under
+/sandbox/.hermes or /home/sandbox are invisible to it.
+"""
+
+
+def _seed_dashboard_soul_note(soul_path: str, dashboard_fd: int | None) -> bool:
+    """Point the dashboard agent at the api profile's design surface.
+
+    The note is appended once; existing SOUL.md bytes are preserved. When the
+    file does not exist yet it is created from the stock Hermes soul plus the
+    note — and left absent entirely if that stock text is unavailable, so the
+    gateway's own first-boot default is never shadowed by a note-only file.
+    """
+    try:
+        soul = _read_regular_text_no_follow(
+            soul_path, "dashboard SOUL.md", dir_fd=dashboard_fd
+        )
+    except MissingDashboardSeedPathError:
+        soul = None
+    except UnsafeDashboardSeedPathError:
+        return False
+    if soul is not None and _API_PROFILE_NOTE_MARKER in soul:
+        return True
+    if soul is None:
+        try:
+            from hermes_cli.default_soul import DEFAULT_SOUL_MD
+        except ImportError:
+            # First boot without the Hermes venv: the gateway writes the stock
+            # soul itself and the note lands on the next seed.
+            return True
+        content = DEFAULT_SOUL_MD.rstrip("\n") + "\n\n" + _API_PROFILE_NOTE
+    else:
+        content = soul.rstrip("\n") + "\n\n" + _API_PROFILE_NOTE
+
+    def write_soul(handle: TextIO) -> None:
+        handle.write(content)
+
+    return _atomic_write_no_follow(
+        soul_path, "dashboard SOUL.md", write_soul, parent_fd=dashboard_fd
+    )
+
+
 def _normalized_routing(gateway: dict, routing_keys: list[str], policy: dict) -> dict:
     if any(key not in gateway for key in routing_keys):
         raise InvalidDashboardSeedDocumentError("gateway config has incomplete model routing")
@@ -805,12 +858,62 @@ def _seed_dashboard(argv: list[str], dashboard_fd: int | None) -> int:
     ):
         return 1
 
+    # Advisory only: the design-surface note must never block dashboard
+    # startup the way the config seed does.
+    soul_path = os.path.join(os.path.dirname(dst), "SOUL.md")
+    if not _seed_dashboard_soul_note(soul_path, dashboard_fd):
+        print(
+            "[dashboard] WARNING: could not add the api profile note to SOUL.md",
+            file=sys.stderr,
+        )
+
     print(f"[dashboard] seeded model routing and reviewed policy into {dst}", file=sys.stderr)
     return 0
 
 
+def _seed_managed_default_routing(argv: list[str]) -> int:
+    """Refresh only routing in an existing dashboard and verify its readback."""
+    if len(argv) != 5:
+        return 1
+    _, _, policy_path, source, destination = argv
+    parent_fd = -1
+    try:
+        policy = load_managed_policy(Path(policy_path))
+        gateway = _load_yaml(source, "gateway config")
+        routing = _normalized_routing(gateway, policy["dashboard"]["routing_keys"], policy)
+        # This update does not migrate or create a profile, mirror environment,
+        # change tools, or write the API profile note.
+        parent_fd = _open_directory_no_follow("/")
+        for component in Path(os.path.dirname(destination)).parts[1:]:
+            next_fd = _open_directory_no_follow(component, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = next_fd
+        dashboard = _load_yaml(destination, "dashboard config", dir_fd=parent_fd)
+        dashboard.update(routing)
+        import yaml
+        def write(handle: TextIO) -> None:
+            yaml.safe_dump(dashboard, handle, sort_keys=False)
+        if not _atomic_write_no_follow(destination, "dashboard config", write, parent_fd=parent_fd):
+            return 1
+        actual = _load_yaml(destination, "dashboard config readback", dir_fd=parent_fd)
+        if not _same_json_value(actual, dashboard):
+            return 1
+        after = _load_yaml(source, "gateway config readback")
+        if not _same_json_value(after, gateway):
+            return 1
+        return 0
+    except Exception:
+        print("[dashboard] Managed default routing seed or readback failed", file=sys.stderr)
+        return 1
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
+
+
 def main(argv: list[str]) -> int:
     """Validate arguments, anchor the destination, and run the dashboard seed."""
+    if len(argv) > 1 and argv[1] == "--managed-default-routing":
+        return _seed_managed_default_routing(argv)
     merge_legacy = len(argv) > 1 and argv[1] == "--merge-legacy"
     seed_argv = [argv[0], *argv[2:]] if merge_legacy else argv
     if len(seed_argv) not in (4, 6):

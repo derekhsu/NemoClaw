@@ -59,7 +59,7 @@ artifact」,純粹是個把 agent 程式碼 + 設定打包成可開機容器的�
 送進 daemon,context 動輒數百 MB,build 慢又吃磁碟。應仿照
 `src/lib/sandbox/build-context.ts:71` 的 `stageOptimizedSandboxBuildContext`,只送以下子集到一個 temp build 目錄:
 
-```
+```text
 Dockerfile                              # 根目錄
 tsconfig.runtime-preloads.json          # 根目錄
 nemoclaw/

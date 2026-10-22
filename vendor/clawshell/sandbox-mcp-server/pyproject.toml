@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sandbox-mcp-server"
-version = "0.1.0+nemoclaw.1"
+version = "0.1.1+nemoclaw.1"
 description = "MCP server for sandbox file delivery through ClawShell Gateway"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"

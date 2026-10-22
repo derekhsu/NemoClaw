@@ -792,6 +792,8 @@ ARG MCPORTER_0_7_3_TARBALL=https://registry.npmjs.org/mcporter/-/mcporter-0.7.3.
 
 # A cross-stage root copy is accepted by Docker's legacy builder and creates one
 # final-image layer while preserving metadata on existing parent directories.
+# This scratch stage contains only the listed payload files; preserve grouped copy metadata.
+# hadolint ignore=DL3067
 COPY --from=openclaw-dependency-payload / /
 
 # The final image owns the shipped dependency boundary independently of base
@@ -916,6 +918,8 @@ RUN --network=default NODE_OPTIONS=--dns-result-order=ipv4first \
 
 # Copy the grouped plugin and blueprint payload after runtime dependency
 # installation so source-only changes do not invalidate that cache boundary.
+# This scratch stage contains only the listed payload files; preserve grouped copy metadata.
+# hadolint ignore=DL3067
 COPY --from=openclaw-plugin-payload / /
 
 # Copy built plugin and blueprint into the sandbox
@@ -937,6 +941,8 @@ RUN test -f /usr/local/bin/node \
 # the exact lock, seeds resolver metadata, and re-packs every archive offline
 # before this root-owned immutable cache enters the final image.
 COPY --from=wechat-npm-cache /out/wechat-npm-cache/ /usr/local/share/nemoclaw/wechat-npm-cache/
+# This scratch stage contains only the listed payload files; preserve grouped copy metadata.
+# hadolint ignore=DL3067
 COPY --from=openclaw-patch-payload / /
 
 RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts \
@@ -1658,6 +1664,8 @@ RUN mkdir -p /sandbox/.nemoclaw/blueprints/0.1.0 \
 # needs to read these files to install Node runtime preloads under /tmp.
 # Channel runtime preloads are authored as TypeScript and compiled in the
 # runtime-preload-builder stage before being flattened by filename for --require.
+# This scratch stage contains only the listed payload files; preserve grouped copy metadata.
+# hadolint ignore=DL3067
 COPY --from=openclaw-runtime-payload / /
 
 # Keep the root-owned managed-startup handoff in this image-only layer. The
@@ -1744,6 +1752,8 @@ ARG NEMOCLAW_WSL_DASHBOARD_EXPOSURE=0
 ARG NEMOCLAW_INFERENCE_BASE_URL=https://inference.local/v1
 ARG NEMOCLAW_INFERENCE_API=openai-completions
 ARG NEMOCLAW_CONTEXT_WINDOW=131072
+# MAX_TOKENS is an inference output limit, not an authentication credential.
+# hadolint ignore=DL3064
 ARG NEMOCLAW_MAX_TOKENS=4096
 ARG NEMOCLAW_REASONING=false
 ARG NEMOCLAW_REASONING_EFFORT=
@@ -1824,6 +1834,8 @@ ARG NEMOCLAW_OPENCLAW_OTEL_SAMPLE_RATE=1.0
 # NEMOCLAW_MESSAGING_PLAN_B64 intentionally remains ARG-only: Docker exposes it
 # to build RUN processes without retaining the full plan in the final image env.
 # Direct ARG interpolation into inline source is a code injection vector (C-2).
+# MAX_TOKENS remains a numeric output limit in this environment configuration.
+# hadolint ignore=DL3064
 ENV NEMOCLAW_MODEL=${NEMOCLAW_MODEL} \
     NEMOCLAW_INFERENCE_PROVIDER_ID=${NEMOCLAW_INFERENCE_PROVIDER_ID} \
     NEMOCLAW_UPSTREAM_PROVIDER=${NEMOCLAW_UPSTREAM_PROVIDER} \
@@ -1884,6 +1896,8 @@ RUN OPENCLAW_VERSION="${OPENCLAW_VERSION}" node --experimental-strip-types /src/
 
 WORKDIR /sandbox
 RUN test "$(id -u sandbox):$(id -g sandbox):$(pwd)" = "998:998:/sandbox"
+# The image ABI requires the sandbox account; its uid and gid were checked above.
+# hadolint ignore=DL3066
 USER sandbox
 
 # Write openclaw.json with gateway config but WITHOUT the real auth token.
@@ -2116,9 +2130,10 @@ os.chmod(path, 0o600)"
 # user, so runtime migration cannot rely on root privileges inside the pod.
 # Doing this in the image build guarantees new PR images have only the unified
 # .openclaw layout even when sandbox-base:latest has not been rebuilt yet.
+# This build step needs root to migrate protected files; the final USER is set below.
 # Retire zero-byte exec approvals placeholders inherited from older bases.
 # Preserve nonempty legacy policy for OpenClaw Doctor to migrate to SQLite.
-# hadolint ignore=DL3002
+# hadolint ignore=DL3002,DL3066
 USER root
 # hadolint ignore=DL4006
 RUN set -eu; \
@@ -2495,6 +2510,8 @@ RUN check_metadata() { \
 # accepting the exact OpenClaw gateway cmdline fallback.  A numeric PID or
 # OpenClaw-looking argv alone is insufficient because either can belong to a
 # recycled process.
+# The health probe needs shell expansion, conditional commands, and recorded process identity checks.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
     CMD port="${NEMOCLAW_DASHBOARD_PORT:-${OPENCLAW_GATEWAY_PORT:-}}"; \
         if [ -z "$port" ]; then \

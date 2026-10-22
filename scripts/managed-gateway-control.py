@@ -46,6 +46,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import json
 import http.client
 import io
 import importlib.util
@@ -571,6 +572,7 @@ def _publish_expected_exit_lease(
     identity: ProcessIdentity,
     controller: ProcessIdentity,
     recovery_deadline: float | None = None,
+    transaction_token: str | None = None,
 ) -> ExpectedExitLease:
     """Authorize one exact gateway exit while this root controller is live."""
 
@@ -593,9 +595,11 @@ def _publish_expected_exit_lease(
                 os.close(existing_fd)
         _require_recovery_time(recovery_deadline)
 
+        version = "v2" if transaction_token is not None else "v1"
+        suffix = f" {transaction_token}" if transaction_token is not None else ""
         payload = (
-            f"v1 {identity.pid} {identity.start_time} "
-            f"{controller.pid} {controller.start_time}\n"
+            f"{version} {identity.pid} {identity.start_time} "
+            f"{controller.pid} {controller.start_time}{suffix}\n"
         ).encode("ascii")
         flags = (
             os.O_WRONLY
@@ -2058,6 +2062,110 @@ def _control(action: str, nonce: str) -> tuple[str, int, int]:
             _close_expected_exit_lock(expected_exit_lock)
 
 
+def _managed_default_guard(action: str, token: str, proof: dict | None = None) -> None:
+    _validate_trusted_regular(HERMES_GUARD_PATH)
+    result = subprocess.run(
+        ["/opt/hermes/.venv/bin/python3", "-I", HERMES_GUARD_PATH, action, "--lock-token", token],
+        input=json.dumps(proof).encode("ascii") if proof is not None else b"",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ControlError("GATEWAY_CONFIG_HASH_MISMATCH")
+
+
+def _inspect_managed_default_transaction(token: str) -> None:
+    _managed_default_guard("inspect-managed-default-transaction", token)
+
+
+def _mark_managed_default_healthy(token: str, identity: ProcessIdentity) -> None:
+    _managed_default_guard("mark-managed-default-healthy", token, {
+        "gateway_pid": identity.pid,
+        "gateway_start_time": str(identity.start_time),
+    })
+
+
+def _seed_managed_default_dashboard(reader: ProcReader, supervisor: ProcessIdentity) -> None:
+    # Execute the image-owned seeder as the dashboard owner. Root must never
+    # write through the sandbox-owned dashboard directory.
+    _recapture_exact_identity(reader, supervisor)
+    environment = _parse_environment(reader.read_stable_file(supervisor, "environ", MAX_ENV_BYTES))
+    home = environment.get("HERMES_DASHBOARD_HOME", "/sandbox/.hermes/profiles/dashboard-home")
+    if home != "/sandbox/.hermes/profiles/dashboard-home":
+        raise ControlError("GATEWAY_UNSAFE_CONFIG_PATH")
+    seeder = "/usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py"
+    policy = "/usr/local/share/nemoclaw/hermes-managed-policy.json"
+    _validate_trusted_regular(seeder)
+    _validate_trusted_regular(policy)
+    uid = supervisor.uids[0]
+    if uid == 0 or len(set(supervisor.uids)) != 1:
+        raise ControlError("SUPERVISOR_UNAVAILABLE")
+    import pwd
+    owner = pwd.getpwuid(uid)
+    def step_down() -> None:
+        os.setgroups([])
+        os.setgid(owner.pw_gid)
+        os.setuid(uid)
+    interpreter = "/opt/hermes/.venv/bin/python3"
+    _validate_trusted_regular(os.path.realpath(interpreter))
+    result = subprocess.run(
+        [interpreter, "-I", seeder, "--managed-default-routing", policy,
+         "/sandbox/.hermes/config.yaml", home + "/config.yaml"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, timeout=15, check=False,
+        preexec_fn=step_down,
+    )
+    _recapture_exact_identity(reader, supervisor)
+    if result.returncode != 0:
+        raise ControlError("GATEWAY_FAILED")
+
+
+def _reload_managed_default(nonce: str, token: str) -> tuple[str, int, int]:
+    deadline = time.monotonic() + RECOVERY_TIMEOUT_SECONDS
+    lock = _acquire_expected_exit_lock(deadline)
+    lease = None
+    try:
+        if _detect_agent() != "hermes":
+            raise ControlError("SUPERVISOR_INVALID_ACTION")
+        with ProcReader() as reader:
+            supervisor = _discover_supervisor(reader)
+            detected = _agent_spec("hermes", reader, supervisor)
+            # The default transaction must not inspect or repair API services.
+            spec = AgentSpec("hermes", detected.port, detected.health_path)
+            candidates = _gateway_candidates(reader, supervisor, spec, deadline)
+            if len(candidates) != 1:
+                raise ControlError("SUPERVISOR_UNAVAILABLE")
+            old = candidates[0]
+            _inspect_managed_default_transaction(token)
+            controller = _controller_process_identity(reader)
+            lease = _publish_expected_exit_lease(
+                lock, old, controller, deadline, transaction_token=token,
+            )
+            lock = None
+            _terminate_gateway(reader, old, deadline)
+            replacement = _wait_for_healthy_gateway(
+                reader, supervisor, spec, old,
+                _remaining_recovery_time(deadline, RECOVERY_TIMEOUT_SECONDS),
+                recovery_deadline=deadline,
+            )
+            _seed_managed_default_dashboard(reader, supervisor)
+            _inspect_managed_default_transaction(token)
+            current = _recapture_exact_identity(reader, replacement)
+            if current.stable_key() != replacement.stable_key() or not _gateway_healthy(
+                reader, current, spec, deadline,
+            ):
+                raise ControlError("GATEWAY_HEALTH_TIMEOUT")
+            _mark_managed_default_healthy(token, current)
+            return "ok", old.pid, current.pid
+    finally:
+        if lease is not None:
+            _clear_expected_exit_lease(lease)
+        elif lock is not None:
+            _close_expected_exit_lock(lock)
+
+
 def _sanitize_start_log_diagnostic_line(line: str) -> str | None:
     # Do not normalize attacker-controlled text into an accepted event. The
     # exact supervisor UID is shared with the sandbox agent in managed
@@ -2194,7 +2302,12 @@ def _managed_failure_diagnostics() -> tuple[str, ...]:
     return tuple(diagnostics)
 
 
-def _validate_request(argv: list[str]) -> tuple[str, str]:
+def _validate_request(argv: list[str]) -> tuple[str, str] | tuple[str, str, str]:
+    if len(argv) == 3 and argv[0] == "reload-managed-default":
+        action, nonce, token = argv
+        if not NONCE_RE.fullmatch(nonce) or not NONCE_RE.fullmatch(token):
+            raise ControlError("SUPERVISOR_INVALID_NONCE")
+        return action, nonce, token
     if len(argv) != 2:
         raise ControlError("SUPERVISOR_INVALID_REQUEST")
     action, nonce = argv
@@ -2207,10 +2320,15 @@ def _validate_request(argv: list[str]) -> tuple[str, str]:
 
 def main(argv: list[str]) -> int:
     try:
-        action, nonce = _validate_request(argv)
+        request = _validate_request(argv)
+        action, nonce = request[:2]
         _require_root()
         _require_installed_helper_trust()
-        result, old_pid, new_pid = _control(action, nonce)
+        if action == "reload-managed-default":
+            result, old_pid, new_pid = _reload_managed_default(nonce, request[2])
+            print("healthy=1")
+        else:
+            result, old_pid, new_pid = _control(action, nonce)
         print(f"v1 {nonce} complete {result} {old_pid} {new_pid}")
         print(f"GATEWAY_PID={new_pid}")
         return 0

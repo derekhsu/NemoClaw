@@ -36,11 +36,9 @@ Tasks 1-7 below are complete on `feat/image-only-cli`. They are preserved here
 for reference and to document what was reviewed and merged. Do not re-run these
 tasks unless reverting and re-implementing.
 
-
-
 ## File Structure
 
-**Create**
+### Create
 
 - `src/commands/image/stage.ts` — oclif command for staged build-context output
 - `src/commands/image/build.ts` — oclif command for local build and optional push
@@ -60,7 +58,7 @@ tasks unless reverting and re-implementing.
 - `src/lib/actions/image/build.ts` — thin action wrapper for the build command
 - `.github/workflows/image-build.yaml` — manual GitHub Actions entrypoint for image build/push
 
-**Modify**
+### Modify
 
 - `src/lib/actions/global.ts` — export image action entrypoints if shared command patterns benefit from it
 - `src/lib/build-context.ts` — expose or factor reusable helpers needed by the new stage service
@@ -68,7 +66,7 @@ tasks unless reverting and re-implementing.
 - `src/lib/onboard/dockerfile-patch.ts` — only if extracting shared low-level helpers is cleaner than duplicating sanitization logic
 - `docs/superpowers/specs/2026-06-29-image-only-cli-design.md` — only if implementation clarifies a spec detail discovered during Task 1 or 2
 
-**Test**
+### Test
 
 - `src/commands/image/stage.test.ts`
 - `src/commands/image/build.test.ts`
@@ -81,6 +79,7 @@ tasks unless reverting and re-implementing.
 ## Task 1: Command Surface and Flag Contract
 
 **Files:**
+
 - Create: `src/lib/image/command-support.ts`
 - Create: `src/lib/image/command-support.test.ts`
 - Create: `src/commands/image/stage.ts`
@@ -317,6 +316,7 @@ rtk git commit -m "feat(image): add image command surface"
 ## Task 2: Agent Image Definition and Missing-Source Validation
 
 **Files:**
+
 - Create: `src/lib/image/agent-image-definition.ts`
 - Create: `src/lib/image/agent-image-definition.test.ts`
 
@@ -413,6 +413,7 @@ rtk git commit -m "feat(image): define agent image inputs"
 ## Task 3: Deterministic Stage Service and JSON Contract
 
 **Files:**
+
 - Create: `src/lib/image/stage.ts`
 - Create: `src/lib/image/stage.test.ts`
 - Modify: `src/lib/build-context.ts`
@@ -534,6 +535,7 @@ rtk git commit -m "feat(image): add deterministic stage service"
 ## Task 4: Minimal Dockerfile Patching Without Onboarding Runtime State
 
 **Files:**
+
 - Create: `src/lib/image/dockerfile-patch.ts`
 - Create: `src/lib/image/dockerfile-patch.test.ts`
 
@@ -614,6 +616,7 @@ rtk git commit -m "feat(image): split image-only dockerfile patching"
 ## Task 5: Build Service, Base-Image Override, and JSON Output
 
 **Files:**
+
 - Create: `src/lib/image/build.ts`
 - Create: `src/lib/image/build.test.ts`
 
@@ -762,6 +765,7 @@ rtk git commit -m "feat(image): add image build service"
 ## Task 6: End-to-End CLI JSON Contract and GitHub Actions Entry Point
 
 **Files:**
+
 - Create: `.github/workflows/image-build.yaml`
 - Modify: `src/commands/image/build.ts`
 - Modify: `src/commands/image/stage.ts`
@@ -890,6 +894,7 @@ rtk git commit -m "ci(image): add image build workflow"
 ## Task 7: Targeted Verification and Documentation Sanity
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-06-29-image-only-cli-design.md` only if implementation proved a wording mismatch
 
 - [ ] **Step 1: Run the image-focused test suite**
@@ -994,6 +999,7 @@ container image, not just a JSON metadata contract.
 ## Task 8: Stage Service Copies Real Build Context
 
 **Files:**
+
 - Modify: `src/lib/image/stage.ts`
 - Modify: `src/lib/image/stage.test.ts`
 - Modify: `src/lib/build-context.ts` (only if a helper needs to be exported)
@@ -1099,6 +1105,7 @@ git commit -m "feat(image): stage real build context"
 ## Task 9: Content Hash Over Real File Contents
 
 **Files:**
+
 - Modify: `src/lib/image/stage.ts`
 - Modify: `src/lib/image/stage.test.ts`
 
@@ -1155,6 +1162,7 @@ git commit -m "feat(image): hash staged context content"
 ## Task 10: Base Image Resolution via sandbox-base-image.ts
 
 **Files:**
+
 - Modify: `src/lib/image/build.ts`
 - Modify: `src/lib/image/build.test.ts`
 - Modify: `src/lib/sandbox-base-image.ts` (only if a helper needs to be exported)
@@ -1195,6 +1203,7 @@ git commit -m "feat(image): resolve default base image"
 ## Task 11: Real docker build and docker push
 
 **Files:**
+
 - Modify: `src/lib/image/build.ts`
 - Modify: `src/lib/image/build.test.ts`
 
@@ -1262,6 +1271,7 @@ git commit -m "feat(image): wire real docker build and push"
 ## Task 12: End-to-End Verification and Spec Sync
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-06-29-image-only-cli-design.md` (update Implementation Status to Tier 2 done)
 
 - [ ] **Step 1: Run the full image test suite**
@@ -1281,6 +1291,7 @@ docker image inspect local/openclaw:test
 ```
 
 Expected:
+
 - stage prints JSON with `contextPath` pointing to a non-empty directory
 - build prints JSON with a real `digest` (not null)
 - `docker image inspect` succeeds

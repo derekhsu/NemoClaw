@@ -118,6 +118,8 @@ COPY agents/hermes/managed_policy.py /usr/local/lib/nemoclaw/managed_policy.py
 COPY agents/hermes/patch-langfuse-credentials.mts /usr/local/lib/nemoclaw/patch-hermes-langfuse-credentials.mts
 COPY agents/hermes/seed-dashboard-config.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py
 COPY agents/hermes/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py
+COPY agents/hermes/api-runtime.sh /usr/local/bin/nemoclaw-api-runtime
+COPY agents/hermes/api-prefix-proxy.py /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py
 COPY agents/hermes/finalize-tirith-marker.py /usr/local/lib/nemoclaw/finalize-tirith-marker.py
 COPY agents/hermes/build-mcp-digest.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py
 COPY agents/hermes/mcp-config-transaction.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py
@@ -138,6 +140,9 @@ COPY agents/hermes/hermes-cli-adapter-v1.json /usr/local/share/nemoclaw/hermes-c
 # both the standard build and the protected --network none rebuild install the
 # reviewed union from immutable inputs rather than a reusable networked layer.
 FROM scratch AS hermes-managed-teams-common-wheels
+
+# Teams requires settings support that is absent from the Hermes base lockfile.
+ADD --chmod=0444 --checksum=sha256:fe2cea3413b9530d10f3a5875adffb17ada5c1e1bab0b2885546d7310415207c https://files.pythonhosted.org/packages/83/d6/887a1ff844e64aa823fb4905978d882a633cfe295c32eacad582b78a7d8b/pydantic_settings-2.11.0-py3-none-any.whl /pydantic_settings-2.11.0-py3-none-any.whl
 
 ADD --chmod=0444 --checksum=sha256:db16f714ec658b592929c6386a29792e90bb73840732f8ae65a198cda1fea96c https://files.pythonhosted.org/packages/3a/d4/3c4205258642035d160c09f598a302260776dcb6d5bdf659eea7c6066d5e/microsoft_teams_apps-2.0.13.4-py3-none-any.whl /microsoft_teams_apps-2.0.13.4-py3-none-any.whl
 ADD --chmod=0444 --checksum=sha256:0072ffe68863a4c62818a4e631a186f092a4f09dfda74d1d4713415bac5d202d https://files.pythonhosted.org/packages/f4/09/8efc1f9a7ee3ef87d2f394b39355d884e76f35d9871a72530d2a8deab325/microsoft_teams_api-2.0.15-py3-none-any.whl /microsoft_teams_api-2.0.15-py3-none-any.whl
@@ -205,6 +210,8 @@ ENV NODE_EXTRA_CA_CERTS=/usr/local/share/nemoclaw/corporate-ca.pem
 
 # Cross-stage root copies are accepted by Docker's legacy builder and create
 # one final-image layer while preserving metadata on existing parent paths.
+# The source is a dedicated scratch payload stage with reviewed destination paths.
+# hadolint ignore=DL3067
 COPY --from=hermes-npm-patch-payload / /
 
 # The final Hermes image owns the shipped dependency boundary independently of
@@ -326,12 +333,18 @@ RUN _hermes_certifi=$(/opt/hermes/.venv/bin/python -c 'import certifi; print(cer
 ENV HERMES_TELEGRAM_DISABLE_FALLBACK_IPS=1
 ENV HERMES_TUI_DIR="/opt/hermes/ui-tui"
 
+# The source is a dedicated scratch payload stage with reviewed destination paths.
+# hadolint ignore=DL3067
 COPY --from=hermes-agent-payload / /
 
 # The local file uploader is a fixed, fork-managed stdio MCP server. Its
 # lockfile is part of the image input, and `uv sync` occurs only during image
 # assembly; sandbox startup never installs or resolves Python packages.
+# The source is a dedicated scratch payload stage with reviewed destination paths.
+# hadolint ignore=DL3067
 COPY --from=hermes-local-uploader-payload / /
+# uv needs the temporary project directory; the installed environment has a fixed path.
+# hadolint ignore=DL3003
 RUN cd /opt/nemoclaw-sandbox-mcp-server \
     && UV_PROJECT_ENVIRONMENT=/sandbox/.venvs/sandbox-mcp-server uv sync --frozen --no-dev --no-editable --no-cache \
     && test -x /sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server \
@@ -363,6 +376,8 @@ RUN printf '%s  %s\n' \
     | sha256sum -c - \
     || { echo "ERROR: image-build-probes.py hash mismatch (update NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256)" >&2; exit 1; }
 
+# The source is a dedicated scratch payload stage with reviewed destination paths.
+# hadolint ignore=DL3067
 COPY --from=hermes-runtime-payload / /
 
 # Keep the root-owned managed-startup handoff in this image-only layer. The
@@ -397,10 +412,10 @@ RUN chmod -R a+rX /opt/nemoclaw-blueprint/
 # minimum supported Hermes sandbox base tag guarantees those artifacts and
 # test/sandbox-rlimit-hooks.test.ts covers that base.
 RUN chmod 755 /usr/local/bin/nemoclaw-start /usr/local/bin/nemoclaw-managed-startup-hold /usr/local/bin/nemoclaw-managed-bootstrap /usr/local/lib/nemoclaw/sandbox-init.sh /usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py /usr/local/lib/nemoclaw/patch-hermes-session-list-preview.py /usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.py /usr/local/lib/nemoclaw/patch-hermes-discord-recovery-permissions.py /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defaults.py /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py /usr/local/lib/nemoclaw/finalize-tirith-marker.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py \
-    && chown root:root /usr/local/bin/nemoclaw-gateway-control /usr/local/lib/nemoclaw/gateway-supervisor.sh /usr/local/lib/nemoclaw/state-dir-guard.py /usr/local/share/nemoclaw/state-lock-plan.json /usr/local/lib/nemoclaw/managed-gateway-control.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py /usr/local/lib/nemoclaw/hermes-cron-restore-control.py /usr/local/lib/nemoclaw/openshell-child-visible-credentials.v0.0.101.json \
-    && chmod 700 /usr/local/bin/nemoclaw-gateway-control /usr/local/lib/nemoclaw/hermes-cron-restore-control.py \
+    && chown root:root /usr/local/bin/nemoclaw-api-runtime /usr/local/bin/nemoclaw-gateway-control /usr/local/lib/nemoclaw/gateway-supervisor.sh /usr/local/lib/nemoclaw/state-dir-guard.py /usr/local/share/nemoclaw/state-lock-plan.json /usr/local/lib/nemoclaw/managed-gateway-control.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py /usr/local/lib/nemoclaw/hermes-cron-restore-control.py /usr/local/lib/nemoclaw/openshell-child-visible-credentials.v0.0.101.json /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py \
+    && chmod 700 /usr/local/bin/nemoclaw-api-runtime /usr/local/bin/nemoclaw-gateway-control /usr/local/lib/nemoclaw/hermes-cron-restore-control.py \
     && chmod 500 /usr/local/lib/nemoclaw/state-dir-guard.py /usr/local/lib/nemoclaw/managed-gateway-control.py \
-    && chmod 444 /usr/local/lib/nemoclaw/entrypoint-env-wrapper.sh /usr/local/share/nemoclaw/state-lock-plan.json /usr/local/lib/nemoclaw/gateway-supervisor.sh /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py /usr/local/lib/nemoclaw/managed_policy.py \
+    && chmod 444 /usr/local/lib/nemoclaw/entrypoint-env-wrapper.sh /usr/local/share/nemoclaw/state-lock-plan.json /usr/local/lib/nemoclaw/gateway-supervisor.sh /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py /usr/local/lib/nemoclaw/managed_policy.py /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py \
     && chmod 444 /usr/local/lib/nemoclaw/patch-hermes-langfuse-credentials.mts \
     && chmod 444 /usr/local/lib/nemoclaw/openshell-child-visible-credentials.v0.0.101.json \
     && if [ -d /usr/local/lib/nemoclaw/preloads ]; then \
@@ -608,7 +623,7 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=f4276e9833638b7a620176c88bd329d6b6d4948538a3227b727a1397146a0e0e
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=fbe133583426486ff64efc8f4c38082099e0f2b276367ceaf4550c3a20ec9675
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
-ARG NEMOCLAW_HERMES_VALIDATOR_SHA256=822c7e63d068c5d09f3291350771c1a42c9686f51bfa9bc9a1f41fbe15d163b1
+ARG NEMOCLAW_HERMES_VALIDATOR_SHA256=7e3c356447c01750594ab2c2be9711e1ba62ee9d6a38b25c49f60655d3dec24c
 ARG NEMOCLAW_HERMES_TIRITH_FINALIZER_SHA256=a1e6b1c53ab297569abb87c29d15c294d729e46005bfd022136b4c447a791819
 ARG NEMOCLAW_HERMES_CRON_RESTORE_CONTROLLER_SHA256=e8593cf1580bffa4663e91c079ba0ce31c3d26391f5b1718872701138ce250b0
 # hadolint ignore=DL4006
@@ -638,6 +653,8 @@ RUN printf '%s  %s\n' \
 # The wrapper's shebang pins `/usr/bin/python3 -I` (isolated mode); fail the
 # build if that absolute path is missing or non-executable so a base-image
 # upgrade that drops it cannot ship a wrapper that ENOEXECs at runtime.
+# The source is a dedicated scratch payload stage with reviewed destination paths.
+# hadolint ignore=DL3067
 COPY --from=hermes-wrapper-payload / /
 
 RUN test -x /usr/bin/python3 \
@@ -768,6 +785,7 @@ RUN unset SSL_CERT_FILE REQUESTS_CA_BUNDLE; \
 # disabled so this layer is independently reproducible without imported cache.
 # hadolint ignore=DL3059
 RUN --network=none --mount=from=hermes-managed-teams-wheels,target=/opt/nemoclaw-hermes-teams-wheels,ro \
+    set -eu; \
     if [ "$NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION" = "1" ]; then \
         UV_OFFLINE=true UV_FIND_LINKS=/opt/nemoclaw-hermes-teams-wheels \
         node --experimental-strip-types /src/lib/messaging/applier/build/messaging-build-applier.mts \
@@ -778,6 +796,8 @@ RUN --network=none --mount=from=hermes-managed-teams-wheels,target=/opt/nemoclaw
 
 WORKDIR /sandbox
 RUN test "$(id -u sandbox):$(id -g sandbox):$(pwd)" = "998:999:/sandbox"
+# The base image verifies the named runtime user IDs before this stage.
+# hadolint ignore=DL3066
 USER sandbox
 
 # Set up blueprint for local resolution
@@ -799,6 +819,8 @@ RUN HERMES_HOME=/sandbox/.hermes /usr/local/bin/hermes doctor --fix \
     fi \
     && rm -rf /sandbox/.cache
 
+# Root installs the generated policy outside the writable Hermes home.
+# hadolint ignore=DL3066
 USER root
 
 # Install the generated policy manifest outside the mutable Hermes home. Python
@@ -810,7 +832,7 @@ RUN install -o root -g root -m 0444 \
 
 # Fresh named profiles do not receive config.yaml. Patch the pinned Hermes
 # fallback readers from the generated manifest, then validate a real profile.
-ARG NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256=9431307a45a85a175a27e21144ea729692a1406d4cc89e83ca0c7d1fc699bcca
+ARG NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256=c20303e6d99fbf389422bf4e441bc865be8644b9b47eaf66f7b1a2c168807bc2
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256" /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defaults.py \
@@ -863,6 +885,8 @@ RUN set -eu; \
         /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py profile-policy
 
+# The base image verifies the named runtime user IDs before this stage.
+# hadolint ignore=DL3066
 USER sandbox
 
 # Prove that the installed dashboard seeder carries every reviewed policy value
@@ -910,7 +934,7 @@ ENV HERMES_ENVIRONMENT_HINT="You are running inside an NVIDIA OpenShell sandbox,
 # supplementary sandbox-group membership and create Hermes v0.14 runtime dirs
 # without being able to remove sticky-protected config files. Shields-up applies
 # 444 root:root + chattr +i.
-# hadolint ignore=DL3002
+# hadolint ignore=DL3002,DL3066
 USER root
 
 # Flatten stale published base images that still contain the old .hermes-data

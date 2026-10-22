@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Require maintainer edits for fork PRs
         env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
           HEAD_REPO_FORK: ${{ github.event.pull_request.head.repo.fork }}
           MAINTAINER_CAN_MODIFY: ${{ github.event.pull_request.maintainer_can_modify }}
         run: |
@@ -32,7 +34,7 @@ jobs:
           echo "head_repo_fork=${HEAD_REPO_FORK}"
           echo "maintainer_can_modify=${MAINTAINER_CAN_MODIFY}"
 
-          if [ "${HEAD_REPO_FORK}" = "true" ] && [ "${MAINTAINER_CAN_MODIFY}" != "true" ]; then
+          if [ "${HEAD_REPO}" != "${BASE_REPO}" ] && [ "${MAINTAINER_CAN_MODIFY}" != "true" ]; then
             echo "::error title=Maintainer edits required::Enable 'Allow edits by maintainers' on this pull request so maintainers can help resolve review feedback and CI issues."
             exit 1
           fi

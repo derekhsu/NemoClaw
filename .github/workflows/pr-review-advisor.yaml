@@ -332,7 +332,7 @@ jobs:
   publish:
     name: Publish PR review advisor
     needs: review
-    if: ${{ always() && github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base != null) && needs.review.result != 'cancelled' }}
+    if: ${{ always() && github.repository == 'NVIDIA/NemoClaw' && needs.review.result != 'skipped' && github.event_name == 'pull_request_target' && (github.event.action != 'edited' || github.event.changes.base != null) && needs.review.result != 'cancelled' }}
     # Publication is best-effort and must never hide the primary analysis
     # lane's required outcome in the review matrix above.
     continue-on-error: true

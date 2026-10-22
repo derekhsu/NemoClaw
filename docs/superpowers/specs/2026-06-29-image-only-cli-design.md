@@ -48,8 +48,6 @@ This spec is implemented in two tiers. Both tiers are complete on
   locally; not covered by unit tests)
 - GitHub Actions workflow has not been run against a real registry
 
-
-
 ## Summary
 
 Add a new `nemoclaw image ...` CLI surface that builds and optionally pushes

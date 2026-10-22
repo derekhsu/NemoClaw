@@ -22,12 +22,34 @@ on:
         required: true
         type: string
 
+      validate_candidate:
+        description: "Build and verify the source base and installed uploader before publication"
+        type: boolean
+        default: false
+      publish_candidate:
+        description: "Publish the validated candidate tag without updating latest"
+        type: boolean
+        default: false
+
 env:
   IMAGE_NAME: docker.io/derekhsu/openshell-hermes
   BASE_IMAGE_NAME: docker.io/derekhsu/hermes-sandbox-base
 
 jobs:
+  validate-candidate:
+    if: inputs.validate_candidate || inputs.publish_candidate
+    permissions:
+      contents: read
+    uses: ./.github/workflows/hermes-image-validation.yaml
+    with:
+      tag: ${{ inputs.tag }}
+      publish: ${{ inputs.publish_candidate }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
   build-platform:
+    if: ${{ !inputs.validate_candidate && !inputs.publish_candidate }}
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120

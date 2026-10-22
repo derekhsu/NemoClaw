@@ -541,6 +541,8 @@ describe("sandbox rlimit system hooks (#2173)", () => {
     const managedStartupHold = path.join(tmp, "nemoclaw-managed-startup-hold");
     const managedBootstrap = path.join(tmp, "nemoclaw-managed-bootstrap");
     const gatewayControl = path.join(tmp, "nemoclaw-gateway-control");
+    const apiRuntime = path.join(tmp, "nemoclaw-api-runtime");
+    const apiPrefixProxy = path.join(localLib, "hermes-api-prefix-proxy.py");
     const entrypointEnvWrapper = path.join(localLib, "entrypoint-env-wrapper.sh");
     const bashrc = path.join(tmp, "bash.bashrc");
     const expectedRlimitShim = rlimitShim(rlimitLib);
@@ -577,6 +579,8 @@ describe("sandbox rlimit system hooks (#2173)", () => {
       fs.writeFileSync(startBin, "#!/usr/bin/env bash\n");
       fs.writeFileSync(managedStartupHold, "#!/usr/bin/env bash\n");
       fs.writeFileSync(managedBootstrap, "#!/usr/bin/env bash\n");
+      fs.writeFileSync(apiRuntime, "# API runtime fixture\n");
+      fs.writeFileSync(apiPrefixProxy, "# API prefix proxy fixture\n");
       fs.writeFileSync(gatewayControl, "#!/usr/bin/env sh\n");
       fs.writeFileSync(entrypointEnvWrapper, "# entrypoint env wrapper fixture\n");
       fs.writeFileSync(bashrc, "# stale hermes bashrc\n");
@@ -590,6 +594,8 @@ describe("sandbox rlimit system hooks (#2173)", () => {
         .replaceAll("/usr/local/bin/nemoclaw-managed-startup-hold", managedStartupHold)
         .replaceAll("/usr/local/bin/nemoclaw-managed-bootstrap", managedBootstrap)
         .replaceAll("/usr/local/bin/nemoclaw-gateway-control", gatewayControl)
+        .replaceAll("/usr/local/bin/nemoclaw-api-runtime", apiRuntime)
+        .replaceAll("/usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py", apiPrefixProxy)
         .replaceAll("/usr/local/lib/nemoclaw/entrypoint-env-wrapper.sh", entrypointEnvWrapper)
         .replaceAll("/usr/local/lib/nemoclaw/sandbox-init.sh", initLib)
         .replaceAll("/usr/local/lib/nemoclaw/gateway-supervisor.sh", gatewaySupervisor)

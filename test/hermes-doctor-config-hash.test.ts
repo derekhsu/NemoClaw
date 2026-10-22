@@ -133,6 +133,8 @@ describe("Hermes doctor and config hash boundary", () => {
       fs.mkdirSync(profileDir, { recursive: true });
       for (const relativePath of [
         path.join(binDir, "nemoclaw-start"),
+        path.join(binDir, "nemoclaw-api-runtime"),
+        path.join(libDir, "hermes-api-prefix-proxy.py"),
         path.join(binDir, "nemoclaw-managed-startup-hold"),
         path.join(binDir, "nemoclaw-managed-bootstrap"),
         path.join(binDir, "nemoclaw-gateway-control"),
@@ -191,7 +193,7 @@ describe("Hermes doctor and config hash boundary", () => {
       expect(result.stderr).toBe("");
       expect(fs.readFileSync(chownLogPath, "utf-8")).toBe(
         [
-          `root:root ${path.join(binDir, "nemoclaw-gateway-control")} ${path.join(libDir, "gateway-supervisor.sh")} ${path.join(libDir, "state-dir-guard.py")} ${stateLockPlanPath} ${path.join(libDir, "managed-gateway-control.py")} ${buildMcpDigestPath} ${hermesCronRestoreControlPath} ${mcpCredentialBoundaryPath}`,
+          `root:root ${path.join(binDir, "nemoclaw-api-runtime")} ${path.join(binDir, "nemoclaw-gateway-control")} ${path.join(libDir, "gateway-supervisor.sh")} ${path.join(libDir, "state-dir-guard.py")} ${stateLockPlanPath} ${path.join(libDir, "managed-gateway-control.py")} ${buildMcpDigestPath} ${hermesCronRestoreControlPath} ${mcpCredentialBoundaryPath} ${path.join(libDir, "hermes-api-prefix-proxy.py")}`,
           `-R 0:0 ${preloadsDir}`,
           "",
         ].join("\n"),

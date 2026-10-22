@@ -46,8 +46,9 @@ class GatewayClient:
             raise GatewayError("Missing required environment variable: SANDBOX_ID")
         return cls(base_url=base_url, api_key=api_key, sandbox_id=sandbox_id)
 
-    def upload_file(self, file_path: str) -> dict[str, Any]:
+    def upload_file(self, file_path: str, description: str | None = None) -> dict[str, Any]:
         """Return a Gateway-issued signed download link for an existing file."""
+        del description
         path = Path(file_path)
         if not path.is_file():
             raise GatewayError(f"File not found: {file_path}")

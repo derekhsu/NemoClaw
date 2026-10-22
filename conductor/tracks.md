@@ -2,12 +2,16 @@
 
 ---
 
-## [~] Track: Hermes Managed Local File Uploader
+## [x] Track: Hermes Managed Local File Uploader
 
 *Link: [./tracks/hermes_stdio_uploader_20260909/](./tracks/hermes_stdio_uploader_20260909/)*
 
 Fork-specific managed Hermes image support for the fixed `sandbox-file-uploader`
 local stdio MCP server, with upgrade compatibility evidence.
+
+Completed and checkpointed on 2026-09-11 in ClawShell. See the track
+[verification record](./tracks/hermes_stdio_uploader_20260909/upgrade-verification.md)
+for the test results, sandbox evidence, and source commits.
 
 ---
 

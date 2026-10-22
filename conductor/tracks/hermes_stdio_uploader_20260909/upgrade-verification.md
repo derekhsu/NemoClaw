@@ -48,7 +48,43 @@ or the `sandbox-mcp-server` entry point changes without an explicit review.
 
 If any step fails, do not publish or reuse the rebuilt image.
 
-## 2026-09-10 live verification attempt
+## 2026-09-11 completed verification
+
+Status reconciled on 2026-10-22 from the completed ClawShell track
+`hermes_local_uploader_20260909`. This result supersedes the blocked attempt
+recorded below.
+
+- Image tag: `verify-20260911-1420`.
+- Image digest: `sha256:0f7a5d997935814913df6b5cf6fb1a25bd1bec04c3d55f9c3e157149fafd92aa`.
+- Sandbox: `hermes-p17-0911` (`sbx-299b6d58`).
+- Provisioning completed in approximately 42 seconds with zero diagnostics;
+  the gateway reported `running`.
+- The flow completed provisioning, `inference.local`, managed MCP registration,
+  a real LLM `upload_file` call, and signed-link download.
+- The link returned the exact artifact content five times with HTTP 200.
+  Attempts six and seven returned HTTP 429 after the configured use limit.
+- The Phase 4 checkpoint records 343 backend tests, 18 NemoClaw image and
+  transaction tests, and 23 sandbox-mcp-server tests passing.
+
+### Evidence sources
+
+The ClawShell repository retains these records:
+
+- `conductor/archive/hermes_local_uploader_20260909/verification.md` records
+  the image digest, sandbox, LLM call, and bounded-download results.
+- The Git note on checkpoint `bd589343` records the test counts and full flow.
+- Checkpoints `24ca5949`, `fe383b7a`, `0a978056`, and `bd589343` record
+  verification for Phases 1–4.
+- Commit `a2158c79` marks the track complete; `303452ad` archives it.
+
+The later image-source commits `7a38c12be` and `ff43f3d1c` remain on
+`feat/hermes-local-uploader-0911`. Their merge into `feat/image-only-cli` is
+separate from this historical acceptance. The 2026-09-23 image publication
+on `ff43f3d1c` succeeded for amd64, arm64, and the multi-architecture manifest
+in GitHub Actions run `35809052257`; that publication is not a new live
+sandbox acceptance result.
+
+## 2026-09-10 live verification attempt (superseded)
 
 The approved local build completed successfully as
 `nemoclaw-hermes-local-uploader:verify-20260910` (manifest digest

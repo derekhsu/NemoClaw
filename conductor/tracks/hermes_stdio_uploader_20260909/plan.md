@@ -2,7 +2,7 @@
 
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Spec:** [spec.md](spec.md)
-**Status:** [~] In Progress
+**Status:** [x] Complete — verified and checkpointed on 2026-09-11
 
 ## Phase 1: Define the Managed Local MCP Contract [checkpoint]
 
@@ -32,20 +32,33 @@
 - [x] Task 3.3: Run focused integration tests without live credentials. `cdae606`
 - [x] Task: Conductor - User Manual Verification 'Runtime File Delivery' (Protocol in workflow.md)
 
-## Phase 4: Upgrade Compatibility and Release Evidence
+## Phase 4: Upgrade Compatibility and Release Evidence [checkpoint: ClawShell bd589343]
 
 - [x] Task 4.1: Add a revision-pinning and patch-application contract that
   identifies changes to the Hermes helper or image layout during upgrades. `f10d07b`
 - [x] Task 4.2: Document the required upstream rebase, image build, focused
   contracts, and rebuilt-sandbox uploader verification sequence. `f10d07b`
-- [~] Task 4.3: With explicit approval, build the image and verify a rebuilt
-  sandbox returns a valid signed download link.
-- [ ] Task: Conductor - User Manual Verification 'Upgrade Compatibility and Release Evidence' (Protocol in workflow.md)
+- [x] Task 4.3: With explicit approval, build the image and verify a rebuilt
+  sandbox returns a valid signed download link. ClawShell `bd589343`
+- [x] Task: Conductor - User Manual Verification 'Upgrade Compatibility and Release Evidence' (Protocol in workflow.md) ClawShell `bd589343`
 
 ## Final Verification
 
-- [ ] All acceptance criteria in `spec.md` are met.
-- [ ] Focused deterministic tests and image-contract tests pass.
-- [ ] The tracked upgrade procedure has evidence for the selected upstream
+- [x] All acceptance criteria in `spec.md` are met.
+- [x] Focused deterministic tests and image-contract tests pass.
+- [x] The tracked upgrade procedure has evidence for the selected upstream
   revision.
-- [ ] The feature remains documented as fork-specific.
+- [x] The feature remains documented as fork-specific.
+
+## Completion reconciliation (2026-10-22)
+
+The 2026-09-10 blocked attempt was superseded by the 2026-09-11
+verification in ClawShell. Phase 4 checkpoint `bd589343` records 343 backend,
+18 NemoClaw image/transaction, and 23 sandbox-mcp-server tests passing.
+The new sandbox `hermes-p17-0911` completed the real LLM uploader flow,
+including five successful downloads and rejection after the use limit.
+
+ClawShell commit `a2158c79` marked its track complete, and `303452ad`
+archived it. The [verification record](upgrade-verification.md#2026-09-11-completed-verification)
+contains the evidence locations. These final checklist entries refer to that
+historical acceptance, rather than a new test run on the current branch.

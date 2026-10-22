@@ -3,7 +3,7 @@
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Type:** Feature
 **Created:** 2026-09-09
-**Status:** New
+**Status:** Complete — historical acceptance verified on 2026-09-11
 
 ## Summary
 
@@ -23,19 +23,19 @@ that I can access its contents through a signed download link.
 
 ## Acceptance Criteria
 
-- [ ] The managed Hermes transaction accepts only the fixed uploader command,
+- [x] The managed Hermes transaction accepts only the fixed uploader command,
   its reviewed arguments, and its reviewed environment references.
-- [ ] It rejects an arbitrary command, argument, environment key, or literal
+- [x] It rejects an arbitrary command, argument, environment key, or literal
   credential before changing the Hermes configuration.
-- [ ] The image contains the fixed uploader executable and the managed
+- [x] The image contains the fixed uploader executable and the managed
   transaction registers it atomically with a confirmed gateway reload.
-- [ ] A gateway-enabled sandbox can list `sandbox-file-uploader` and call
+- [x] A gateway-enabled sandbox can list `sandbox-file-uploader` and call
   `upload_file` for an allowed workspace path.
-- [ ] The result is a short-lived signed download link, with existing Gateway
+- [x] The result is a short-lived signed download link, with existing Gateway
   ownership, path, expiry, and download-use controls preserved.
-- [ ] Rebuild, registration, or probe failure leaves the sandbox usable and
+- [x] Rebuild, registration, or probe failure leaves the sandbox usable and
   exposes a stable credential-free diagnostic.
-- [ ] An upstream NemoClaw or Hermes update is not accepted until the patch
+- [x] An upstream NemoClaw or Hermes update is not accepted until the patch
   rebases, the image builds, focused contracts pass, and a rebuilt sandbox
   proves the uploader flow.
 
@@ -60,3 +60,11 @@ Extend the image helper with one explicit local-uploader mutation mode. The
 helper owns the fixed command and configuration shape; ClawShell supplies only
 the reviewed runtime references. Package the uploader into the image and test
 the helper, layout, integrity, and upgrade contract as one capability.
+
+## Acceptance evidence
+
+The completed ClawShell track and Phase 4 checkpoint `bd589343` record
+acceptance of this fork-specific image and helper capability. See
+[upgrade verification](upgrade-verification.md#2026-09-11-completed-verification)
+for the tests and live sandbox results. This records the 2026-09-11 revision
+and environment; later revisions require their own upgrade verification.

@@ -106,6 +106,97 @@ describe("Hermes cron restore drain source patch", () => {
     }
   });
 
+  it("keeps untrusted state roots drained after directory replacement", () => {
+    const fixture = createFixture();
+    try {
+      expect(runPatcher(fixture).status).toBe(0);
+      const result = spawnSync(
+        process.env.PYTHON || "python3",
+        [
+          "-I",
+          "-c",
+          String.raw`
+import ast, json, os, stat, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+source = ast.parse(Path(sys.argv[1]).read_text())
+function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "nemoclaw_cron_restore_drain_requested")
+state_root = Path(sys.argv[2]) / "state"
+state_root.mkdir(mode=0o755)
+marker = state_root / "hermes-cron-restore-drain.json"
+namespace = {"_NEMOCLAW_CRON_RESTORE_DRAIN_PATH": marker}
+exec(compile(ast.Module(body=[function], type_ignores=[]), "patched-drain", "exec"), namespace)
+predicate = namespace["nemoclaw_cron_restore_drain_requested"]
+results = []
+for euid, uid, gid, mode, present in [
+    (1000, 1000, 1000, 0o755, False),
+    (1000, 1000, 1000, 0o755, True),
+    (0, 0, 0, 0o755, False),
+    (0, 1000, 1000, 0o755, False),
+    (1000, 1001, 1001, 0o755, False),
+    (0, 0, 1000, 0o755, False),
+    (1000, 0, 0, 0o755, False),
+    (1000, 1000, 1000, 0o775, False),
+    (1000, 1000, 1000, 0o777, False),
+]:
+    if present:
+        marker.touch()
+    else:
+        marker.unlink(missing_ok=True)
+    metadata = SimpleNamespace(st_mode=stat.S_IFDIR | mode, st_uid=uid, st_gid=gid)
+    with patch("os.geteuid", return_value=euid), patch("os.fstat", return_value=metadata):
+        results.append(predicate())
+state_root.rmdir()
+state_root.symlink_to(Path(sys.argv[2]), target_is_directory=True)
+results.append(predicate())
+state_root.unlink()
+state_root.mkdir(mode=0o755)
+marker.touch()
+original_inode = state_root.stat().st_ino
+original_fstat = os.fstat
+
+def identity(fd):
+    metadata = original_fstat(fd)
+    uid = 0 if metadata.st_ino == original_inode else 1000
+    return SimpleNamespace(st_mode=metadata.st_mode, st_uid=uid, st_gid=0)
+
+with patch("os.geteuid", return_value=1000), patch("os.fstat", side_effect=identity):
+    results.append(predicate())
+    held = state_root.with_name("held-root")
+    state_root.rename(held)
+    state_root.mkdir(mode=0o755)
+    assert (held / marker.name).exists()
+    assert not marker.exists()
+    results.append(predicate())
+print(json.dumps(results))
+`,
+          fixture.drainControl,
+          fixture.root,
+        ],
+        { encoding: "utf8", timeout: 5000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+      ]);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a partially applied two-file patch", () => {
     const fixture = createFixture();
     try {

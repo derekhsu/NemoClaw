@@ -54,19 +54,18 @@ Status reconciled on 2026-10-22 from the completed ClawShell track
 `hermes_local_uploader_20260909`. This result supersedes the blocked attempt
 recorded below.
 
-The acceptance is bound to the `feat/hermes-local-uploader-0911` lineage, not
-to `feat/image-only-cli`: on this branch the transaction helper has no
-`--server` payload contract, the drain predicate does not accept a
-runtime-user-owned state root, and `test/hermes-local-uploader-transaction.test.ts`
-does not exist.
+The historical acceptance is bound to the `feat/hermes-local-uploader-0911`
+lineage. PR #7 integrates its remaining source changes by squash while
+retaining the newer transaction and image contracts. The record below remains
+evidence for the 2026-09-11 source and environment.
 
 - NemoClaw source revision: the image was built at 14:20 on 2026-09-11 from
   fork tip `85411e285` plus the equivalent working-tree delta; that delta
   was committed later the same day (16:46 +0800) as `7a38c12be`, a port of
   the verified source rather than the build source itself. The scoped
-  sandbox-id claim fix `ff43f3d1c` sits on top. Both commits live only on
-  `feat/hermes-local-uploader-0911` and are not merged into
-  `feat/image-only-cli`.
+  sandbox-id claim fix `ff43f3d1c` sits on top. Both commits identify the
+  source branch for PR #7's squash integration; they do not become Git
+  ancestors of the PR branch.
 - Image tag: `verify-20260911-1420`.
 - Image digest: `sha256:0f7a5d997935814913df6b5cf6fb1a25bd1bec04c3d55f9c3e157149fafd92aa`.
 - Sandbox: `hermes-p17-0911` (`sbx-299b6d58`).
@@ -123,6 +122,88 @@ arm64, and the multi-architecture manifest in GitHub Actions run
 its own, so the publication departs from the "record the successful
 signed-link evidence before publishing" step above; a live verification of
 the published image remains a follow-up.
+
+## 2026-10-22 source integration in PR #7
+
+PR #7 integrates the remaining changes from `feat/hermes-local-uploader-0911`
+by squash. The source commits are `7a38c12be` and `ff43f3d1c`; their Git
+history is not merged into the PR branch.
+
+The integration preserves the Hermes 0.20.6 version and these current
+contracts:
+
+- `add-local-uploader` retains its stricter payload validation, canonical
+  server configuration, and scoped sandbox-id support.
+- `inspect-local-uploader` remains the read-only verification action. The
+  older `probe --server` interface is not restored.
+- API-profile and managed-default protections remain in place. The integration
+  does not register the local uploader in the restricted API profile.
+- The current image workflow retains its source-base build and installed
+  uploader validation steps.
+
+The integrated image changes assert that config-hash files are nonempty,
+check the MCP state marker, and use `root:root 0755` for the Hermes state root.
+The current drain predicate still requires a root-owned state directory, and
+the original Hermes 0.20.6 patcher and output hash pins remain unchanged.
+
+The older runtime-user ownership relaxation is intentionally excluded. A
+sandbox user can rename the root-owned `.nemoclaw` directory beneath writable
+`/sandbox`, replace it with a runtime-user-owned directory, and omit the drain
+marker. Accepting that replacement would resume dispatch while containment is
+active. The current root-only predicate rejects the replacement.
+
+The existing transaction contracts cover the older branch's private-function
+transaction assertions; the obsolete test is not retained as a second
+implementation contract.
+
+### Integration Validation
+
+On 2026-10-22, the integration run passed 12 test files and 135 tests.
+The run used a temporary Python environment with PyYAML, selected through
+`PATH=/private/tmp/nemoclaw-pr7-validation-20261022/bin:$PATH`.
+
+```sh
+./node_modules/.bin/vitest run --project integration \
+  test/hermes-cron-restore-drain-patch.test.ts \
+  test/hermes-final-image-layout.test.ts \
+  test/hermes-local-uploader-contract.test.ts \
+  test/hermes-local-uploader-image-contract.test.ts \
+  test/hermes-local-uploader-inspection.test.ts \
+  test/hermes-local-uploader-upgrade-contract.test.ts \
+  test/hermes-mcp-config-transaction.test.ts \
+  test/hermes-mcp-startup-probe.test.ts \
+  test/hermes-api-profile-guard.test.ts \
+  test/hermes-default-mcp-scope.test.ts \
+  test/hermes-managed-default-guard.test.ts \
+  test/hermes-image-validation-workflow.test.ts \
+  --coverage=false
+```
+
+The new drain containment regression rejects runtime-user ownership and a
+replacement state directory. It failed against the historical unsafe
+predicate and passed against the retained root-only predicate. The test
+performs the directory rename and path lookup, with simulated ownership to
+avoid privileged test execution. Its cases also cover root group restrictions,
+unsafe modes, a present drain marker, and symlink rejection. Existing tests
+cover canonical uploader payloads, scoped sandbox IDs, read-only inspection,
+and the current API-profile and default-profile protections.
+
+`hadolint agents/hermes/Dockerfile` and `git diff --check` passed. Independent
+security review passed all nine repository categories. The retained patch
+applied to the pinned Hermes source extracted from the existing local
+`nemoclaw-hermes-sandbox-base:0.20.6` image; its original output digest was
+preserved. The temporary extraction container was removed and its absence
+confirmed.
+This validation did not build the complete integrated image or run a live
+ClawShell sandbox.
+
+### Remaining Acceptance
+
+The 2026-09-11 live result does not validate the integrated Hermes 0.20.6
+image. Build that image and verify the real LLM uploader flow in a new
+ClawShell-managed sandbox, then record its source commit, image digest,
+sandbox identifier, and signed-download result. This gate remains open.
+Live acceptance of the image published from `ff43f3d1c` also remains open.
 
 ## 2026-09-10 live verification attempt (superseded)
 

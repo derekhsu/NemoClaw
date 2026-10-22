@@ -10,8 +10,9 @@ Fork-specific managed Hermes image support for the fixed `sandbox-file-uploader`
 local stdio MCP server, with upgrade compatibility evidence.
 
 Accepted on 2026-09-11 on the `feat/hermes-local-uploader-0911` lineage in
-ClawShell; that verified delta is not merged into `feat/image-only-cli`, so
-completion on this branch remains pending. See the track
+ClawShell. PR #7 integrates the remaining source changes by squash while
+retaining the current image and transaction contracts. Live acceptance of
+the integrated image remains pending. See the track
 [verification record](./tracks/hermes_stdio_uploader_20260909/upgrade-verification.md)
 for the test results, sandbox evidence, and source commits.
 

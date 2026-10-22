@@ -459,7 +459,7 @@ describe("Hermes final image layout", () => {
       "/usr/local/lib/nemoclaw/managed-bootstrap-trampoline.sh 'root:root 444'",
       "/usr/local/bin/nemoclaw-gateway-control 'root:root 700'",
       "/usr/local/lib/nemoclaw/hermes-cron-restore-control.py 'root:root 700'",
-      "/sandbox/.nemoclaw 'root:root 1755'",
+      "/sandbox/.nemoclaw 'root:root 755'",
       "/usr/local/share/nemoclaw/state-lock-plan.json 'root:root 444'",
       "/usr/local/lib/nemoclaw/preloads/sandbox-safety-net.js 'root:root 444'",
       "/usr/local/lib/nemoclaw/hermes-wrapper.py 'root:root 755'",
@@ -503,7 +503,7 @@ describe("Hermes final image layout", () => {
     expect(finalStage).toContain("&& check_absent /sandbox/.cache \\");
     expect(finalStage).toContain("&& check_absent /sandbox/.hermes/managed-policy.json \\");
     expect(finalStage).toContain("RUN chown root:root /sandbox/.nemoclaw \\");
-    expect(finalStage).toContain("&& chmod 1755 /sandbox/.nemoclaw \\");
+    expect(finalStage).toContain("&& chmod 755 /sandbox/.nemoclaw \\");
     expect(finalStage).toContain("&& chown sandbox:sandbox /sandbox/.nemoclaw/config.json");
   });
 

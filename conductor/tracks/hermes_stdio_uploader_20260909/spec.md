@@ -3,8 +3,8 @@
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Type:** Feature
 **Created:** 2026-09-09
-**Status:** In Progress — historical acceptance verified on 2026-09-11 on
-`feat/hermes-local-uploader-0911`, not yet merged into `feat/image-only-cli`
+**Status:** In Progress — source integration in PR #7; live acceptance
+of the integrated image remains pending
 
 ## Summary
 
@@ -25,9 +25,9 @@ that I can access its contents through a signed download link.
 ## Acceptance Criteria
 
 Checked items record the 2026-09-11 acceptance on the
-`feat/hermes-local-uploader-0911` lineage. That verified delta is not merged
-into `feat/image-only-cli`, so these criteria are not yet demonstrated on
-this branch.
+`feat/hermes-local-uploader-0911` lineage. PR #7 integrates the remaining
+source changes by squash. These historical checks do not establish live
+acceptance of the integrated image.
 
 - [x] The managed Hermes transaction accepts only the fixed uploader command,
   its reviewed arguments, and its reviewed environment references.
@@ -74,5 +74,6 @@ acceptance of this fork-specific image and helper capability on the
 `feat/hermes-local-uploader-0911` lineage. See
 [upgrade verification](upgrade-verification.md#2026-09-11-verified-acceptance-on-the-uploader-0911-lineage)
 for the tests and live sandbox results. This records the 2026-09-11 revision
-and environment; the `feat/image-only-cli` implementation requires its own
-merge or upgrade verification.
+and environment. The [integration record](upgrade-verification.md#2026-10-22-source-integration-in-pr-7)
+identifies the retained current contracts and the live acceptance that remains
+for the integrated image.

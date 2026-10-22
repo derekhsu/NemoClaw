@@ -2,9 +2,8 @@
 
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Spec:** [spec.md](spec.md)
-**Status:** [~] In Progress — verified and checkpointed on 2026-09-11 on
-`feat/hermes-local-uploader-0911`; the verified delta is not merged into
-`feat/image-only-cli`
+**Status:** [~] In Progress — source integration in PR #7; live acceptance
+of the integrated image remains pending
 
 ## Phase 1: Define the Managed Local MCP Contract [checkpoint]
 
@@ -44,20 +43,32 @@
   sandbox returns a valid signed download link. ClawShell `bd589343`
 - [x] Task: Conductor - User Manual Verification 'Upgrade Compatibility and Release Evidence' (Protocol in workflow.md) ClawShell `bd589343`
 
-## Final Verification
+## Historical Verification
 
 - [x] All acceptance criteria in `spec.md` are met on the
   `feat/hermes-local-uploader-0911` lineage.
-- [x] Focused deterministic tests and image-contract tests pass.
+- [x] Focused deterministic tests and image-contract tests passed for the
+  historical 2026-09-11 source.
 - [x] The tracked upgrade procedure has evidence for the selected upstream
   revision.
 - [x] The feature remains documented as fork-specific.
 
-## Remaining work
+## Source Integration and Remaining Work
 
-- [ ] Merge `feat/hermes-local-uploader-0911` into `feat/image-only-cli`, or
-  verify this branch's implementation in a live sandbox.
+- [x] Integrate the missing changes from `7a38c12be` and `ff43f3d1c` by
+  squash in PR #7, retaining current transaction and image protections.
+- [x] Run the current integration contracts: 12 files and 135 tests passed
+  on 2026-10-22, including the drain containment regression and API/default
+  protection tests. See the
+  [validation record](upgrade-verification.md#integration-validation).
+- [ ] Build the integrated image and verify its uploader flow in a new
+  ClawShell-managed sandbox; record the source commit, image digest, sandbox
+  identifier, and signed-download result.
 - [ ] Verify the image published from `ff43f3d1c` in a live sandbox.
+
+The source branch does not become a Git ancestor through squash integration.
+The [integration record](upgrade-verification.md#2026-10-22-source-integration-in-pr-7)
+identifies the preserved behavior and the acceptance boundary.
 
 ## Acceptance reconciliation (2026-10-22)
 
@@ -72,6 +83,5 @@ archived it to `conductor/archive/hermes_local_uploader_20260909/` in the
 ClawShell repository; checkpoint `bd589343` and its git note live there too.
 The [verification record](upgrade-verification.md#2026-09-11-verified-acceptance-on-the-uploader-0911-lineage)
 contains the evidence locations. These final checklist entries refer to that
-historical acceptance on the `feat/hermes-local-uploader-0911` lineage —
-commits `7a38c12be` and `ff43f3d1c` are unmerged here — rather than a test
-run on the current branch.
+historical acceptance on the `feat/hermes-local-uploader-0911` lineage.
+They do not establish live acceptance of the source integrated in PR #7.

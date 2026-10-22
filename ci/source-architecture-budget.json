@@ -50,7 +50,8 @@
       "src/lib/onboard.ts": 211,
       "src/lib/onboard/machine/handlers/sandbox.ts": 21,
       "src/lib/sandbox/config.ts": 22,
-      "src/lib/shields/index.ts": 23
+      "src/lib/shields/index.ts": 23,
+      "src/lib/state/sandbox.ts": 21
     }
   },
   "allowedCycles": [],
@@ -60,6 +61,6 @@
     "src/lib/actions/sandbox": 182,
     "src/lib/state": 37,
     "src/lib/inference": 63,
-    "scripts": 47
+    "scripts": 46
   }
 }

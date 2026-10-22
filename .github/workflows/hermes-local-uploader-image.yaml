@@ -81,6 +81,12 @@ jobs:
       # pinned upstream digest does not track this branch. Build it per-arch in
       # the same job and feed it to the final build through BASE_IMAGE so the
       # source/patch SHA contract stays coherent.
+      - name: Guard production build args
+        run: |
+          set -euo pipefail
+          scripts/check-production-build-args.sh
+          scripts/check-production-build-args.sh --build-arg "BASE_IMAGE=${{ env.BASE_IMAGE_NAME }}:ci-${{ github.run_id }}-${{ matrix.arch }}"
+
       - name: Build and push ${{ matrix.platform }} base image
         id: base
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

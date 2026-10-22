@@ -89,7 +89,7 @@ export function readConfigShieldsFiles(config: ManifestRecord | undefined): stri
 }
 
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
-const STATE_FILE_FIELDS = new Set(["path", "strategy", "restore"]);
+const STATE_FILE_FIELDS = new Set(["path", "strategy", "sanitize", "restore"]);
 
 function assertStateFilePath(value: string, field: string): void {
   if (value.length === 0) {
@@ -182,10 +182,22 @@ export function readStateFiles(record: ManifestRecord): AgentStateFile[] | undef
     if (rawStrategy !== "copy" && rawStrategy !== "sqlite_backup") {
       throw new Error(`Agent manifest field '${field}.strategy' must be copy or sqlite_backup`);
     }
+    const sanitize = readString(entry, "sanitize");
+    if (sanitize !== undefined && sanitize !== "machine-authority") {
+      throw new Error(`Agent manifest field '${field}.sanitize' must be machine-authority`);
+    }
+    if (sanitize !== undefined && rawStrategy !== "sqlite_backup") {
+      throw new Error(
+        `Agent manifest field '${field}.sanitize' requires the sqlite_backup strategy`,
+      );
+    }
     const restore = readStateFileRestore(entry, index, rawStrategy);
-    return restore
-      ? { path: statePath, strategy: rawStrategy, restore }
-      : { path: statePath, strategy: rawStrategy };
+    return {
+      path: statePath,
+      strategy: rawStrategy,
+      ...(sanitize !== undefined ? { sanitize } : {}),
+      ...(restore !== undefined ? { restore } : {}),
+    };
   });
 }
 

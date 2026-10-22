@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import path from "node:path";
-
+import {
+  CREDENTIAL_SENSITIVE_BASENAMES,
+  isSensitiveFile,
+  sanitizeConfigFileContent,
+  sanitizeEnvFileContent,
+} from "./credential-filter";
 import {
   applyDescriptorSnapshotActions,
   decodeDescriptorSnapshotContent,
@@ -10,14 +15,7 @@ import {
   type SnapshotSanitizationAction,
   type SnapshotScannedFile,
   scanDescriptorSnapshot,
-} from "../../../nemoclaw/dist/shared/snapshot-sanitizer-boundary.cjs";
-
-import {
-  CREDENTIAL_SENSITIVE_BASENAMES,
-  isSensitiveFile,
-  sanitizeConfigFileContent,
-  sanitizeEnvFileContent,
-} from "./credential-filter";
+} from "./snapshot-sanitizer-boundary.js";
 
 const MAX_SANITIZATION_PASSES = 3;
 

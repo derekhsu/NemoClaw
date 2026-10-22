@@ -184,6 +184,10 @@ function stageLegacySandboxBuildContext(
     { recursive: true },
   );
   fs.copyFileSync(
+    path.join(rootDir, "src", "lib", "extra-agents-validation.ts"),
+    path.join(buildCtx, "src", "lib", "extra-agents-validation.ts"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "src", "lib", "tool-disclosure.ts"),
     path.join(buildCtx, "src", "lib", "tool-disclosure.ts"),
   );
@@ -347,6 +351,10 @@ function stageOptimizedSandboxBuildContext(
     path.join(stagedScriptsDir, "lib", "openclaw_device_approval_policy.py"),
   );
   fs.copyFileSync(
+    path.join(rootDir, "scripts", "lib", "openclaw_pairing_state.py"),
+    path.join(stagedScriptsDir, "lib", "openclaw_pairing_state.py"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "scripts", "lib", "clean_runtime_shell_env_shim.py"),
     path.join(stagedScriptsDir, "lib", "clean_runtime_shell_env_shim.py"),
   );
@@ -361,6 +369,10 @@ function stageOptimizedSandboxBuildContext(
     { recursive: true },
   );
   fs.copyFileSync(
+    path.join(rootDir, "src", "lib", "extra-agents-validation.ts"),
+    path.join(buildCtx, "src", "lib", "extra-agents-validation.ts"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "src", "lib", "tool-disclosure.ts"),
     path.join(buildCtx, "src", "lib", "tool-disclosure.ts"),
   );
@@ -371,8 +383,12 @@ function stageOptimizedSandboxBuildContext(
     path.join(stagedScriptsDir, "patch-openclaw-tool-catalog.mts"),
   );
   fs.copyFileSync(
-    path.join(rootDir, "scripts", "patch-openclaw-chat-send.mts"),
-    path.join(stagedScriptsDir, "patch-openclaw-chat-send.mts"),
+    path.join(rootDir, "scripts", "lib", "patch-openclaw-npm12-pack-json.mts"),
+    path.join(stagedScriptsDir, "lib", "patch-openclaw-npm12-pack-json.mts"),
+  );
+  fs.copyFileSync(
+    path.join(rootDir, "scripts", "lib", "patch-openclaw-container-restart.mts"),
+    path.join(stagedScriptsDir, "lib", "patch-openclaw-container-restart.mts"),
   );
   // Dockerfile copies this OpenClaw MCP patch into the optimized build context.
   fs.copyFileSync(
@@ -398,6 +414,10 @@ function stageOptimizedSandboxBuildContext(
   fs.copyFileSync(
     path.join(rootDir, "scripts", "patch-openclaw-device-self-approval.mts"),
     path.join(stagedScriptsDir, "patch-openclaw-device-self-approval.mts"),
+  );
+  fs.copyFileSync(
+    path.join(rootDir, "scripts", "lib", "patch-openclaw-secondary-main-session-delete.mts"),
+    path.join(stagedScriptsDir, "lib", "patch-openclaw-secondary-main-session-delete.mts"),
   );
   fs.mkdirSync(path.join(stagedScriptsDir, "openclaw"), { recursive: true });
   fs.copyFileSync(

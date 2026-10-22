@@ -18,3 +18,16 @@ local stdio MCP server, with upgrade compatibility evidence.
 Fork-specific guard support for the ClawShell-managed Hermes `api` profile.
 The image must protect the profile's config and credential before ClawShell
 applies inference.local through a profile-scoped transaction.
+
+---
+
+## [x] Track: OpenClaw Exec Approvals SQLite State
+
+*Link: [./tracks/exec_approvals_sqlite_20261019/](./tracks/exec_approvals_sqlite_20261019/)*
+
+Repair fork issue #3 by stopping legacy exec approvals empty-file creation for
+OpenClaw 2026.9.2. Preserve existing policy and SQLite state, and verify fresh
+sandbox startup.
+
+Implementation and live acceptance completed; signed source commit `7fa6bb8b5`.
+Existing unrelated fixture and hook failures remain tracked in fork issue #4.

@@ -103,6 +103,7 @@ export type GatewayRestartDeps = {
   getSessionAgent: typeof agentRuntime.getSessionAgent;
   getSandbox: SandboxAgentLookup;
   resolveSandboxDashboardPort: (sandboxName: string) => number;
+  buildOpenClawReadinessProbeCommand: (sandboxName: string) => string;
   requestGatewaySupervisorAction: SupervisorAction;
   executeSandboxExecCommand: SandboxExec;
   waitForRecoveredSandboxGateway: (
@@ -111,6 +112,8 @@ export type GatewayRestartDeps = {
       quiet?: boolean;
       timeoutSeconds?: number;
       initialManagedHealthPassed?: boolean;
+      managedProbeImpl?: (sandboxName: string) => boolean | null;
+      probeImpl?: (sandboxName: string) => boolean | null;
     },
   ) => boolean;
   ensureSandboxPortForward: (sandboxName: string) => boolean;
@@ -327,6 +330,26 @@ type RestartAuxiliaryRecoveryResult = {
   recovered: boolean | null;
 };
 
+function openClawRestartReady(result: GatewayRestartCommandResult | null): boolean | null {
+  if (result === null) return null;
+  const output = result.stdout.trimEnd();
+  const separator = output.lastIndexOf("\n");
+  if (result.status !== 0 || separator < 0 || output.slice(separator + 1).trim() !== "200") {
+    return false;
+  }
+  try {
+    const document: unknown = JSON.parse(output.slice(0, separator));
+    return (
+      document !== null &&
+      typeof document === "object" &&
+      "ready" in document &&
+      document.ready === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function failedAuxiliaryRecoveryDetail(results: RestartAuxiliaryRecoveryResult[]): string | null {
   const failed = results
     .filter((result) => result.recovered === false)
@@ -412,10 +435,27 @@ export function restartSandboxGatewayWithDeps(
   if (
     !deps.waitForRecoveredSandboxGateway(sandboxName, {
       quiet,
-      initialManagedHealthPassed: true,
+      // The supervisor's restart marker proves liveness, but OpenClaw's
+      // liveness endpoint stays green while its work-admission fence is
+      // closed. Poll /readyz — the same admission fence user requests hit —
+      // for the full wait window instead of trusting the marker.
+      initialManagedHealthPassed: agentName !== "openclaw",
+      ...(agentName === "openclaw"
+        ? {
+            managedProbeImpl: () => null,
+            probeImpl: (name: string) =>
+              openClawRestartReady(
+                deps.executeSandboxExecCommand(
+                  name,
+                  deps.buildOpenClawReadinessProbeCommand(name),
+                  10_000,
+                ),
+              ),
+          }
+        : {}),
     })
   ) {
-    const detail = "gateway process restarted but health did not pass before timeout";
+    const detail = `gateway process restarted but ${agentName === "openclaw" ? "readiness" : "health"} did not pass before timeout`;
     printGatewayRestartFailure(sandboxName, "health timeout", detail);
     deps.printGatewayWedgeDiagnostics(sandboxName, deps.executeSandboxExecCommand);
     return { ok: false, failureLayer: "health timeout", detail };

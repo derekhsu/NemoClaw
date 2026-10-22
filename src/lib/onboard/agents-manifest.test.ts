@@ -199,7 +199,7 @@ describe("loadAgentsManifest", () => {
   });
 
   it("accepts benign field names that are not credential-shaped", () => {
-    for (const key of ["model", "workspace", "agentDir", "allowAgents", "maxSpawnDepth"]) {
+    for (const key of ["model", "workspace", "agentDir", "allowAgents"]) {
       const file = manifestPath(
         `benign-${key}.yaml`,
         [
@@ -212,6 +212,16 @@ describe("loadAgentsManifest", () => {
       );
       expect(() => loadAgentsManifest(file)).not.toThrow();
     }
+  });
+
+  it("rejects per-agent maxSpawnDepth before the build", () => {
+    const file = manifestPath(
+      "per-agent-max-spawn-depth.yaml",
+      ["agents:", "  - id: alpha", "    subagents:", "      maxSpawnDepth: 2", ""].join("\n"),
+    );
+    expect(() => loadAgentsManifest(file)).toThrow(
+      /NEMOCLAW_EXTRA_AGENTS_JSON\.agents\[0\]\.subagents\.maxSpawnDepth is not accepted per-agent.*defaults\.subagents\.maxSpawnDepth/,
+    );
   });
 });
 

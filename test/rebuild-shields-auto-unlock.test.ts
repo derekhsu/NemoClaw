@@ -374,6 +374,7 @@ process.exit(0);
     path.join(tmpDir, "ssh"),
     `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 if (cmd.includes("[ -d")) {
   process.stdout.write("workspace\\n");
   process.exit(0);

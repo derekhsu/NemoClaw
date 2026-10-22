@@ -55,9 +55,7 @@ export function resolveTrustedSnapshotSanitizerPythonPath(): string | null {
 }
 
 /** @visibleForTesting Install an explicit helper substitute without weakening production lookup. */
-export function setSnapshotSanitizerPythonPathForTest(
-  pythonPath: string | null | undefined,
-): void {
+export function setSnapshotSanitizerPythonPathForTest(pythonPath: string | null | undefined): void {
   if (process.env.VITEST !== "true") {
     throw new Error("Snapshot sanitizer Python substitution is only available under Vitest");
   }
@@ -111,7 +109,7 @@ export interface DescriptorSnapshotRoot {
 /**
  * Descriptor-relative filesystem helper for copied snapshot sanitization.
  *
- * The plugin package publishes compiled JavaScript only, so the helper is
+ * The CLI package publishes compiled JavaScript only, so the helper is
  * passed as immutable source to an isolated Python interpreter. Every path
  * component is opened relative to an already-pinned directory descriptor,
  * and every mutation revalidates the exact inode version observed by the

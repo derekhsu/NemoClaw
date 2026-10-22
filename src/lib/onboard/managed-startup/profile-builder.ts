@@ -4,6 +4,7 @@
 import { Buffer } from "node:buffer";
 import { createHash, X509Certificate } from "node:crypto";
 
+import { assertNoPerAgentMaxSpawnDepth } from "../../extra-agents-validation";
 import { MAX_AUTODETECTED_OLLAMA_CONTEXT_WINDOW } from "../../inference/ollama-runtime-context";
 import { hydrateDerivedSandboxMessagingPlanFields } from "../../messaging/hydration";
 import { parseSandboxMessagingPlan } from "../../messaging/plan-validation";
@@ -64,7 +65,7 @@ export const MANAGED_STARTUP_HOST_PROXY_URL_INPUTS = [
  * change; otherwise construction fails before a sandbox is launched.
  */
 const EXPECTED_AFFORDANCE_INVENTORY_SHA256 = {
-  openclaw: "9b722441e33f0b0d7580f74cd185c0174979de9c1a784556ff56ff931b2c9904",
+  openclaw: "b4a3fa7060c7b7f5654c271513398666ccf52e36dcc2ff4ac8064b1d801841cf",
   hermes: "26c2dc3750274e5c2a79bf382a4b18b3cf26c0ef64938e91b694427aa23756e8",
   "langchain-deepagents-code": "08c75cf22495ec93a090bc5b70544eac65970e658b10fba057dea5ffef502e4a",
 } as const satisfies Record<ManagedStartupAgent, string>;
@@ -300,6 +301,7 @@ function normalizeExtraAgentsCandidate(value: unknown): ManagedStartupExtraAgent
   if (value === null || value === undefined) {
     return { agents: [], defaults: emptyDefaults, main: {} };
   }
+  assertNoPerAgentMaxSpawnDepth(value);
   if (Array.isArray(value)) {
     return {
       agents: normalizeExtraAgentList(value, "NEMOCLAW_EXTRA_AGENTS_JSON"),
@@ -642,6 +644,7 @@ function assertEnvironmentConsistency(
     NEMOCLAW_MODEL: profile.inference.model,
     NEMOCLAW_INFERENCE_PROVIDER_ID: profile.inference.routeProvider,
     NEMOCLAW_UPSTREAM_PROVIDER: profile.inference.upstreamProvider,
+    NEMOCLAW_SERVING_PRESET: profile.inference.servingPreset ?? null,
     NEMOCLAW_PRIMARY_MODEL_REF: profile.inference.primaryModelRef,
     NEMOCLAW_INFERENCE_BASE_URL: profile.inference.routedBaseUrl,
     NEMOCLAW_INFERENCE_API: profile.inference.api,
@@ -688,8 +691,6 @@ function assertEnvironmentConsistency(
     const directValues: Readonly<Record<string, unknown>> = {
       NEMOCLAW_REASONING: String(profile.tuning.reasoning),
       NEMOCLAW_AGENT_HEARTBEAT_EVERY: config.heartbeatEvery,
-      NEMOCLAW_DISABLE_DEVICE_AUTH: config.deviceAuth.disabled ? "1" : "0",
-      NEMOCLAW_DEVICE_AUTH_OPT_OUT_SOURCE: config.deviceAuth.optOutSource,
       NEMOCLAW_WEB_SEARCH_ENABLED: config.webSearch.enabled ? "1" : "0",
       NEMOCLAW_WEB_SEARCH_PROVIDER: config.webSearch.provider,
       NEMOCLAW_OPENCLAW_OTEL_ENDPOINT: config.otel.endpointUrl,
@@ -878,9 +879,6 @@ function buildCandidate(input: ManagedStartupProfileBuilderInput): {
         ) ?? DEFAULT_OPENCLAW_AGENT_TIMEOUT_SECONDS,
       heartbeatEvery: parseHeartbeat(input.environment),
       extraAgents: parseExtraAgents(input.environment),
-      // Managed onboarding currently applies this compatibility opt-out to
-      // every stock OpenClaw image, independently of dashboard exposure.
-      deviceAuth: { disabled: true, optOutSource: "managed-onboard" },
       minimalBootstrap: parseZeroOneFlag(input.environment, "NEMOCLAW_MINIMAL_BOOTSTRAP", false),
     };
     tuning = {
@@ -933,6 +931,7 @@ function buildCandidate(input: ManagedStartupProfileBuilderInput): {
     inference: {
       routeProvider: inference.routeProvider,
       upstreamProvider: inference.upstreamProvider,
+      servingPreset: presentEnvironmentValue(input.environment, "NEMOCLAW_SERVING_PRESET"),
       model: inference.model,
       routedBaseUrl: inference.routedBaseUrl,
       upstreamEndpointUrl: inference.upstreamEndpointUrl,

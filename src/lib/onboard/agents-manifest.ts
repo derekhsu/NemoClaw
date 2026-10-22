@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isObjectRecord } from "../core/json-types";
+import { assertNoPerAgentMaxSpawnDepth } from "../extra-agents-validation";
 
 // Load YAML lazily via require to match the rest of the onboard pipeline
 // (see src/lib/sandbox/config.ts and src/lib/policy/index.ts). Importing
@@ -169,6 +170,7 @@ export function loadAgentsManifest(filePath: string): AgentsManifestPayload {
     out.main = parsed.main;
   }
   assertNoCredentialFields(out, "agents-manifest");
+  assertNoPerAgentMaxSpawnDepth(out);
   return out;
 }
 

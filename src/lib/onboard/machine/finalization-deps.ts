@@ -38,7 +38,15 @@ export const finalizationHandlerDeps = {
   // (#4504-v2). Best-effort; never throws.
   warmupScopeUpgrade(name: string): void {
     const warmup: typeof import("../../actions/sandbox/auto-pair-warmup") = require("../../actions/sandbox/auto-pair-warmup");
-    warmup.runSandboxScopeWarmupRun(name);
+    let gatewayName: string | undefined;
+    try {
+      const target: typeof import("../../actions/sandbox/gateway-target") = require("../../actions/sandbox/gateway-target");
+      gatewayName = target.getSandboxTargetGatewayName(name);
+    } catch {
+      gatewayName = undefined;
+    }
+    if (!gatewayName) return;
+    warmup.runSandboxScopeWarmupRun(name, gatewayName);
   },
   isDeploymentHealthy(result: import("../../verify-deployment").VerifyDeploymentResult): boolean {
     return result.healthy;

@@ -485,7 +485,7 @@ describe("MessagingSetupApplier", () => {
     const files: Record<string, string> = {
       "/sandbox/.openclaw/openclaw.json": JSON.stringify({
         agents: {
-          list: ["default"],
+          entries: { default: {} },
         },
       }),
     };
@@ -524,7 +524,7 @@ describe("MessagingSetupApplier", () => {
     ]);
     expect(calls[1]?.input).toBeTruthy();
     const openclawConfig = JSON.parse(files["/sandbox/.openclaw/openclaw.json"] ?? "{}");
-    expect(openclawConfig.agents.list).toEqual(["default"]);
+    expect(openclawConfig.agents.entries).toEqual({ default: {} });
     expect(openclawConfig.channels.telegram.accounts.default).toMatchObject({
       botToken: "openshell:resolve:env:TELEGRAM_BOT_TOKEN",
       enabled: true,
@@ -831,7 +831,7 @@ describe("MessagingSetupApplier", () => {
     expect(openclawConfig.plugins.entries.acpx.enabled).toBe(false);
     expect(openclawConfig.plugins.entries["openclaw-weixin"].enabled).toBe(true);
     expect(openclawConfig.plugins.installs["openclaw-weixin"].spec).toBe(
-      "@tencent-weixin/openclaw-weixin@2.4.3",
+      "@tencent-weixin/openclaw-weixin@2.4.9",
     );
     expect(openclawConfig.plugins.load?.paths ?? []).not.toContain(
       "/sandbox/.openclaw/extensions/openclaw-weixin",

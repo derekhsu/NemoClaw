@@ -463,8 +463,7 @@ jobs:
           done
           for boundary in \
             openshell-policy-boundary.cjs \
-            sandbox-name.cjs \
-            snapshot-sanitizer-boundary.cjs; do
+            sandbox-name.cjs; do
             boundary_path="nemoclaw/dist/shared/$boundary"
             [[ -f "$boundary_path" && ! -L "$boundary_path" && -s "$boundary_path" ]] ||
               { echo "::error::candidate CLI build shared module is missing or is not a nonempty regular file: $boundary"; exit 1; }
@@ -5753,7 +5752,7 @@ jobs:
             sandbox_base_image_ref: "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:3265d482f67c9d81ee3a59b0bbad5eb5ea6c705fea81ece8ae888ed12794f7f1"
             openshell_version: 0.0.85
             openclaw_version: 2026.6.10
-            current_openclaw_version: 2026.7.1
+            current_openclaw_version: 2026.9.2
             openclaw_state_upgrade: "1"
     env:
       E2E_JOB: "1"
@@ -5797,7 +5796,7 @@ jobs:
         # Keep the original v0.0.36 fixture on x86_64 and validate the exact
         # v0.0.55/OpenShell 0.0.44 regression shape on x86_64 and arm64, plus
         # the immediate v0.0.74/OpenShell 0.0.72 predecessor to this bump. The
-        # v0.0.89 row proves OpenClaw 2026.6.10 state survives the 2026.7.1
+        # v0.0.89 row proves OpenClaw 2026.6.10 state survives the 2026.9.2
         # migration without crossing the OpenShell secret boundary.
         env:
           GITHUB_TOKEN: ${{ github.token }}

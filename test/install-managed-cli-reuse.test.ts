@@ -40,7 +40,7 @@ function writeManagedSource(root: string, revision: string) {
   fs.writeFileSync(path.join(root, ".fixture-revision"), revision);
   fs.writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "nemoclaw", dependencies: { openclaw: "2026.7.1" } }),
+    JSON.stringify({ name: "nemoclaw", dependencies: { openclaw: "2026.9.2" } }),
   );
   fs.writeFileSync(path.join(root, "package-lock.json"), COMMITTED_LOCKFILE);
   fs.writeFileSync(path.join(root, "nemoclaw", "package.json"), '{"name":"nemoclaw-plugin"}');
@@ -119,7 +119,7 @@ case "\${1:-}" in
     mkdir -p "$target/.git" "$target/bin" "$target/dist/lib/onboard" "$target/node_modules" \
       "$target/nemoclaw/dist" "$target/nemoclaw/node_modules"
     printf '%s' "$EXPECTED_REVISION" > "$target/.fixture-revision"
-    printf '%s\n' '{"name":"nemoclaw","dependencies":{"openclaw":"2026.7.1"}}' > "$target/package.json"
+    printf '%s\n' '{"name":"nemoclaw","dependencies":{"openclaw":"2026.9.2"}}' > "$target/package.json"
     printf '%s\n' '{"name":"nemoclaw-plugin"}' > "$target/nemoclaw/package.json"
     printf '%s' "\${COMMITTED_LOCKFILE:-}" > "$target/package-lock.json"
     ;;

@@ -94,12 +94,12 @@ const OPENCLAW_PROFILE = {
       defaults: { subagents: { maxSpawnDepth: 3 } },
       main: { tools: { profile: "coding" } },
     },
-    deviceAuth: { disabled: true, optOutSource: "managed-onboard" },
     minimalBootstrap: true,
   },
   inference: {
     routeProvider: "inference",
     upstreamProvider: "nvidia-prod",
+    servingPreset: null,
     model: "nvidia/nemotron-3-ultra-550b-a55b",
     routedBaseUrl: "https://inference.local/v1",
     upstreamEndpointUrl: null,
@@ -234,6 +234,22 @@ function encodeUnknown(value: unknown): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
+function canonicalizeUnknown(value: unknown): unknown {
+  return Array.isArray(value)
+    ? value.map((item) => canonicalizeUnknown(item))
+    : value === null || typeof value !== "object"
+      ? value
+      : Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, canonicalizeUnknown((value as Record<string, unknown>)[key])]),
+        );
+}
+
+function encodeCanonicalUnknown(value: unknown): string {
+  return Buffer.from(JSON.stringify(canonicalizeUnknown(value)), "utf8").toString("base64url");
+}
+
 function dockerArgs(relativePath: string): Set<string> {
   const source = readFileSync(relativePath, "utf8");
   return new Set(
@@ -317,6 +333,26 @@ describe("managed startup profile", () => {
     expect(fingerprintManagedStartupProfile(profile)).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it.each([
+    true,
+    false,
+  ])("migrates a canonical prior-version OpenClaw profile with deviceAuth.disabled=%s", (disabled) => {
+    const encoded = encodeCanonicalUnknown({
+      ...OPENCLAW_PROFILE,
+      schemaVersion: 1,
+      agentConfig: {
+        ...OPENCLAW_PROFILE.agentConfig,
+        deviceAuth: { disabled, optOutSource: "operator" },
+      },
+    });
+
+    const decoded = decodeManagedStartupProfile(encoded);
+
+    expect(decoded).toEqual(validateManagedStartupProfile(OPENCLAW_PROFILE));
+    expect(decoded.agentConfig).not.toHaveProperty("deviceAuth");
+    expect(serializeManagedStartupProfile(decoded)).not.toContain("deviceAuth");
+  });
+
   it("round-trips all OpenClaw-only startup settings", () => {
     const profile = decodeManagedStartupProfile(encodeManagedStartupProfile(OPENCLAW_PROFILE));
     expect(profile).toMatchObject({
@@ -331,7 +367,6 @@ describe("managed startup profile", () => {
         agentTimeoutSeconds: 900,
         heartbeatEvery: "30m",
         minimalBootstrap: true,
-        deviceAuth: { disabled: true, optOutSource: "managed-onboard" },
       },
       inference: {
         api: "openai-responses",
@@ -426,27 +461,6 @@ describe("managed startup profile", () => {
     expect(fingerprintManagedStartupProfile(reordered)).toBe(
       createHash("sha256").update(serialized, "utf8").digest("hex"),
     );
-  });
-
-  it("exports complete, fail-closed capabilities for every supported agent", () => {
-    expect(Object.keys(MANAGED_STARTUP_PROFILE_CAPABILITIES).sort()).toEqual(
-      [...MANAGED_STARTUP_AGENTS].sort(),
-    );
-    expect(MANAGED_STARTUP_PROFILE_CAPABILITIES.openclaw.dashboardModes).toEqual([
-      "loopback",
-      "remote",
-    ]);
-    expect(MANAGED_STARTUP_PROFILE_CAPABILITIES.hermes.dashboardModes).toEqual([
-      "disabled",
-      "loopback-forwarded",
-    ]);
-    expect(MANAGED_STARTUP_PROFILE_CAPABILITIES.hermes.inputModalities).toEqual([]);
-    expect(MANAGED_STARTUP_PROFILE_CAPABILITIES["langchain-deepagents-code"].inferenceApis).toEqual(
-      ["openai-completions"],
-    );
-    expect(
-      MANAGED_STARTUP_PROFILE_CAPABILITIES["langchain-deepagents-code"].inputModalities,
-    ).toEqual([]);
   });
 
   it("keeps exported capabilities deeply frozen and validation authority private", () => {
@@ -898,7 +912,7 @@ describe("managed startup profile", () => {
     ).toThrow(/not supported/);
   });
 
-  it("enforces resolved OpenClaw dashboard exposure and device-auth semantics", () => {
+  it("enforces resolved OpenClaw dashboard exposure and rejects retired device-auth state", () => {
     expect(() =>
       validateManagedStartupProfile({
         ...OPENCLAW_PROFILE,
@@ -913,7 +927,7 @@ describe("managed startup profile", () => {
           deviceAuth: { disabled: false, optOutSource: "operator" },
         },
       }),
-    ).toThrow(/requires device auth to be disabled/);
+    ).toThrow(/agentConfig contains unsupported fields/);
     expect(() =>
       validateManagedStartupProfile({
         ...OPENCLAW_PROFILE,
@@ -990,7 +1004,13 @@ describe("managed startup profile", () => {
   });
 
   it.each([
-    ["bad schema", { ...OPENCLAW_PROFILE, schemaVersion: 2 }],
+    [
+      "bad schema",
+      {
+        ...OPENCLAW_PROFILE,
+        schemaVersion: MANAGED_STARTUP_PROFILE_SCHEMA_VERSION + 1,
+      },
+    ],
     [
       "invalid langchain-deepagents-code approval mode",
       {

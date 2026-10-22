@@ -237,7 +237,7 @@ describe("MCP tool discovery image contract", () => {
 
   it.each([
     {
-      archiveCount: 81,
+      archiveCount: 83,
       label: "NemoClaw CLI",
       lockfile: "nemoclaw/package-lock.json",
       seedDirectory: "tools/mcp-tool-discovery-runtime/npm-cache-seed",
@@ -310,7 +310,7 @@ describe("MCP tool discovery image contract", () => {
     );
     const expectedHashes = {
       "managed-startup-image-runtime.bundle":
-        "8522801ee753f87723ea5181ca52edbe5810e6d4aeeba9e678a6b28bddfbb51e",
+        "7c636c15a60f235a03c09f26649508ee65412ab34db23a4107c9832d638a99b5",
       "mcp-tool-discovery/BUNDLED_PACKAGES.json":
         "df5dc8f167101085a8e73c444aa56854b2a4716a0bb7de9886fec4e50f402601",
       "mcp-tool-discovery/THIRD_PARTY_LICENSES.txt":
@@ -401,16 +401,24 @@ describe("MCP tool discovery image contract", () => {
     expect(openClawDockerfile).toContain("AS wechat-npm-cache");
     expect(openClawDockerfile).toContain("AS codex-acp-runtime");
     expect(managedMessagingRuntimePackage.dependencies).toEqual({
-      "@openclaw/discord": "2026.7.1",
-      "@openclaw/googlechat": "2026.7.1",
-      "@openclaw/msteams": "2026.7.1",
-      "@openclaw/slack": "2026.7.1",
-      "@openclaw/whatsapp": "2026.7.1",
-      "@tencent-weixin/openclaw-weixin": "2.4.3",
+      "@emnapi/core": "1.11.1",
+      "@emnapi/runtime": "1.11.3",
+      "@openclaw/discord": "2026.9.2",
+      "@openclaw/googlechat": "2026.9.2",
+      "@openclaw/msteams": "2026.9.2",
+      "@openclaw/slack": "2026.9.2",
+      "@openclaw/whatsapp": "2026.9.2",
+      "@tencent-weixin/openclaw-weixin": "2.4.9",
       "agent-base": "6.0.2",
-      axios: "1.18.0",
+      axios: "1.19.0",
       "https-proxy-agent": "5.0.1",
-      undici: "8.10.0",
+      "nemoclaw-openclaw-override-fast-uri": "npm:fast-uri@4.1.4",
+      "nemoclaw-openclaw-override-ip-address": "npm:ip-address@10.5.0",
+      "nemoclaw-openclaw-override-protobufjs": "npm:protobufjs@8.7.2",
+      "nemoclaw-openclaw-override-qs": "npm:qs@6.15.3",
+      "nemoclaw-openclaw-override-uuid": "npm:uuid@14.0.2",
+      openclaw: "2026.9.2",
+      undici: "8.10.2",
     });
     expect(openClawDockerfile).toContain("AS openclaw-managed-messaging-npm-cache-0");
     expect(openClawDockerfile).toContain("AS openclaw-managed-messaging-npm-cache-1");

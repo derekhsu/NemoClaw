@@ -3,9 +3,9 @@
 //
 // Manifest-driven sandbox state backup and restore.
 //
-// Handles the sandbox→host direction for rebuild (reverse of migration-state.ts
-// which handles host→sandbox for onboarding). Uses agent manifest state_dirs
-// and configPaths to know what to back up, so it works for any agent type.
+// Handles the sandbox→host direction for rebuild. Uses agent manifest
+// state_dirs and configPaths to know what to back up, so it works for any
+// agent type.
 //
 // Credentials are stripped from backups using shared credential-filter.ts.
 
@@ -50,6 +50,7 @@ import {
 } from "../domain/backup-failure.js";
 import { shellQuote } from "../runner.js";
 import { createTempSshConfig } from "../sandbox/temp-ssh-config.js";
+import { sanitizeOpenClawSqliteMachineAuthority } from "../security/openclaw-sqlite-sanitizer.js";
 import { sanitizeSnapshotDirectory } from "../security/snapshot-sanitizer.js";
 import {
   buildRestoreCleanupCommand,
@@ -178,6 +179,7 @@ export type StateFileStrategy = "copy" | "sqlite_backup";
 export interface StateFileSpec {
   path: string;
   strategy: StateFileStrategy;
+  sanitize?: "machine-authority";
 }
 
 export interface BackupResult {
@@ -269,7 +271,12 @@ function isStateFileSpec(value: unknown): value is StateFileSpec {
     isObjectRecord(value) &&
     typeof value.path === "string" &&
     (value.strategy === "copy" || value.strategy === "sqlite_backup") &&
-    normalizeStateFileSpec({ path: value.path, strategy: value.strategy }) !== null
+    (value.sanitize === undefined || value.sanitize === "machine-authority") &&
+    normalizeStateFileSpec({
+      path: value.path,
+      strategy: value.strategy,
+      sanitize: value.sanitize,
+    }) !== null
   );
 }
 
@@ -369,7 +376,6 @@ function isRebuildManifest(value: unknown): value is RebuildManifest {
 
 /**
  * Normalize a host path for safe comparison.
- * Mirrors migration-state.ts normalizeHostPath().
  */
 function normalizeHostPath(input: string): string {
   const resolved = path.resolve(input);
@@ -378,7 +384,6 @@ function normalizeHostPath(input: string): string {
 
 /**
  * Check whether candidatePath is within rootPath after normalization.
- * Mirrors migration-state.ts isWithinRoot().
  */
 function isWithinRoot(candidatePath: string, rootPath: string): boolean {
   const candidate = normalizeHostPath(candidatePath);
@@ -392,8 +397,7 @@ function isWithinRoot(candidatePath: string, rootPath: string): boolean {
  * Prevents an attacker from planting a symlink at the target path to
  * redirect reads or writes to an attacker-controlled directory.
  *
- * Mirrors the pattern from config-io.ts (PR #2290) and
- * nemoclaw/src/blueprint/snapshot.ts.
+ * Mirrors the pattern from config-io.ts (PR #2290).
  */
 function rejectSymlinksOnPath(targetPath: string): void {
   const home = HOME_DIR;
@@ -735,6 +739,19 @@ export function sanitizeBackupDirectory(
   }
 }
 
+function sanitizeMachineAuthorityStateFiles(
+  backupPath: string,
+  stateFiles: readonly StateFileSpec[],
+): void {
+  for (const spec of stateFiles) {
+    if (spec.sanitize !== "machine-authority") continue;
+    const localPath = path.join(backupPath, spec.path);
+    if (!existsSync(localPath)) continue;
+    const error = sanitizeOpenClawSqliteMachineAuthority(localPath);
+    if (error !== null) throw new Error(error);
+  }
+}
+
 export interface IncompleteSnapshotRemoval {
   readonly removed: boolean;
   readonly error?: string;
@@ -873,7 +890,16 @@ function normalizeStateFileSpec(spec: AgentStateFile | StateFileSpec): StateFile
   const normalized = normalizeStateFilePath(spec.path);
   if (!normalized) return null;
   if (spec.strategy !== "copy" && spec.strategy !== "sqlite_backup") return null;
-  return { path: normalized, strategy: spec.strategy };
+  if (spec.sanitize !== undefined && spec.sanitize !== "machine-authority") return null;
+  // Machine-authority sanitization rewrites the captured database in place;
+  // only the consistent single-file sqlite_backup strategy produces a safe
+  // artifact to scrub.
+  if (spec.sanitize !== undefined && spec.strategy !== "sqlite_backup") return null;
+  return {
+    path: normalized,
+    strategy: spec.strategy,
+    ...(spec.sanitize !== undefined ? { sanitize: spec.sanitize } : {}),
+  };
 }
 
 function normalizeStateFileSpecsPreservingDuplicates(
@@ -906,7 +932,9 @@ function stateFileRemotePath(dir: string, filePath: string): string {
 const SQLITE_BACKUP_PY = [
   "import sqlite3, sys",
   "src, dst = sys.argv[1], sys.argv[2]",
-  "src_conn = sqlite3.connect('file:' + src + '?mode=ro', uri=True, timeout=30)",
+  "# Read-write open is required: a read-only connection cannot rebuild the",
+  "# WAL index of a cleanly closed database, so backup() would fail to open it.",
+  "src_conn = sqlite3.connect(src, timeout=30)",
   "dst_conn = sqlite3.connect(dst, timeout=30)",
   "try:",
   "    dst_conn.execute('PRAGMA busy_timeout=30000')",
@@ -1657,8 +1685,16 @@ export function backupSandboxState(sandboxName: string, options: BackupOptions =
     }
   }
 
-  // SECURITY: Strip credentials from the local backup
-  sanitizeBackupDirectory(backupPath);
+  // SECURITY: Strip credentials from the local backup. State files that opted
+  // into machine-authority sanitization are scrubbed in the same fail-closed
+  // pass so the published backup can never authenticate with the source
+  // sandbox's identity.
+  sanitizeBackupDirectory(backupPath, {
+    sanitizeDirectory: (dirPath) => {
+      sanitizeSnapshotDirectory(dirPath);
+      sanitizeMachineAuthorityStateFiles(dirPath, stateFiles);
+    },
+  });
 
   // Record dynamically discovered directories in the manifest alongside the
   // exact declarations so restoreSandboxState() can find them in backupPath.

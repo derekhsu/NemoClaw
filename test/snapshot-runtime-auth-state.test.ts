@@ -65,6 +65,7 @@ const { spawnSync } = require("child_process");
 const fakeRoot = ${JSON.stringify(fakeRoot)};
 const dir = path.join(fakeRoot, ".openclaw");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 function mapPath(p) {
   return p.replace(/^\\/sandbox\\/\\.openclaw/, dir);
 }

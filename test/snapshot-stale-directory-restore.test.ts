@@ -81,6 +81,7 @@ it("clears snapshot-declared absent directories while preserving target-only sta
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 fs.appendFileSync(${JSON.stringify(sshLog)}, JSON.stringify({ cmd }) + "\\n");
 if (cmd.includes("[ -d ") && cmd.includes("printf")) {
   process.exit(0);
@@ -152,6 +153,7 @@ it("clears a Hermes directory declared absent by the snapshot (#7428)", () => {
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 if (cmd.includes("[ -d ") && cmd.includes("printf")) {
   process.exit(0);
 }
@@ -210,6 +212,7 @@ it("preserves stale content for directories whose backup failed (#7428)", () => 
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 fs.appendFileSync(${JSON.stringify(sshLog)}, JSON.stringify({ cmd }) + "\\n");
 if (cmd.includes("[ -d ") && cmd.includes("printf")) {
   process.exit(0);
@@ -276,6 +279,7 @@ it("reports stale directories when restore cannot obtain SSH configuration (#742
       path.join(binDir, "ssh"),
       `#!/usr/bin/env node
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 if (cmd.includes("[ -d ") && cmd.includes("printf")) {
   process.exit(0);
 }

@@ -123,11 +123,7 @@ function writeCliArchive(
       sourceRevision: context.buildIdentitySha,
     })}\n`,
   );
-  for (const boundary of [
-    "openshell-policy-boundary.cjs",
-    "sandbox-name.cjs",
-    "snapshot-sanitizer-boundary.cjs",
-  ]) {
+  for (const boundary of ["openshell-policy-boundary.cjs", "sandbox-name.cjs"]) {
     fs.writeFileSync(path.join(shared, boundary), "module.exports = {};\n");
   }
   customizeShared(shared);

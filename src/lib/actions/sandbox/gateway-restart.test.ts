@@ -1,12 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { execFileSync, spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_RESTART_MARKERS as MARKERS } from "../../agent/gateway-restart-markers";
 import * as agentRuntime from "../../agent/runtime";
 import * as registry from "../../state/registry";
+import * as forwardRecovery from "./forward-recovery";
 import { classifyGatewayRestartFailure } from "./gateway-restart";
-import { restartSandboxGateway } from "./process-recovery";
+import { restartSandboxGateway, waitForRecoveredSandboxGateway } from "./process-recovery";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -158,7 +160,9 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
       expect(result).toMatchObject({ ok: true, restarted: true, healthPassed: true });
       expect(deps.requestGatewaySupervisorAction).toHaveBeenCalledWith("alpha", "restart", 210000);
       expect(deps.waitForRecoveredSandboxGateway).toHaveBeenCalledWith("alpha", {
-        initialManagedHealthPassed: true,
+        initialManagedHealthPassed: false,
+        managedProbeImpl: expect.any(Function),
+        probeImpl: expect.any(Function),
         quiet: false,
       });
       expect(deps.ensureSandboxPortForward).toHaveBeenCalledWith("alpha");
@@ -172,10 +176,17 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
     const previousSettleSeconds = process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS;
     process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = "0.001";
     try {
-      vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+      const hermesAgent = {
+        name: "hermes",
+        displayName: "Hermes Agent",
+        healthProbe: { port: 8642 },
+      };
+      vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(
+        hermesAgent as unknown as ReturnType<typeof agentRuntime.getSessionAgent>,
+      );
       vi.spyOn(registry, "getSandbox").mockReturnValue({
         name: "alpha",
-        agent: "openclaw",
+        agent: "hermes",
         openshellDriver: "docker",
       });
       const requestGatewaySupervisorAction = vi.fn(() => ({
@@ -184,6 +195,8 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         stderr: "",
       }));
       const { waitForRecoveredSandboxGateway: _defaultWait, ...deps } = baseDeps({
+        getSessionAgent: () => hermesAgent,
+        getSandbox: () => ({ name: "alpha", agent: "hermes" }),
         requestGatewaySupervisorAction,
       });
 
@@ -200,6 +213,87 @@ describe("restartSandboxGateway — host-mediated gateway restart", () => {
         ? delete process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS
         : (process.env.NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS = previousSettleSeconds);
       restore();
+    }
+  });
+
+  // The readiness probe exercises the generated curl command against a real
+  // HTTP server. The server runs in a separate process because the production
+  // exec boundary is synchronous — a same-process server cannot answer while
+  // execFileSync holds the event loop.
+  it.each([
+    { status: 200, body: '{"ready":true}', ready: true },
+    { status: 302, body: '{"ready":true}', ready: false },
+    { status: 401, body: '{"ready":true}', ready: false },
+    { status: 503, body: '{"ready":false}', ready: false },
+    { status: 200, body: '{"ready":false}', ready: false },
+    { status: 200, body: "<html>Control UI</html>", ready: false },
+    { status: 200, body: '{"ok":true}', ready: false },
+    { status: 200, body: '{"ready":"true"}', ready: false },
+  ])("requires the OpenClaw readiness contract (HTTP $status, $body)", async ({
+    status,
+    body,
+    ready,
+  }) => {
+    const restore = silenceConsole();
+    vi.stubEnv("NEMOCLAW_GATEWAY_RECOVERY_SETTLE_SECONDS", "0");
+    vi.stubEnv("NEMOCLAW_GATEWAY_RECOVERY_WAIT_SECONDS", "0");
+    const server = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require("node:http").createServer((q, r) => {
+            r.statusCode = q.url === "/readyz" ? ${status} : 200;
+            r.end(q.url === "/readyz" ? ${JSON.stringify(body)} : '{"ok":true}');
+          }).listen(0, "127.0.0.1", function () { console.log(this.address().port); });`,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    const port = await new Promise<number>((resolve, reject) => {
+      server.stdout.once("data", (chunk) => resolve(Number.parseInt(String(chunk), 10)));
+      server.once("error", reject);
+      server.once("exit", (code) => reject(new Error(`probe server exited (${code})`)));
+    });
+    try {
+      vi.spyOn(agentRuntime, "getSessionAgent").mockReturnValue(null);
+      vi.spyOn(forwardRecovery, "resolveSandboxDashboardPort").mockReturnValue(port);
+      const deps = baseDeps({
+        executeSandboxExecCommand: vi.fn((_name: string, command: string) => {
+          if (!command.startsWith("curl ")) return { status: 0, stdout: "", stderr: "" };
+          try {
+            return {
+              status: 0,
+              stdout: execFileSync("/bin/bash", ["-c", command], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+              }),
+              stderr: "",
+            };
+          } catch (error) {
+            const failure = error as { status?: number; stdout?: string; stderr?: string };
+            return {
+              status: failure.status ?? 1,
+              stdout: failure.stdout ?? "",
+              stderr: failure.stderr ?? "",
+            };
+          }
+        }),
+        waitForRecoveredSandboxGateway: (
+          name: string,
+          options: Parameters<typeof waitForRecoveredSandboxGateway>[1],
+        ) =>
+          waitForRecoveredSandboxGateway(name, {
+            ...options,
+            timeoutSeconds: 0,
+            sleepImpl: () => undefined,
+          }),
+      });
+
+      const result = restartSandboxGateway("alpha", { quiet: true, deps });
+      expect(result.ok).toBe(ready);
+      expect(deps.ensureSandboxPortForward).toHaveBeenCalledTimes(ready ? 1 : 0);
+    } finally {
+      restore();
+      server.kill();
     }
   });
 

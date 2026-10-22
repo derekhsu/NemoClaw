@@ -279,6 +279,11 @@ export function patchStagedDockerfile(
     /^ARG NEMOCLAW_UPSTREAM_PROVIDER=.*$/m,
     `ARG NEMOCLAW_UPSTREAM_PROVIDER=${sanitizeDockerArg(upstreamProvider)}`,
   );
+  // Legacy image builds need the same selected preset as managed startup.
+  dockerfile = dockerfile.replace(
+    /^ARG NEMOCLAW_SERVING_PRESET=.*$/m,
+    () => `ARG NEMOCLAW_SERVING_PRESET=${sanitizeDockerArg(process.env.NEMOCLAW_SERVING_PRESET)}`,
+  );
   const upstreamEndpointUrl = normalizeOptionalEndpointUrlArg(
     options.upstreamEndpointUrl,
     "NEMOCLAW_UPSTREAM_ENDPOINT_URL",
@@ -480,7 +485,7 @@ export function patchStagedDockerfile(
     dockerfile = `${dockerfile.trimEnd()}\n\n# NemoClaw sandbox-base warm-resolution metadata\n${baseResolutionLabels}\n`;
   }
   // NEMOCLAW_EXTRA_AGENTS_JSON — bake secondary OpenClaw agents into
-  // agents.list[] alongside the canonical "main" entry. Pass the raw operator
+  // agents.entries alongside the canonical "main" entry. Pass the raw operator
   // payload through to the build-time validator in
   // scripts/generate-openclaw-config.mts. The host-side encode does not
   // parse or shape-check the JSON: that would duplicate validation logic and

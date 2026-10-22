@@ -323,6 +323,7 @@ process.exit(1);
     `#!/usr/bin/env node
 const { spawnSync } = require("child_process");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 if (cmd.includes("[ -d")) { process.stdout.write("workspace\\n"); process.exit(0); }
 if (cmd.startsWith("src=")) { process.exit(2); }
 if (cmd.includes("tar")) {

@@ -450,12 +450,29 @@ function readAgentPrimaryModelRef(config: Record<string, unknown>): string | und
 }
 
 /**
- * Point the merged main/default agent's list model at the fresh primary,
- * mirroring `updatePrimaryAgentListModel` in the inference-set path: the agent
- * with id `main` wins; otherwise the first `default: true` agent, and only when
- * its `model` is a string routing reference.
+ * Point the merged main/default agent's model at the fresh primary, mirroring
+ * `updatePrimaryAgentListModel` in the inference-set path: OpenClaw 2026.9.x
+ * persists `agents.entries` keyed by agent id (`main` wins, then the first
+ * `default: true` entry); older backups may still carry the `agents.list`
+ * array shape, which follows the same `id: "main"` then `default: true`
+ * precedence. Only a string `model` routing reference is rewritten.
  */
 function updateMainAgentListModel(agents: Record<string, unknown>, primaryModelRef: string): void {
+  const entries = agents.entries;
+  if (isPlainObject(entries)) {
+    const main = entries.main;
+    if (isPlainObject(main) && typeof main.model === "string") {
+      main.model = primaryModelRef;
+      return;
+    }
+    for (const entry of Object.values(entries)) {
+      if (isPlainObject(entry) && entry.default === true && typeof entry.model === "string") {
+        entry.model = primaryModelRef;
+        return;
+      }
+    }
+    return;
+  }
   const list = agents.list;
   if (!Array.isArray(list)) return;
   let defaultAgent: Record<string, unknown> | undefined;
@@ -479,7 +496,8 @@ function updateMainAgentListModel(agents: Record<string, unknown>, primaryModelR
  * from the snapshot — including a stale `model.primary` captured before a
  * managed-model switch. `models.providers` routing is already refreshed, but
  * the agent routes on `agents.defaults.model.primary` (and the matching
- * main/default `agents.list[].model`), so without this the rebuilt sandbox
+ * main/default entry model in `agents.entries`/`agents.list`), so without
+ * this the rebuilt sandbox
  * keeps labelling/routing the previous model. This is issue #7210 (the
  * `rebuild --tool-disclosure progressive` config-binding variant, where an
  * MCP-present sandbox is switched via rebuild instead of a full recreate);

@@ -205,7 +205,7 @@ rm -f "$APPLY_OUTPUT"
 trap - EXIT
 
 # -------------------------------------------------------
-info "5. Verify host OpenClaw detection (migration source)"
+info "5. Verify sandbox OpenClaw state directories exist"
 # -------------------------------------------------------
 if [ -f /sandbox/.openclaw/openclaw.json ]; then
   pass "Host OpenClaw config detected"
@@ -234,159 +234,7 @@ else
 fi
 
 # -------------------------------------------------------
-info "6. Verify snapshot creation (migration pre-step)"
-# -------------------------------------------------------
-if node --input-type=module -e "
-  import fs from 'node:fs';
-  import path from 'node:path';
-  const { createSnapshot, listSnapshots } = await import('/opt/nemoclaw/dist/blueprint/snapshot.js');
-
-  const snap = createSnapshot();
-  if (!snap) throw new Error('Snapshot returned null');
-  if (!fs.existsSync(snap)) throw new Error('Snapshot dir does not exist: ' + snap);
-  const hookFile = path.join(snap, 'openclaw', 'hooks', 'demo-hook', 'HOOK.md');
-  if (!fs.existsSync(hookFile)) throw new Error('Hook file missing from snapshot: ' + hookFile);
-
-  const snaps = listSnapshots();
-  if (snaps.length !== 1) throw new Error('Expected 1 snapshot, got ' + snaps.length);
-  console.log('Snapshot created at: ' + snap);
-  console.log('Files captured: ' + snaps[0].file_count);
-"; then
-  pass "Migration snapshot created successfully"
-else
-  fail "Snapshot creation failed"
-fi
-
-# -------------------------------------------------------
-info "7. Verify snapshot restore (eject path)"
-# -------------------------------------------------------
-if node --input-type=module -e "
-  import fs from 'node:fs';
-  import path from 'node:path';
-  import os from 'node:os';
-  const { listSnapshots, rollbackFromSnapshot } = await import('/opt/nemoclaw/dist/blueprint/snapshot.js');
-
-  const snaps = listSnapshots();
-  const snapPath = snaps[0].path;
-
-  // Simulate corruption: modify the host config
-  const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
-  const originalRaw = fs.readFileSync(configPath, 'utf-8');
-  JSON.parse(originalRaw);
-  fs.writeFileSync(configPath, JSON.stringify({ corrupted: true }));
-
-  // Rollback
-  const success = rollbackFromSnapshot(snapPath);
-  if (!success) throw new Error('Rollback returned false');
-
-	  // Verify restoration
-	  const restoredRaw = fs.readFileSync(configPath, 'utf-8');
-	  const restored = JSON.parse(restoredRaw);
-	  if ('corrupted' in restored) throw new Error('Config still corrupted after rollback');
-  if (restoredRaw !== originalRaw) throw new Error('Restored config differs from pre-corruption content: ' + JSON.stringify(restored));
-  console.log('Restored config: ' + JSON.stringify(restored));
-"; then
-  pass "Snapshot rollback restores original config"
-else
-  fail "Rollback failed"
-fi
-
-# -------------------------------------------------------
-info "8. Verify migration inventory for external OpenClaw roots"
-# -------------------------------------------------------
-OPENCLAW_STATE_DIR=/sandbox/openclaw-state OPENCLAW_CONFIG_PATH=/sandbox/config/openclaw.json node --input-type=module <<'JS'
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { execFileSync } from "node:child_process";
-import {
-  cleanupSnapshotBundle,
-  createArchiveFromDirectory,
-  createSnapshotBundle,
-  detectHostOpenClaw,
-} from "/opt/nemoclaw/dist/commands/migration-state.js";
-
-const logger = {
-  info() {},
-  warn() {},
-  error(message) {
-    throw new Error(String(message));
-  },
-  debug() {},
-};
-
-const state = detectHostOpenClaw(process.env);
-if (!state.exists) {
-  throw new Error("detectHostOpenClaw did not find the overridden install");
-}
-if (state.stateDir !== "/sandbox/openclaw-state") {
-  throw new Error(`Unexpected state dir: ${state.stateDir}`);
-}
-if (state.configPath !== "/sandbox/config/openclaw.json") {
-  throw new Error(`Unexpected config path: ${state.configPath}`);
-}
-if (state.externalRoots.length < 3) {
-  throw new Error(`Expected at least 3 external roots, got ${state.externalRoots.length}`);
-}
-
-const bundle = createSnapshotBundle(state, logger, { persist: false });
-if (!bundle) {
-  throw new Error("createSnapshotBundle returned null");
-}
-
-try {
-  const workspaceRoot = bundle.manifest.externalRoots.find((root) => root.kind === "workspace");
-  if (!workspaceRoot) {
-    throw new Error("Missing workspace root in manifest");
-  }
-  const snapshotLink = path.join(
-    bundle.snapshotDir,
-    workspaceRoot.snapshotRelativePath,
-    "shared-link.md",
-  );
-  if (!fs.lstatSync(snapshotLink).isSymbolicLink()) {
-    throw new Error(`Snapshot did not preserve symlink: ${snapshotLink}`);
-  }
-
-  const sandboxConfig = JSON.parse(
-    fs.readFileSync(path.join(bundle.preparedStateDir, "openclaw.json"), "utf-8"),
-  );
-  if (sandboxConfig.agents.defaults.workspace !== workspaceRoot.sandboxPath) {
-    throw new Error(
-      `Sandbox config was not rewritten for default workspace: ${sandboxConfig.agents.defaults.workspace}`,
-    );
-  }
-  if (sandboxConfig.agents.list[0].agentDir !== "/sandbox/.nemoclaw/migration/agent-dirs/agent-dirs-main-agent-dir") {
-    throw new Error(`Sandbox config did not rewrite agentDir: ${sandboxConfig.agents.list[0].agentDir}`);
-  }
-
-  const archivePath = path.join(bundle.archivesDir, "workspace.tar");
-  await createArchiveFromDirectory(path.join(bundle.snapshotDir, workspaceRoot.snapshotRelativePath), archivePath);
-  const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-archive-"));
-  execFileSync("tar", ["-xf", archivePath, "-C", extractDir]);
-  const extractedLink = path.join(extractDir, "shared-link.md");
-  if (!fs.lstatSync(extractedLink).isSymbolicLink()) {
-    throw new Error(`Tar archive did not preserve symlink: ${extractedLink}`);
-  }
-
-  const fallbackHome = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-userprofile-"));
-  fs.mkdirSync(path.join(fallbackHome, ".openclaw"), { recursive: true });
-  fs.writeFileSync(path.join(fallbackHome, ".openclaw", "openclaw.json"), "{}");
-  const fallbackState = detectHostOpenClaw({
-    HOME: "",
-    USERPROFILE: fallbackHome,
-  });
-  if (!fallbackState.exists || fallbackState.stateDir !== path.join(fallbackHome, ".openclaw")) {
-    throw new Error("USERPROFILE fallback did not resolve the host OpenClaw state");
-  }
-} finally {
-  cleanupSnapshotBundle(bundle);
-}
-JS
-pass "Migration inventory handles overrides, external roots, and symlink-safe archives"
-
-# -------------------------------------------------------
-info "9. Verify plugin TypeScript compilation"
+info "6. Verify plugin TypeScript compilation"
 # -------------------------------------------------------
 if [ -f /opt/nemoclaw/dist/index.js ]; then
   pass "index.js compiled"
@@ -398,11 +246,6 @@ if [ -f /opt/nemoclaw/dist/commands/slash.js ]; then
 else
   fail "slash.js missing"
 fi
-if [ -f /opt/nemoclaw/dist/commands/migration-state.js ]; then
-  pass "migration-state.js compiled"
-else
-  fail "migration-state.js missing"
-fi
 if [ -f /opt/nemoclaw/dist/blueprint/state.js ]; then
   pass "state.js compiled"
 else
@@ -410,7 +253,7 @@ else
 fi
 
 # -------------------------------------------------------
-info "10. Verify NemoClaw state management"
+info "7. Verify NemoClaw state management"
 # -------------------------------------------------------
 if node --input-type=module -e "
 import { strict as assert } from 'node:assert';
@@ -440,7 +283,7 @@ else
 fi
 
 # -------------------------------------------------------
-info "11. Verify procps debug tools are present (#2343)"
+info "8. Verify procps debug tools are present (#2343)"
 # -------------------------------------------------------
 for cmd in ps top free uptime vmstat; do
   if command -v "$cmd" >/dev/null 2>&1; then

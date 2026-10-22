@@ -265,7 +265,7 @@ describe("WeChat hook implementations", () => {
               plugins: {
                 installs: {
                   "openclaw-weixin": {
-                    spec: "@tencent-weixin/openclaw-weixin@2.4.3",
+                    spec: "@tencent-weixin/openclaw-weixin@2.4.9",
                   },
                 },
               },

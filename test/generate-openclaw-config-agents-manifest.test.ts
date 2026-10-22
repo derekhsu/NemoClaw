@@ -141,7 +141,7 @@ describe("generate-openclaw-config :: agents manifest", () => {
         agents: [makeExtra({ id: "research" })],
       }),
     });
-    expect(config.agents.list[1]).toMatchObject({ id: "research" });
+    expect(config.agents.entries.research).toBeDefined();
   });
 
   it("rejects unknown top-level keys in the object payload", () => {
@@ -162,7 +162,7 @@ describe("generate-openclaw-config :: agents manifest", () => {
         agents: [makeExtra({ model: "test-provider/secondary-1" })],
       }),
     });
-    expect(config.agents.list[1].model).toBe("test-provider/secondary-1");
+    expect(config.agents.entries.research.model).toBe("test-provider/secondary-1");
     const refs = config.models.providers["test-provider"].models.map(
       (entry: { name: string }) => entry.name,
     );
@@ -245,7 +245,7 @@ describe("generate-openclaw-config :: agents manifest", () => {
         ],
       }),
     });
-    expect(config.agents.list[1].subagents).toEqual({
+    expect(config.agents.entries.research.subagents).toEqual({
       allowAgents: ["analyst", "writer"],
       delegationMode: "prefer",
       requireAgentId: true,
@@ -311,8 +311,7 @@ describe("generate-openclaw-config :: agents manifest", () => {
         main: { tools: mainTools, subagents: mainSubagents },
       }),
     });
-    expect(config.agents.list[0]).toEqual({
-      id: "main",
+    expect(config.agents.entries.main).toEqual({
       default: true,
       tools: mainTools,
       subagents: mainSubagents,

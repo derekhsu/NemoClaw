@@ -62,6 +62,7 @@ describe("sandbox provisioning: copied OpenClaw helper permissions (#2861)", () 
     const generatorPath = path.join(localScripts, "generate-openclaw-config.mts");
     const toolSearchValidatorPath = path.join(localScripts, "validate-openclaw-tool-search.mts");
     const toolDisclosurePath = path.join(localSrc, "lib", "tool-disclosure.ts");
+    const extraAgentsValidationPath = path.join(localSrc, "lib", "extra-agents-validation.ts");
     const applierPath = path.join(
       localSrc,
       "lib",
@@ -104,11 +105,13 @@ describe("sandbox provisioning: copied OpenClaw helper permissions (#2861)", () 
       configGuardPath,
       managedGatewayControlPath,
       path.join(localLib, "openclaw_device_approval_policy.py"),
+      path.join(localLib, "openclaw_pairing_state.py"),
       path.join(localLib, "clean_runtime_shell_env_shim.py"),
       path.join(localLib, "normalize_mutable_config_perms.py"),
       generatorPath,
       toolSearchValidatorPath,
       toolDisclosurePath,
+      extraAgentsValidationPath,
       applierPath,
       messagingHookPath,
       pluginFile,
@@ -150,6 +153,10 @@ describe("sandbox provisioning: copied OpenClaw helper permissions (#2861)", () 
           fs.statSync(path.join(localLib, "openclaw_device_approval_policy.py")).mode & 0o777
         ).toString(8),
       ).toBe("644");
+      expect(
+        (fs.statSync(path.join(localLib, "openclaw_pairing_state.py")).mode & 0o777).toString(8),
+      ).toBe("644");
+      expect((fs.statSync(extraAgentsValidationPath).mode & 0o777).toString(8)).toBe("444");
       expect(
         (
           fs.statSync(path.join(localLib, "normalize_mutable_config_perms.py")).mode & 0o777

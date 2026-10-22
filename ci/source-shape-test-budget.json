@@ -461,7 +461,6 @@
       "test": "executes pull request installer hash checks only from the PR base SHA",
       "category": "security"
     },
-
     {
       "file": "test/runtime-provider-source-shape.test.ts",
       "test": "keeps migrated provider identities and implementations behind the one bundle composition",
@@ -580,6 +579,16 @@
     {
       "file": "test/growth-guardrails-workflow-boundary.test.ts",
       "test": "flags %s",
+      "category": "security"
+    },
+    {
+      "file": "test/openclaw-real-patched-dist-harness.test.ts",
+      "test": "accepts an explicit absolute Node runtime in the reviewed production lane",
+      "category": "security"
+    },
+    {
+      "file": "test/openclaw-real-patched-dist-harness.test.ts",
+      "test": "rejects an unsupported explicit real-dist Node runtime before OpenClaw starts",
       "category": "security"
     }
   ]

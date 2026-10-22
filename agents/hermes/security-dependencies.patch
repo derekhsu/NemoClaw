@@ -63,7 +63,7 @@ index 248f1f9..2a49d7a 100644
 --- a/uv.lock
 +++ b/uv.lock
 @@ -226,7 +226,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/a0/87/1d7019d23891897cb
- 
+
  [[package]]
  name = "alibabacloud-dingtalk"
 -version = "2.2.42"
@@ -81,7 +81,7 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/9d/80/7d1c1438e17c1fc90d037f1b73debe3fc2dfa348eb91e12818c2584d1865/alibabacloud_dingtalk-2.2.42-py3-none-any.whl", hash = "sha256:5f5c2ef3351b7926eb870af11089e14f802e4caa51d5f72920ad79a67f03d3e4", size = 2142688, upload-time = "2026-04-10T03:58:26.33Z" },
 +    { url = "https://files.pythonhosted.org/packages/3b/6f/ae53e468af95aacd68f8251f2d567fa16d520eac349e9952419b531dfbda/alibabacloud_dingtalk-2.2.54-py3-none-any.whl", hash = "sha256:67b4f1c70ad17fb7f1611d3594130c5318a047b1ddbb1506c21249fffaac4a9b", size = 2235207, upload-time = "2026-07-23T07:07:06.918Z" },
  ]
- 
+
  [[package]]
 @@ -1821,7 +1821,7 @@ requires-dist = [
      { name = "aiohttp", marker = "extra == 'teams'", specifier = "==3.14.3" },
@@ -106,7 +106,7 @@ index 248f1f9..2a49d7a 100644
      { name = "lark-oapi", marker = "extra == 'feishu'", specifier = "==1.6.8" },
      { name = "markdown", specifier = "==3.10.2" },
 @@ -2021,15 +2021,15 @@ wheels = [
- 
+
  [[package]]
  name = "httpcore2"
 -version = "2.7.0"
@@ -122,10 +122,10 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/6f/6c/62e2e279e63fc4f7a5ee841ef13175a8bbc613f258e9dcc186e9de803a42/httpcore2-2.7.0-py3-none-any.whl", hash = "sha256:1452f589fe23f55b44546cd884294c41a29330af902bc0b71a761fd52d18f92b", size = 81506, upload-time = "2026-07-14T20:39:58.053Z" },
 +    { url = "https://files.pythonhosted.org/packages/d2/74/d370e55600d9bcfa0d9794b0166126d49291a3d2b20c268fc98c453a4948/httpcore2-2.12.0-py3-none-any.whl", hash = "sha256:7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb", size = 83074, upload-time = "2026-08-18T13:22:05.854488Z" },
  ]
- 
+
  [[package]]
 @@ -2107,7 +2107,7 @@ wheels = [
- 
+
  [[package]]
  name = "httpx2"
 -version = "2.7.0"
@@ -143,5 +143,5 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/1d/b8/c341bba6411bdfda786020343c47a75ef472f6085caf82391b142b1a3ad9/httpx2-2.7.0-py3-none-any.whl", hash = "sha256:ed2a2719c696789e09493bd8e2bec3d8bd925cc6e26b68389ec25ade132f7bf4", size = 90234, upload-time = "2026-07-14T20:39:59.531Z" },
 +    { url = "https://files.pythonhosted.org/packages/c8/95/411ba65569158e862368917aaf56597f3e5fa3b91b0502919638465a08f3/httpx2-2.12.0-py3-none-any.whl", hash = "sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36", size = 95427, upload-time = "2026-08-18T13:22:06.834669Z" },
  ]
- 
+
  [[package]]

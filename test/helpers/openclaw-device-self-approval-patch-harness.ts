@@ -3,6 +3,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import vm from "node:vm";
 
@@ -38,6 +39,7 @@ function normalizeOptionalString(value) {
   const normalized = value.trim();
   return normalized || undefined;
 }
+
 function resolveDeviceIdentityForGatewayCall() {
   try {
     return gatewayCallDeps.loadOrCreateDeviceIdentity();
@@ -85,12 +87,126 @@ function setStoredOperatorDeviceAuthToken(value) { storedOperatorDeviceAuthToken
 `);
 }
 
+function currentGatewayCallFixture(): string {
+  return compiledIndent(`
+const descriptorFiles = new Map();
+const descriptorReads = [];
+const descriptorFs = {
+  fstatSync(fd) {
+    const value = descriptorFiles.get(fd);
+    if (value === undefined) throw new Error("unknown descriptor");
+    return {
+      dev: 1,
+      ino: fd,
+      size: Buffer.byteLength(value),
+      nlink: 0,
+      mtimeMs: 1,
+      isFile: () => true
+    };
+  },
+  readSync(fd, buffer, offset, length, position) {
+    const value = descriptorFiles.get(fd);
+    if (value === undefined) throw new Error("unknown descriptor");
+    descriptorReads.push({ fd, position });
+    const source = Buffer.from(value);
+    const count = Math.min(length, Math.max(0, source.length - position));
+    if (count > 0) source.copy(buffer, offset, position, position + count);
+    return count;
+  }
+};
+const descriptorCrypto = {
+  createPublicKey() {
+    return {
+      asymmetricKeyType: "ed25519",
+      export: () => Buffer.from("matching-key")
+    };
+  },
+  createPrivateKey(key) {
+    return { asymmetricKeyType: "ed25519", privateKey: key };
+  },
+  createHash() {
+    return {
+      update() { return this; },
+      digest() { return "a".repeat(64); }
+    };
+  }
+};
+const process = {
+  env: {},
+  getBuiltinModule(name) {
+    if (name === "node:fs") return descriptorFs;
+    if (name === "node:crypto") return descriptorCrypto;
+    throw new Error("unexpected builtin module");
+  }
+};
+const GATEWAY_CLIENT_NAMES = { CLI: "cli", GATEWAY_CLIENT: "gateway-client" };
+const GATEWAY_CLIENT_MODES = { CLI: "cli", BACKEND: "backend" };
+function normalizeOptionalString(value) {
+  if (typeof value !== "string") return;
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+function loadDeviceIdentityIfPresent() { return null; }
+let createdIdentityCount = 0;
+function loadOrCreateDeviceIdentity() {
+  createdIdentityCount += 1;
+  return { deviceId: "ordinary-device" };
+}
+function resolveDeviceIdentityForGatewayCall(sharedStateMode) {
+  try {
+    return sharedStateMode === "read-only" ? loadDeviceIdentityIfPresent() : loadOrCreateDeviceIdentity();
+  } catch {
+    return null;
+  }
+}
+function loadStoredOperatorDeviceAuthToken() { return null; }
+function isLoopbackGatewayUrl(url) { return url.startsWith("ws://127.0.0.1:"); }
+function shouldOmitDeviceIdentityForGatewayCall(params) {
+  const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const hasSharedSecretAuth = params.authMode === "token" && Boolean(params.token) || params.authMode === "password" && Boolean(params.password);
+  const isLoopback = isLoopbackGatewayUrl(params.url);
+  const isLocalBackendSharedAuth = mode === GATEWAY_CLIENT_MODES.BACKEND && clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT && (hasSharedSecretAuth || params.allowAuthNone === true) && isLoopback;
+  const isLocalCliSharedAuth = mode === GATEWAY_CLIENT_MODES.CLI && clientName === GATEWAY_CLIENT_NAMES.CLI && hasSharedSecretAuth && isLoopback;
+  return isLocalBackendSharedAuth || isLocalCliSharedAuth;
+}
+function gatewayClientOptions(opts, password, authMode) {
+  const deviceAuthScope = "operator.pairing";
+  return shouldOmitDeviceIdentityForGatewayCall({
+    opts,
+    authMode,
+    password,
+    allowAuthNone: opts.requireLocalBackendSharedAuth === true && authMode === "none"
+  });
+}
+function setForcedIdentityDescriptor(value) {
+  process.env.NEMOCLAW_OPENCLAW_RESTORED_CLONE_PAIRING = "1";
+  process.env.NEMOCLAW_OPENCLAW_EXPECTED_DEVICE_ID = "a".repeat(64);
+  process.env.NEMOCLAW_OPENCLAW_IDENTITY_FD = "43";
+  descriptorFiles.set(43, JSON.stringify(value));
+  descriptorReads.length = 0;
+}
+function setForceDevicePairing(value) {
+  if (value) process.env.NEMOCLAW_OPENCLAW_FORCE_DEVICE_PAIRING = "1";
+  else delete process.env.NEMOCLAW_OPENCLAW_FORCE_DEVICE_PAIRING;
+}
+function getCreatedIdentityCount() { return createdIdentityCount; }
+function identityDescriptorReads() { return [...descriptorReads]; }
+`);
+}
+
 function cliFixture(): string {
   return compiledIndent(`
 const descriptorFiles = new Map();
 const descriptorReads = [];
 const process = {
   env: {},
+  stdout: globalThis.process?.stdout ?? {
+    write(_chunk, callback) { callback?.(); }
+  },
+  stderr: globalThis.process?.stderr ?? {
+    write(_chunk, callback) { callback?.(); }
+  },
   getBuiltinModule(name) {
     if (name !== "node:fs") throw new Error("unexpected builtin module");
     return {
@@ -101,7 +217,7 @@ const process = {
           dev: 1,
           ino: fd,
           size: Buffer.byteLength(value),
-          nlink: 1,
+          nlink: 0,
           mtimeMs: 1,
           isFile: () => true
         };
@@ -332,6 +448,30 @@ async function approvePairingWithFallback(opts, requestId) {
     return await approveDevicePairing(originalRequest?.requestId ?? requestId);
   }
 }
+const defaultRuntime = {
+  logs: [],
+  exits: [],
+  jsonWrites: [],
+  log(value) { this.logs.push(String(value)); },
+  writeJson(value) { this.jsonWrites.push(value); },
+  exit(code) { this.exits.push(code); }
+};
+const theme = {
+  success(value) { return value; },
+  command(value) { return value; },
+  muted(value) { return value; }
+};
+const resolvedRequestId = "request-1";
+function runDevicesApproveSuccess(result, opts) {
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  const resultRequestId = result?.requestId;
+  const approvedRequestId = typeof resultRequestId === "string" && resultRequestId.trim().length > 0 ? resultRequestId : resolvedRequestId;
+  const deviceId = result?.device?.deviceId;
+  defaultRuntime.log(\`\${theme.success("Approved")} \${theme.command(deviceId ?? "ok")} \${theme.muted(\`(\${approvedRequestId})\`)}\`);
+}
 `);
 }
 
@@ -339,7 +479,6 @@ function deviceIdentityFixture(): string {
   return compiledIndent(`
 const descriptorFiles = new Map();
 const descriptorReads = [];
-const process = { env: {} };
 const fs = {
   fstatSync(fd) {
     const value = descriptorFiles.get(fd);
@@ -361,6 +500,13 @@ const fs = {
     const count = Math.min(length, Math.max(0, source.length - position));
     if (count > 0) source.copy(buffer, offset, position, position + count);
     return count;
+  }
+};
+const process = {
+  env: {},
+  getBuiltinModule(name) {
+    if (name !== "node:fs") throw new Error("unexpected builtin module");
+    return fs;
   }
 };
 let ordinaryLoadCount = 0;
@@ -526,6 +672,7 @@ async function resolveConnectAuthDecisionCore(params) {
   }
   return finish();
 }
+
 async function resolveConnectAuthDecision(params) { return resolveConnectAuthDecisionCore(params); }
 async function connect(connectParams, verifyDeviceToken) {
   const role = connectParams.role;
@@ -553,6 +700,45 @@ async function connect(connectParams, verifyDeviceToken) {
 `);
 }
 
+function gatewayAuthSqliteFixture(): string {
+  return compiledIndent(`
+const GATEWAY_CLIENT_IDS = { CLI: "cli" };
+const GATEWAY_CLIENT_MODES = { CLI: "cli" };
+const connectParams = { client: { id: "cli", mode: "cli" } };
+const clientId = connectParams.client.id;
+async function verifyDeviceToken() { return { ok: false, reason: "scope-mismatch" }; }
+const authDeps = {
+    async verifyDeviceToken(paramsLocal) {
+      return await verifyDeviceToken({
+        ...paramsLocal,
+        requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.()
+      });
+    }
+};
+function getRequiredSharedGatewaySessionGeneration() { return 1; }
+function normalizeSortedUniqueTrimmedStringList(values) {
+  return [...new Set((values ?? []).map((value) => typeof value === "string" ? value.trim() : "").filter(Boolean))].sort();
+}
+function resolvePairedAccessScopes(device) { return device?.scopes ?? []; }
+function resolvePairingOutcome(input) {
+  const {
+    authMethod,
+    connectParams,
+    devicePublicKey,
+    existingPairedDevice,
+    pairing,
+    plan,
+    reason,
+    role,
+    scopes,
+    trustedProxyApprovalScopes,
+  } = input;
+      const inlineApprovalAttempted = trustedProxyApprovalScopes !== null || pairing.request.silent === true;
+  return inlineApprovalAttempted ? "approved" : "pending";
+}
+`);
+}
+
 function stateFixture(): string {
   return compiledIndent(`
 const PENDING_TTL_MS = 300 * 1e3;
@@ -563,6 +749,7 @@ const writes = [];
 let delayedPairedWrite = null;
 let failNextPendingWrite = false;
 let failCommittedJournalAfterWrite = false;
+let failNextIdleJournalWrite = false;
 let driftOnBuild = null;
 function cloneJson(value) { return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value)); }
 function createAsyncLock() {
@@ -575,9 +762,10 @@ function createAsyncLock() {
     try { return await fn(); } finally { release(); }
   };
 }
-function resolvePairingPaths(baseDir) {
+function resolvePairingPaths(baseDir, subdir = "devices") {
   const root = baseDir ?? "/fixture";
-  return { pendingPath: \`\${root}/pending.json\`, pairedPath: \`\${root}/paired.json\` };
+  const dir = \`\${root}/\${subdir}\`;
+  return { dir, pendingPath: \`\${dir}/pending.json\`, pairedPath: \`\${dir}/paired.json\` };
 }
 function coercePairingStateRecord(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
 function pruneExpiredPending() {}
@@ -595,6 +783,10 @@ async function writeJson(file, value, options) {
     delayed.started();
     await delayed.gate;
   }
+  if (file.endsWith(".nemoclaw-self-approval-journal") && value?.phase === "idle" && failNextIdleJournalWrite) {
+    failNextIdleJournalWrite = false;
+    throw new Error("idle journal cleanup failed");
+  }
   files.set(file, cloneJson(value));
   if (file.endsWith(".nemoclaw-self-approval-journal") && value?.phase === "committed" && failCommittedJournalAfterWrite) {
     failCommittedJournalAfterWrite = false;
@@ -603,14 +795,38 @@ async function writeJson(file, value, options) {
 }
 function setPairingState(pendingById, pairedByDeviceId, baseDir = "/fixture") {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
+  const authPath = \`\${resolvePairingPaths(baseDir, "identity").dir}/device-auth.json\`;
   files.set(pendingPath, cloneJson(pendingById));
   files.set(pairedPath, cloneJson(pairedByDeviceId));
+  const pairedDevice = Object.values(pairedByDeviceId)[0];
+  const tokens = pairedDevice?.tokens;
+  const operator = Array.isArray(tokens)
+    ? tokens.find((entry) => entry?.role === "operator")
+    : tokens?.operator;
+  if (typeof operator?.token === "string" && operator.token) {
+    files.set(authPath, cloneJson({
+      version: 1,
+      deviceId: pairedDevice.deviceId,
+      tokens: {
+        operator: {
+          token: operator.token,
+          role: "operator",
+          scopes: operator.scopes,
+          updatedAtMs: 1,
+        },
+      },
+    }));
+  }
 }
 function setFile(file, value) { files.set(file, cloneJson(value)); }
 function getFile(file) { return files.has(file) ? cloneJson(files.get(file)) : null; }
 function getPairingPaths(baseDir = "/fixture") {
   const paths = resolvePairingPaths(baseDir, "devices");
-  return { ...paths, journalPath: \`\${paths.pendingPath}.nemoclaw-self-approval-journal\` };
+  return {
+    ...paths,
+    authPath: \`\${resolvePairingPaths(baseDir, "identity").dir}/device-auth.json\`,
+    journalPath: \`\${paths.pendingPath}.nemoclaw-self-approval-journal\`,
+  };
 }
 function armLateWriterFailure() {
   failNextPendingWrite = true;
@@ -623,6 +839,7 @@ function armLateWriterFailure() {
 }
 function releaseLateWriter() { delayedPairedWrite?.release(); }
 function armCommittedJournalFailure() { failCommittedJournalAfterWrite = true; }
+function armIdleJournalFailure() { failNextIdleJournalWrite = true; }
 function armStateDrift(file, value) { driftOnBuild = { file, value: cloneJson(value) }; }
 async function loadState(baseDir) {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
@@ -751,19 +968,101 @@ export function writeFixtureDist(dist: string): void {
   fs.writeFileSync(path.join(dist, "device-pairing-fixture.js"), stateFixture());
 }
 
+export function writeCurrentGatewayCallFixtureDist(dist: string): void {
+  fs.writeFileSync(path.join(dist, "call-current-fixture.js"), currentGatewayCallFixture());
+  fs.writeFileSync(path.join(dist, "devices-cli.runtime-fixture.js"), cliFixture());
+  fs.writeFileSync(path.join(dist, "message-handler-fixture.js"), gatewayAuthSqliteFixture());
+  fs.writeFileSync(path.join(dist, "devices-fixture.js"), handlerFixture());
+  fs.writeFileSync(path.join(dist, "device-pairing-fixture.js"), stateFixture());
+}
+
 export function runPatch(dist: string, audit = false) {
-  return spawnSync(
-    process.execPath,
-    ["--experimental-strip-types", PATCH_SCRIPT, ...(audit ? ["--audit"] : []), dist],
-    {
-      encoding: "utf8",
-      timeout: 10_000,
-    },
-  );
+  return spawnSync(process.execPath, [PATCH_SCRIPT, ...(audit ? ["--audit"] : []), dist], {
+    encoding: "utf8",
+    timeout: 10_000,
+  });
 }
 
 export function runFixture<T>(source: string, expression: string): T {
   return vm.runInNewContext(`${source}\n${expression}`, { Buffer, URL }) as T;
+}
+
+export interface PairingFixtureRuntime {
+  writes: Array<{ file: string; value: unknown; options?: Record<string, unknown> }>;
+  setPairingState(
+    pendingById: Record<string, unknown>,
+    pairedByDeviceId: Record<string, unknown>,
+    baseDir?: string,
+  ): void;
+  setFile(file: string, value: unknown): void;
+  getFile(file: string): unknown;
+  getPairingPaths(baseDir?: string): {
+    authPath: string;
+    pendingPath: string;
+    pairedPath: string;
+    journalPath: string;
+  };
+  listDevicePairing(baseDir?: string): Promise<{
+    pending: Array<Record<string, unknown>>;
+    paired: Array<Record<string, unknown>>;
+  }>;
+  getPairedDevice(deviceId: string, baseDir?: string): Promise<Record<string, unknown> | null>;
+  getPendingDevicePairing(
+    requestId: string,
+    baseDir?: string,
+  ): Promise<Record<string, unknown> | null>;
+  approveDevicePairing(
+    requestId: string,
+    options: Record<string, unknown>,
+    baseDir?: string,
+  ): Promise<Record<string, unknown> | null>;
+  approveBootstrapDevicePairing(
+    requestId: string,
+    bootstrapProfile: Record<string, unknown>,
+    baseDir?: string,
+  ): Promise<Record<string, unknown> | null>;
+  armLateWriterFailure(): Promise<void>;
+  releaseLateWriter(): void;
+  armCommittedJournalFailure(): void;
+  armIdleJournalFailure(): void;
+  armStateDrift(file: string, value: unknown): void;
+}
+
+export function openPatchedPairingFixture(): {
+  runtime: PairingFixtureRuntime;
+  source: string;
+  tmp: string;
+} {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-device-state-runtime-"));
+  const dist = path.join(tmp, "dist");
+  fs.mkdirSync(dist);
+  writeFixtureDist(dist);
+  const apply = runPatch(dist);
+  if (apply.status !== 0) {
+    throw new Error(`OpenClaw pairing fixture patch failed: ${apply.stdout}${apply.stderr}`);
+  }
+  const source = fs.readFileSync(path.join(dist, "device-pairing-fixture.js"), "utf8");
+  const runtime = runFixture<PairingFixtureRuntime>(
+    source,
+    `({
+      writes,
+      setPairingState,
+      setFile,
+      getFile,
+      getPairingPaths,
+      listDevicePairing,
+      getPairedDevice,
+      getPendingDevicePairing,
+      approveDevicePairing,
+      approveBootstrapDevicePairing,
+      armLateWriterFailure,
+      releaseLateWriter,
+      armCommittedJournalFailure,
+      armIdleJournalFailure,
+      armStateDrift
+    })`,
+  );
+  return { runtime, source, tmp };
 }
 
 export function validPending(overrides: Record<string, unknown> = {}) {
@@ -796,6 +1095,91 @@ export function validPaired(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function selfApprovalTransactionSnapshots() {
+  const pending = validPending({ ts: 100 });
+  const pairedBefore = validPaired({
+    approvedAtMs: 100,
+    tokens: {
+      operator: { token: "token-before", role: "operator", scopes: ["operator.pairing"] },
+    },
+  });
+  const pairedAfter = validPaired({
+    approvedAtMs: 200,
+    scopes: ["operator.pairing", "operator.read", "operator.write"],
+    approvedScopes: ["operator.pairing", "operator.read", "operator.write"],
+    tokens: {
+      operator: {
+        token: "token-after",
+        role: "operator",
+        scopes: ["operator.pairing", "operator.read", "operator.write"],
+      },
+    },
+  });
+  return {
+    before: {
+      auth: {
+        version: 1,
+        deviceId: "device-1",
+        tokens: {
+          operator: {
+            token: "token-before",
+            role: "operator",
+            scopes: ["operator.pairing"],
+            updatedAtMs: 1,
+          },
+        },
+      },
+      pendingById: { "request-1": pending },
+      pairedByDeviceId: { "device-1": pairedBefore },
+    },
+    after: {
+      auth: {
+        version: 1,
+        deviceId: "device-1",
+        tokens: {
+          operator: {
+            token: "token-after",
+            role: "operator",
+            scopes: ["operator.pairing", "operator.read", "operator.write"],
+            updatedAtMs: 1,
+          },
+        },
+      },
+      pendingById: {},
+      pairedByDeviceId: { "device-1": pairedAfter },
+    },
+  };
+}
+
+export function selfApprovalTransactionJournal(
+  phase: "prepared" | "committed",
+  snapshots: ReturnType<typeof selfApprovalTransactionSnapshots>,
+) {
+  return {
+    version: 2,
+    kind: "nemoclaw-self-approval",
+    phase,
+    requestId: "request-1",
+    deviceId: "device-1",
+    before: snapshots.before,
+    after: snapshots.after,
+  };
+}
+
+export function selfApprovalOptions() {
+  return {
+    callerScopes: ["operator.pairing"],
+    nemoclawSelfApprovalIdentity: {
+      deviceId: "device-1",
+      publicKey: "public-key-1",
+      role: "operator",
+      clientId: "cli",
+      clientMode: "cli",
+      deviceToken: "token-before",
+    },
+  };
+}
+
 export function validClient(overrides: Record<string, unknown> = {}) {
   return {
     isDeviceTokenAuth: true,
@@ -807,6 +1191,7 @@ export function validClient(overrides: Record<string, unknown> = {}) {
     connect: {
       role: "operator",
       scopes: ["operator.pairing"],
+      auth: { token: "token-before" },
       device: { id: "device-1", publicKey: "public-key-1" },
       client: { id: "cli", mode: "cli" },
     },

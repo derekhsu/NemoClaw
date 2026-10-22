@@ -55,6 +55,12 @@ export interface AgentStateLockPlan {
 
 export type AgentStateFileStrategy = "copy" | "sqlite_backup";
 
+// Post-capture scrub of machine-bound local authority (device identity,
+// pairing tokens, origin tokens, push registrations, OAuth stores, secret
+// store) so a restored copy cannot authenticate with the source identity.
+// Currently defined only for sqlite_backup state files.
+export type AgentStateFileSanitize = "machine-authority";
+
 export type StateFileRestoreMerge = "key-allowlist" | "openclaw-config";
 
 export type StateFileUserKeyType = "boolean" | "string" | "integer" | "number" | "enum";
@@ -94,6 +100,7 @@ export type StateFileRestoreOwnership =
 export interface AgentStateFile {
   path: string;
   strategy: AgentStateFileStrategy;
+  sanitize?: AgentStateFileSanitize;
   restore?: StateFileRestoreOwnership;
 }
 

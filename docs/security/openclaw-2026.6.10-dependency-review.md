@@ -81,14 +81,14 @@ The OpenClaw 2026.6.10 bump does not newly introduce an unfrozen OpenClaw transi
 ### Transitive Remediation Boundary
 
 This section is a point-in-time record of the remediation shipped for the
-2026.6.10 runtime. The current 2026.7.1 path installs the reviewed core archive
+2026.6.10 runtime. The current 2026.9.2 path installs the reviewed core archive
 directly because its core graph already contains the fixed versions, and keeps
-only the version-scoped Slack and Microsoft Teams Axios remediation plus the
-diagnostics Jaeger remediation added for the 2026.7.1 archive. See
-[`openclaw-2026.7.1-dependency-review.md`](./openclaw-2026.7.1-dependency-review.md)
+the version-scoped Slack `proxy-addr` remediation added for the 2026.9.2
+archive. See
+[`openclaw-2026.9.2-dependency-review.md`](./openclaw-2026.9.2-dependency-review.md)
 for the active source and validation boundary.
 
-`scripts/lib/openclaw-npm-remediation.mts` recognizes only eight exact reviewed identities: the E2E-only 2026.3.11 core archive, four retained 2026.6.10 identities, and three active 2026.7.1 identities.
+`scripts/lib/openclaw-npm-remediation.mts` recognizes only eleven exact reviewed identities: the E2E-only 2026.3.11 core archive, four retained 2026.6.10 identities, five retained 2026.7.1 identities, and the active 2026.9.2 Slack identity.
 It rejects an unexpected source dependency shape before it changes or installs an archive.
 The helper verifies every replacement package by exact registry SRI and tarball URL.
 It also rejects unsafe archive members before extraction and after repacking.

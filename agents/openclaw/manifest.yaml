@@ -19,7 +19,7 @@ homepage: "https://openclaw.ai"
 install_method: npm  # npm install -g openclaw@<version>
 binary_path: /usr/local/bin/openclaw
 version_command: "openclaw --version"
-expected_version: "2026.7.1"
+expected_version: "2026.9.2"
 version_scheme: calendar
 gateway_command: "openclaw gateway run"
 # Interactive entry point a user types inside the sandbox. OpenClaw stays a
@@ -110,6 +110,16 @@ state_files:
   - path: openclaw.json
     restore:
       merge: openclaw-config
+  # OpenClaw 2026.9.2 keeps portable state — sessions, cron, delivery queues,
+  # projects, skill library, channel ingress dedup — in the canonical SQLite
+  # database alongside machine-local authority (device identities, pairing
+  # tokens, origin tokens, secret store). sqlite_backup captures a consistent
+  # snapshot without WAL sidecars; machine-authority sanitization then strips
+  # the local authority from the backup so a restored clone cannot
+  # authenticate with this sandbox's identity and re-pairs locally instead.
+  - path: state/openclaw.sqlite
+    strategy: sqlite_backup
+    sanitize: machine-authority
 user_managed_files:
   - .env
   - .mcp.json

@@ -186,7 +186,7 @@ describe("reviewed npm archive", () => {
     const calls: Array<{ args: readonly string[]; request: ReviewedNpmArchiveRequest }> = [];
     const reviewed = cacheRequest();
     expect(verifyReviewedNpmCache(reviewed, cachedArchiveRunner(calls))).toEqual([
-      "@tencent-weixin/openclaw-weixin@2.4.3",
+      "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
       "zod@4.4.3",
     ]);
@@ -248,7 +248,7 @@ describe("reviewed npm archive", () => {
       "must not delegate to nested shrinkwrap",
     );
     expect(verifyReviewedNpmLockPackages({ ...request, allowNestedShrinkwrap: true })).toEqual([
-      "@tencent-weixin/openclaw-weixin@2.4.3",
+      "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
       "zod@4.4.3",
     ]);

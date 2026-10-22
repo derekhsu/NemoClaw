@@ -79,7 +79,7 @@ describe("generate-openclaw-config.mts: default plugin entries", () => {
     const configPath = path.join(tempDirectory, ".openclaw", "openclaw.json");
     const installEntry = {
       source: "npm",
-      spec: "@tencent-weixin/openclaw-weixin@2.4.3",
+      spec: "@tencent-weixin/openclaw-weixin@2.4.9",
       installPath: "/sandbox/.openclaw/extensions/openclaw-weixin",
     };
     try {

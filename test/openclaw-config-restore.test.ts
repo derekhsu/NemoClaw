@@ -160,6 +160,7 @@ const fs = require("fs");
 const path = require("path");
 const dir = path.join(${JSON.stringify(fakeRoot)}, ".openclaw");
 const cmd = process.argv[process.argv.length - 1] || "";
+if (cmd.includes("nemoclaw-sqlite-backup")) process.exit(2);
 const currentReadMode = ${JSON.stringify(options.currentReadMode ?? "file")};
 function readStdin() {
   const chunks = [];

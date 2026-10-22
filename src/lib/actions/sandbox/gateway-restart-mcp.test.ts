@@ -24,6 +24,7 @@ function baseDeps(overrides: Partial<GatewayRestartDeps> = {}): GatewayRestartDe
     getSessionAgent: () => hermesAgent,
     getSandbox: () => ({ name: "alpha", agent: "hermes" }),
     resolveSandboxDashboardPort: () => 18789,
+    buildOpenClawReadinessProbeCommand: () => "readyz-probe",
     requestGatewaySupervisorAction: vi.fn(() => ({
       status: 0,
       stdout: "GATEWAY_PID=123",

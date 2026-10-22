@@ -68,7 +68,7 @@ const EXPECTED_V089_FIXTURE: WorkflowRecord = {
     "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:3265d482f67c9d81ee3a59b0bbad5eb5ea6c705fea81ece8ae888ed12794f7f1",
   openshell_version: "0.0.85",
   openclaw_version: "2026.6.10",
-  current_openclaw_version: "2026.7.1",
+  current_openclaw_version: "2026.9.2",
   openclaw_state_upgrade: "1",
 };
 

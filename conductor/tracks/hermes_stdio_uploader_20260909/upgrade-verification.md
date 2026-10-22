@@ -48,7 +48,164 @@ or the `sandbox-mcp-server` entry point changes without an explicit review.
 
 If any step fails, do not publish or reuse the rebuilt image.
 
-## 2026-09-10 live verification attempt
+## 2026-09-11 verified acceptance on the uploader-0911 lineage
+
+Status reconciled on 2026-10-22 from the completed ClawShell track
+`hermes_local_uploader_20260909`. This result supersedes the blocked attempt
+recorded below.
+
+The historical acceptance is bound to the `feat/hermes-local-uploader-0911`
+lineage. PR #7 integrates its remaining source changes by squash while
+retaining the newer transaction and image contracts. The record below remains
+evidence for the 2026-09-11 source and environment.
+
+- NemoClaw source revision: the image was built at 14:20 on 2026-09-11 from
+  fork tip `85411e285` plus the equivalent working-tree delta; that delta
+  was committed later the same day (16:46 +0800) as `7a38c12be`, a port of
+  the verified source rather than the build source itself. The scoped
+  sandbox-id claim fix `ff43f3d1c` sits on top. Both commits identify the
+  source branch for PR #7's squash integration; they do not become Git
+  ancestors of the PR branch.
+- Image tag: `verify-20260911-1420`.
+- Image digest: `sha256:0f7a5d997935814913df6b5cf6fb1a25bd1bec04c3d55f9c3e157149fafd92aa`.
+- Sandbox: `hermes-p17-0911` (`sbx-299b6d58`).
+- Provisioning completed in approximately 42 seconds with zero diagnostics;
+  the gateway reported `running`.
+- The flow completed provisioning, `inference.local`, managed MCP registration,
+  a real LLM `upload_file` call, and signed-link download.
+- The link returned the exact artifact content five times with HTTP 200.
+  Attempts six and seven returned HTTP 429 after the configured use limit.
+- The Phase 4 checkpoint records 343 backend tests, 18 NemoClaw image and
+  transaction tests, and 23 sandbox-mcp-server tests passing.
+
+### 2026-09-10 gate resolution
+
+The superseded attempt below set a gate: do not publish the image or mark
+Task 4.3 complete until a reviewed host-control path can invoke the
+transaction without weakening the ordinary workload policy. The gate was met
+by provisioning through the ClawShell-managed Blueprint
+`hermes-uploader-verify-0910` rather than ordinary `sandbox exec`. The verify
+Blueprint moved from `base.yaml` to `policies/hermes-sandbox-permissive.yaml`,
+which adds `/opt/hermes` to `filesystem_policy.read_only`; the ordinary
+workload policy was unchanged. Companion fixes in the same round upgraded the
+OpenShell gateway to 0.0.101 so the supervised non-root startup topology
+authorizes the managed entrypoint, and made the adapter wait on the helper's
+bounded gateway probe before mutating (ClawShell commits `000ae535`,
+`64c24be0`, `2cbb8c66`).
+
+The gate was met, not bypassed. Production Hermes sandboxes run the
+`standard` profile, `hermes-sandbox.yaml` (ClawShell
+`policy_profile_service.py`), which has granted `/opt/hermes` under
+`filesystem_policy.read_only` since `ffe29112` (2026-08-31); the vendored
+source `agents/hermes/policy-additions.yaml` grants the same since
+`0968dfdd5` (2026-05-01). The `/opt` denial applied only to the verify
+Blueprint's `base.yaml` preset, and `hermes-sandbox-permissive.yaml` is
+marked "Do not use in production".
+
+### Evidence sources
+
+The ClawShell repository retains these records:
+
+- `conductor/archive/hermes_local_uploader_20260909/verification.md` records
+  the image digest, sandbox, LLM call, and bounded-download results.
+- The Git note on checkpoint `bd589343` records the test counts and full flow.
+- Checkpoints `24ca5949`, `fe383b7a`, `0a978056`, and `bd589343` record
+  verification for Phases 1–4.
+- Commit `a2158c79` marks the track complete; `303452ad` archives it.
+
+### Publication after the verified build
+
+`ff43f3d1c` changes the sandbox-id claim logic after the verified build. The
+2026-09-23 image publication built from `ff43f3d1c` succeeded for amd64,
+arm64, and the multi-architecture manifest in GitHub Actions run
+`35809052257`. That build did not receive a live sandbox acceptance run of
+its own, so the publication departs from the "record the successful
+signed-link evidence before publishing" step above; a live verification of
+the published image remains a follow-up.
+
+## 2026-10-22 source integration in PR #7
+
+PR #7 integrates the remaining changes from `feat/hermes-local-uploader-0911`
+by squash. The source commits are `7a38c12be` and `ff43f3d1c`; their Git
+history is not merged into the PR branch.
+
+The integration preserves the Hermes 0.20.6 version and these current
+contracts:
+
+- `add-local-uploader` retains its stricter payload validation, canonical
+  server configuration, and scoped sandbox-id support.
+- `inspect-local-uploader` remains the read-only verification action. The
+  older `probe --server` interface is not restored.
+- API-profile and managed-default protections remain in place. The integration
+  does not register the local uploader in the restricted API profile.
+- The current image workflow retains its source-base build and installed
+  uploader validation steps.
+
+The integrated image changes assert that config-hash files are nonempty,
+check the MCP state marker, and use `root:root 0755` for the Hermes state root.
+The current drain predicate still requires a root-owned state directory, and
+the original Hermes 0.20.6 patcher and output hash pins remain unchanged.
+
+The older runtime-user ownership relaxation is intentionally excluded. A
+sandbox user can rename the root-owned `.nemoclaw` directory beneath writable
+`/sandbox`, replace it with a runtime-user-owned directory, and omit the drain
+marker. Accepting that replacement would resume dispatch while containment is
+active. The current root-only predicate rejects the replacement.
+
+The existing transaction contracts cover the older branch's private-function
+transaction assertions; the obsolete test is not retained as a second
+implementation contract.
+
+### Integration Validation
+
+On 2026-10-22, the integration run passed 12 test files and 135 tests.
+The run used a temporary Python environment with PyYAML, selected through
+`PATH=/private/tmp/nemoclaw-pr7-validation-20261022/bin:$PATH`.
+
+```sh
+./node_modules/.bin/vitest run --project integration \
+  test/hermes-cron-restore-drain-patch.test.ts \
+  test/hermes-final-image-layout.test.ts \
+  test/hermes-local-uploader-contract.test.ts \
+  test/hermes-local-uploader-image-contract.test.ts \
+  test/hermes-local-uploader-inspection.test.ts \
+  test/hermes-local-uploader-upgrade-contract.test.ts \
+  test/hermes-mcp-config-transaction.test.ts \
+  test/hermes-mcp-startup-probe.test.ts \
+  test/hermes-api-profile-guard.test.ts \
+  test/hermes-default-mcp-scope.test.ts \
+  test/hermes-managed-default-guard.test.ts \
+  test/hermes-image-validation-workflow.test.ts \
+  --coverage=false
+```
+
+The new drain containment regression rejects runtime-user ownership and a
+replacement state directory. It failed against the historical unsafe
+predicate and passed against the retained root-only predicate. The test
+performs the directory rename and path lookup, with simulated ownership to
+avoid privileged test execution. Its cases also cover root group restrictions,
+unsafe modes, a present drain marker, and symlink rejection. Existing tests
+cover canonical uploader payloads, scoped sandbox IDs, read-only inspection,
+and the current API-profile and default-profile protections.
+
+`hadolint agents/hermes/Dockerfile` and `git diff --check` passed. Independent
+security review passed all nine repository categories. The retained patch
+applied to the pinned Hermes source extracted from the existing local
+`nemoclaw-hermes-sandbox-base:0.20.6` image; its original output digest was
+preserved. The temporary extraction container was removed and its absence
+confirmed.
+This validation did not build the complete integrated image or run a live
+ClawShell sandbox.
+
+### Remaining Acceptance
+
+The 2026-09-11 live result does not validate the integrated Hermes 0.20.6
+image. Build that image and verify the real LLM uploader flow in a new
+ClawShell-managed sandbox, then record its source commit, image digest,
+sandbox identifier, and signed-download result. This gate remains open.
+Live acceptance of the image published from `ff43f3d1c` also remains open.
+
+## 2026-09-10 live verification attempt (superseded)
 
 The approved local build completed successfully as
 `nemoclaw-hermes-local-uploader:verify-20260910` (manifest digest

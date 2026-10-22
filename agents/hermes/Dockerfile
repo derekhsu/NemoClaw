@@ -1174,19 +1174,21 @@ RUN mkdir -p /etc/nemoclaw \
     && mcp_digest="$(/opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py --guard /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py --config /sandbox/.hermes/config.yaml)" \
     && printf '# nemoclaw-hermes-mcp-state-v1 intended=%s applied=%s\n' "$mcp_digest" "$mcp_digest" \
     >> /etc/nemoclaw/hermes.config-hash \
+    && test -s /etc/nemoclaw/hermes.config-hash \
+    && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /etc/nemoclaw/hermes.config-hash \
     && chown root:root /etc/nemoclaw/hermes.config-hash \
     && chmod 444 /etc/nemoclaw/hermes.config-hash
 
 # Backward-compatible marker for host-side shields logic on older sandboxes.
 RUN cp /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash \
     && chmod 640 /sandbox/.hermes/.config-hash \
+    && test -s /sandbox/.hermes/.config-hash \
     && chown sandbox:sandbox /sandbox/.hermes/.config-hash
 
-# Keep the shared NemoClaw state root consistent across every shipped agent.
-# The root-owned sticky directory protects the managed-startup transaction
-# receipt while leaving the named plugin state directories sandbox-writable.
+# Keep the Hermes state root non-writable while named plugin directories stay
+# sandbox-writable. The cron restore drain still requires root:root ownership.
 RUN chown root:root /sandbox/.nemoclaw \
-    && chmod 1755 /sandbox/.nemoclaw \
+    && chmod 755 /sandbox/.nemoclaw \
     && chown -R root:root /sandbox/.nemoclaw/blueprints \
     && chmod -R 755 /sandbox/.nemoclaw/blueprints \
     && mkdir -p /sandbox/.nemoclaw/state /sandbox/.nemoclaw/migration /sandbox/.nemoclaw/snapshots /sandbox/.nemoclaw/staging \
@@ -1241,7 +1243,10 @@ RUN check_metadata() { \
     && check_absent /sandbox/.hermes/managed-policy.json \
     && check_absent /sandbox/.nemoclaw/hermes-cron-restore-drain.json \
     && check_absent /sandbox/.nemoclaw/hermes-cron-restore-release-recovery.json \
-    && check_metadata /sandbox/.nemoclaw 'root:root 1755' \
+    && test -s /etc/nemoclaw/hermes.config-hash \
+    && test -s /sandbox/.hermes/.config-hash \
+    && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /sandbox/.hermes/.config-hash \
+    && check_metadata /sandbox/.nemoclaw 'root:root 755' \
     && check_metadata /scripts/patch-bundled-npm-brace-expansion.mts 'root:root 444' \
     && check_metadata /scripts/lib/patch-bundled-npm-ip-address.mts 'root:root 444' \
     && check_metadata /scripts/patch-bundled-npm-tar.mts 'root:root 444' \

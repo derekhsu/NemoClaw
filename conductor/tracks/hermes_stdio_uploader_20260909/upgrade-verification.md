@@ -48,12 +48,23 @@ or the `sandbox-mcp-server` entry point changes without an explicit review.
 
 If any step fails, do not publish or reuse the rebuilt image.
 
-## 2026-09-11 completed verification
+## 2026-09-11 verified acceptance on the uploader-0911 lineage
 
 Status reconciled on 2026-10-22 from the completed ClawShell track
 `hermes_local_uploader_20260909`. This result supersedes the blocked attempt
 recorded below.
 
+The acceptance is bound to the `feat/hermes-local-uploader-0911` lineage, not
+to `feat/image-only-cli`: on this branch the transaction helper has no
+`--server` payload contract, the drain predicate does not accept a
+runtime-user-owned state root, and `test/hermes-local-uploader-transaction.test.ts`
+does not exist.
+
+- NemoClaw source revision: the verified 2026-09-11 image delta is preserved
+  as `7a38c12be`, ported onto fork tip `85411e285`, with the scoped
+  sandbox-id claim fix `ff43f3d1c` on top. Both commits live only on
+  `feat/hermes-local-uploader-0911` and are not merged into
+  `feat/image-only-cli`.
 - Image tag: `verify-20260911-1420`.
 - Image digest: `sha256:0f7a5d997935814913df6b5cf6fb1a25bd1bec04c3d55f9c3e157149fafd92aa`.
 - Sandbox: `hermes-p17-0911` (`sbx-299b6d58`).
@@ -66,6 +77,21 @@ recorded below.
 - The Phase 4 checkpoint records 343 backend tests, 18 NemoClaw image and
   transaction tests, and 23 sandbox-mcp-server tests passing.
 
+### 2026-09-10 gate resolution
+
+The superseded attempt below set a gate: do not publish the image or mark
+Task 4.3 complete until a reviewed host-control path can invoke the
+transaction without weakening the ordinary workload policy. The gate was met
+by provisioning through the ClawShell-managed Blueprint
+`hermes-uploader-verify-0910` rather than ordinary `sandbox exec`. The verify
+Blueprint moved from `base.yaml` to `policies/hermes-sandbox-permissive.yaml`,
+which adds `/opt/hermes` to `filesystem_policy.read_only`; the ordinary
+workload policy was unchanged. Companion fixes in the same round upgraded the
+OpenShell gateway to 0.0.101 so the supervised non-root startup topology
+authorizes the managed entrypoint, and made the adapter wait on the helper's
+bounded gateway probe before mutating (ClawShell commits `000ae535`,
+`64c24be0`, `2cbb8c66`).
+
 ### Evidence sources
 
 The ClawShell repository retains these records:
@@ -77,12 +103,15 @@ The ClawShell repository retains these records:
   verification for Phases 1–4.
 - Commit `a2158c79` marks the track complete; `303452ad` archives it.
 
-The later image-source commits `7a38c12be` and `ff43f3d1c` remain on
-`feat/hermes-local-uploader-0911`. Their merge into `feat/image-only-cli` is
-separate from this historical acceptance. The 2026-09-23 image publication
-on `ff43f3d1c` succeeded for amd64, arm64, and the multi-architecture manifest
-in GitHub Actions run `35809052257`; that publication is not a new live
-sandbox acceptance result.
+### Publication after the verified build
+
+`ff43f3d1c` changes the sandbox-id claim logic after the verified build. The
+2026-09-23 image publication built from `ff43f3d1c` succeeded for amd64,
+arm64, and the multi-architecture manifest in GitHub Actions run
+`35809052257`. That build did not receive a live sandbox acceptance run of
+its own, so the publication departs from the "record the successful
+signed-link evidence before publishing" step above; a live verification of
+the published image remains a follow-up.
 
 ## 2026-09-10 live verification attempt (superseded)
 

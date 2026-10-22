@@ -3,7 +3,8 @@
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Type:** Feature
 **Created:** 2026-09-09
-**Status:** Complete — historical acceptance verified on 2026-09-11
+**Status:** In Progress — historical acceptance verified on 2026-09-11 on
+`feat/hermes-local-uploader-0911`, not yet merged into `feat/image-only-cli`
 
 ## Summary
 
@@ -22,6 +23,11 @@ As a ClawShell user, I want to retrieve a file created in a Hermes sandbox so
 that I can access its contents through a signed download link.
 
 ## Acceptance Criteria
+
+Checked items record the 2026-09-11 acceptance on the
+`feat/hermes-local-uploader-0911` lineage. That verified delta is not merged
+into `feat/image-only-cli`, so these criteria are not yet demonstrated on
+this branch.
 
 - [x] The managed Hermes transaction accepts only the fixed uploader command,
   its reviewed arguments, and its reviewed environment references.
@@ -64,7 +70,9 @@ the helper, layout, integrity, and upgrade contract as one capability.
 ## Acceptance evidence
 
 The completed ClawShell track and Phase 4 checkpoint `bd589343` record
-acceptance of this fork-specific image and helper capability. See
-[upgrade verification](upgrade-verification.md#2026-09-11-completed-verification)
+acceptance of this fork-specific image and helper capability on the
+`feat/hermes-local-uploader-0911` lineage. See
+[upgrade verification](upgrade-verification.md#2026-09-11-verified-acceptance-on-the-uploader-0911-lineage)
 for the tests and live sandbox results. This records the 2026-09-11 revision
-and environment; later revisions require their own upgrade verification.
+and environment; the `feat/image-only-cli` implementation requires its own
+merge or upgrade verification.

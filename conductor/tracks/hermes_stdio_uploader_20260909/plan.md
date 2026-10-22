@@ -2,7 +2,9 @@
 
 **Track ID:** `hermes_stdio_uploader_20260909`
 **Spec:** [spec.md](spec.md)
-**Status:** [x] Complete — verified and checkpointed on 2026-09-11
+**Status:** [~] In Progress — verified and checkpointed on 2026-09-11 on
+`feat/hermes-local-uploader-0911`; the verified delta is not merged into
+`feat/image-only-cli`
 
 ## Phase 1: Define the Managed Local MCP Contract [checkpoint]
 
@@ -59,6 +61,10 @@ The new sandbox `hermes-p17-0911` completed the real LLM uploader flow,
 including five successful downloads and rejection after the use limit.
 
 ClawShell commit `a2158c79` marked its track complete, and `303452ad`
-archived it. The [verification record](upgrade-verification.md#2026-09-11-completed-verification)
+archived it to `conductor/archive/hermes_local_uploader_20260909/` in the
+ClawShell repository; checkpoint `bd589343` and its git note live there too.
+The [verification record](upgrade-verification.md#2026-09-11-verified-acceptance-on-the-uploader-0911-lineage)
 contains the evidence locations. These final checklist entries refer to that
-historical acceptance, rather than a new test run on the current branch.
+historical acceptance on the `feat/hermes-local-uploader-0911` lineage —
+commits `7a38c12be` and `ff43f3d1c` are unmerged here — rather than a test
+run on the current branch.

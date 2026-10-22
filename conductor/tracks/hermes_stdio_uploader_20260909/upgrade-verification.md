@@ -60,9 +60,11 @@ to `feat/image-only-cli`: on this branch the transaction helper has no
 runtime-user-owned state root, and `test/hermes-local-uploader-transaction.test.ts`
 does not exist.
 
-- NemoClaw source revision: the verified 2026-09-11 image delta is preserved
-  as `7a38c12be`, ported onto fork tip `85411e285`, with the scoped
-  sandbox-id claim fix `ff43f3d1c` on top. Both commits live only on
+- NemoClaw source revision: the image was built at 14:20 on 2026-09-11 from
+  fork tip `85411e285` plus the equivalent working-tree delta; that delta
+  was committed later the same day (16:46 +0800) as `7a38c12be`, a port of
+  the verified source rather than the build source itself. The scoped
+  sandbox-id claim fix `ff43f3d1c` sits on top. Both commits live only on
   `feat/hermes-local-uploader-0911` and are not merged into
   `feat/image-only-cli`.
 - Image tag: `verify-20260911-1420`.
@@ -91,6 +93,15 @@ OpenShell gateway to 0.0.101 so the supervised non-root startup topology
 authorizes the managed entrypoint, and made the adapter wait on the helper's
 bounded gateway probe before mutating (ClawShell commits `000ae535`,
 `64c24be0`, `2cbb8c66`).
+
+The gate was met, not bypassed. Production Hermes sandboxes run the
+`standard` profile, `hermes-sandbox.yaml` (ClawShell
+`policy_profile_service.py`), which has granted `/opt/hermes` under
+`filesystem_policy.read_only` since `ffe29112` (2026-08-31); the vendored
+source `agents/hermes/policy-additions.yaml` grants the same since
+`0968dfdd5` (2026-05-01). The `/opt` denial applied only to the verify
+Blueprint's `base.yaml` preset, and `hermes-sandbox-permissive.yaml` is
+marked "Do not use in production".
 
 ### Evidence sources
 

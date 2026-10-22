@@ -46,13 +46,20 @@
 
 ## Final Verification
 
-- [x] All acceptance criteria in `spec.md` are met.
+- [x] All acceptance criteria in `spec.md` are met on the
+  `feat/hermes-local-uploader-0911` lineage.
 - [x] Focused deterministic tests and image-contract tests pass.
 - [x] The tracked upgrade procedure has evidence for the selected upstream
   revision.
 - [x] The feature remains documented as fork-specific.
 
-## Completion reconciliation (2026-10-22)
+## Remaining work
+
+- [ ] Merge `feat/hermes-local-uploader-0911` into `feat/image-only-cli`, or
+  verify this branch's implementation in a live sandbox.
+- [ ] Verify the image published from `ff43f3d1c` in a live sandbox.
+
+## Acceptance reconciliation (2026-10-22)
 
 The 2026-09-10 blocked attempt was superseded by the 2026-09-11
 verification in ClawShell. Phase 4 checkpoint `bd589343` records 343 backend,

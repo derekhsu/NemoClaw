@@ -3,7 +3,8 @@
 
 # OpenClaw 2026.9.2 dependency review
 
-Review date: 2026-12-26
+Inherited migration review date: 2026-12-26.
+The inherited date is later than this remediation and does not date its validation evidence.
 
 ## Decision
 
@@ -14,13 +15,13 @@ child-visible credential manifest, or the exact-version supervisor gate.
 
 The production OpenClaw install uses the authoritative committed lock at
 `agents/openclaw/openclaw-runtime/package-lock.json`, with SHA-256
-`31734b077d02076ab3b38fd43ba5d686543d3dccb8f0c4c8f741d905c19ce826`.
+`154229a557bdff54be02e8ecd7c06f0355b6c11aa7efab8aa5443dcfb24e928a`.
 NemoClaw regenerates that lock from the SRI-verified `openclaw@2026.9.2`
 archive. The published `openclaw@2026.9.2` archive now carries the corrected
 dependency identities that the `2026.7.1` remediation rewrote, so the install
 requires no core remediation entry. The OpenClaw runtime manifest instead pins
-reviewed overrides for `@modelcontextprotocol/sdk@1.31.0`, `hono@4.12.34`,
-`tar@7.5.21`, `fast-uri@3.1.7`, and `undici@8.10.2`.
+reviewed overrides for `@modelcontextprotocol/sdk@1.32.0`, `hono@4.12.34`,
+`tar@7.5.21`, `fast-uri@3.1.7`, `undici@8.12.2`, `body-parser@2.4.0`, and `zod@4.6.6`.
 
 The managed messaging runtime manifest selects the `2026.9.2` channel plugin
 graph, `@tencent-weixin/openclaw-weixin@2.4.9`, `@emnapi/core@1.11.1`,
@@ -28,7 +29,7 @@ graph, `@tencent-weixin/openclaw-weixin@2.4.9`, `@emnapi/core@1.11.1`,
 alias overrides `fast-uri@4.1.4`, `ip-address@10.5.0`, `protobufjs@8.7.2`,
 `qs@6.15.3`, `uuid@14.0.2`, and `proxy-addr@2.0.8`. The committed WeChat
 runtime lock is `agents/openclaw/wechat-runtime/package-lock.json` with
-SHA-256 `84f2b731e9ffe731d29c28ebbe795116217771971c729b577df1a8816296f9b8`.
+SHA-256 `74856e20d229528ee7e2d107e6238e2204beea36c0deb733a7102082bcd4e5ea`.
 
 OpenClaw `2026.9.2` requires Node
 `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`. The reviewed managed base image
@@ -70,14 +71,14 @@ upstream APIs.
 - `tar@7.5.21` (NemoClaw plugin direct dependency)
   - `sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==`
   - `https://registry.npmjs.org/tar/-/tar-7.5.21.tgz`
-- `undici@8.10.2` (NemoClaw CLI and OpenClaw runtime override)
+- `undici@8.10.2` (NemoClaw CLI and managed messaging pin; OpenClaw runtime overrides to `8.12.2`)
   - `https://registry.npmjs.org/undici/-/undici-8.10.2.tgz`
 - `proxy-addr@2.0.8` (Slack bundled-dependency remediation)
   - `sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==`
   - `https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz`
   - `MIT`; dependencies `forwarded@0.2.0` and `ipaddr.js@1.9.1`; Node `>= 0.10`
 - `mcporter@0.7.3` committed runtime lock
-  - SHA-256: `3c81d752d50113a2781b2aa1e8f1faade088f6fe3ed0bdde6ad0fb67a364f958`
+  - SHA-256: `c24649f412f19bebfed29bda9f0b17f714fb4834ff76d06ef97e792952c33ebd`
 
 ## Audit result and temporary dependency remediations
 
@@ -86,8 +87,8 @@ remediated reviewed-archive graph, the committed OpenClaw runtime lock, and the
 committed WeChat and mcporter runtime locks. Point-in-time `npm audit` results
 under Node `22.23.1` against the official registry:
 
-- OpenClaw locked runtime: `info=0`, `low=0`, `moderate=2`, `high=0`,
-  `critical=0`, `clean` at the configured `high` threshold.
+- OpenClaw locked runtime: `info=0`, `low=0`, `moderate=8`, `high=0`,
+  `critical=0` in the isolated remediation candidate at the configured `high` threshold.
 - WeChat locked runtime: `info=0`, `low=0`, `moderate=0`, `high=0`,
   `critical=0`, `clean`.
 - Managed messaging locked runtime (advisory scan, not a threshold gate):
@@ -107,11 +108,21 @@ The Slack remediation's remediated package tree is pinned to
 `sha512-li/y4SFf6t3Z6JvP2R2H8dfauu0eybiwzd408QMCR9+zzi6oVVVffi+LGRDDYMh2TFCGgQ8Pnv2a5FiXMmPt1A==`
 and was reproduced byte-for-byte on the real `2026.9.2` archive.
 
-The OpenClaw locked runtime's two moderate findings are `hono@4.12.34`
-(`<4.13.5`, `<4.13.7` ranges) and `fast-uri@3.1.7`
-(`GHSA-hrr3-gc8f-f4qj`, `<3.1.8`), both below the `high` threshold. They are the
-reviewed override pins; upgrade decisions stay with the override review, not
-this pin.
+The isolated OpenClaw and mcporter remediation candidates each report `moderate=8`, `high=0`, and `critical=0`.
+The candidates installed with lifecycle scripts disabled, and the unchanged repository audit wrapper returned exit code `0` and status `clean` for each graph.
+Here, `clean` means no unaccepted finding at or above the configured `high` threshold.
+These results do not establish final image acceptance.
+The candidate retains lower-severity findings below the configured `high` threshold.
+Both isolated installs passed `npm audit signatures` with exit code `0`.
+Mcporter verified `120` package signatures and `16` attestations; OpenClaw verified `328` package signatures and `62` attestations.
+Both image builds still require validation before publication.
+Isolated smoke checks passed for `mcporter@0.7.3` and `openclaw@2026.9.2` CLI commands, SDK `StreamableHTTPServerTransport` shutdown, and one-issue rejection of an oversized Zod array.
+The earlier focused six-file test run passed `77` tests; two known baseline failures remain tracked in issue `#4` for wording and a legacy `RUN` fixture.
+After the archive-test and CI prefetch updates, the six-file run passed `63` tests and encountered six environment failures.
+Those failures occurred before assertions because the host macOS Bash `3.2` lacks `readarray`; they do not establish a code regression or belong to issue `#4`.
+The other five focused files passed `59` tests, and a separate four-file core run passed `44` tests.
+Installed OpenClaw smoke checks also passed Undici streaming and valid gzip JSON parsing.
+Malformed gzip returned HTTP `400`, and the Express/body-parser server remained responsive.
 
 The messaging lock's `axios@1.19.0` direct dependency reports a `high`
 severity advisory affecting `>=1.7.0 <1.20.0` published after the reviewed
@@ -165,7 +176,7 @@ source archive through a checksum-addressed `ADD` instruction. The optional
 plugin boundary verifies the committed SHA-512 identities for
 `@openclaw/diagnostics-otel@2026.9.2`, `@openclaw/brave-plugin@2026.9.2`, and
 `@openclaw/tavily-plugin@2026.9.2`. The WeChat dependencies
-`openclaw-weixin@2.4.9`, `qrcode-terminal@0.12.0`, and `zod@4.4.3` use
+`openclaw-weixin@2.4.9`, `qrcode-terminal@0.12.0`, and `zod@4.6.6` use
 committed SHA-256 source checksums and their lockfile SHA-512 identities.
 The managed-messaging lock selects `430` unique archives: `410` common
 archives plus `10` architecture-specific archives for each of `linux-x64` and
@@ -178,6 +189,55 @@ against the committed lockfile SHA-512 identity, and runs `npm ci` with
 off-registry, or integrity-mismatched archives before it creates the minimal
 npm resolver metadata. Package materialization cannot fall back to the public
 registry.
+
+## Dependency Remediation on October 26, 2026
+
+Build `40314970360` stopped at the mcporter production advisory gate.
+The candidate keeps `openclaw@2026.9.2` and `mcporter@0.7.3` and changes exact dependency overrides in their committed runtime graphs.
+The OpenClaw graph also replaces upstream's exact `undici@8.10.2` and `zod@4.4.3` pins.
+Those two replacements require downstream runtime validation because upstream did not declare a compatible version range.
+The managed messaging graph remains a separate review boundary.
+The selected WeChat runtime also overrides `zod` to exact `4.6.6`.
+Regeneration uses `--legacy-peer-deps` and preserves the four original lock entries for the root, WeChat plugin, `qrcode-terminal`, and `zod`.
+Its checksum-addressed Docker archive uses SHA-256 `312553620ac82cbb25d505100fbb41c1e219b3cd6979cf93c3a1b4dd5b79e039`, verified against the locked SRI.
+The isolated WeChat `npm ci --legacy-peer-deps --ignore-scripts` installed exactly three packages.
+Its production audit at the `low` threshold returned exit code `0` with `info=0`, `low=0`, `moderate=0`, `high=0`, and `critical=0`.
+Its registry-signature check returned exit code `0` with three verified signatures and one attestation.
+These package checks do not establish final image acceptance.
+
+The following registry records bind each replacement to its package bytes and published source commit.
+
+| Replacement | npm SRI | Registry Git Commit |
+| --- | --- | --- |
+| `@modelcontextprotocol/sdk@1.32.0` | `sha512-8BviX/hK4Gd2eL1KdTwm0gfl4d3wdoErW0Jd00h6nomUAtk6IJk5vwQJc6kfWtJTzN5OEV/lgIiJKI8fiDGAlA==` | `32549b00a9a808265f35a29f92fdf27fa4aac2ef` |
+| `body-parser@2.4.0` | `sha512-Ifk1KcLrxaGt1occQagQNFNNOqRt1LFuehEnHHzB8Z6cRgIxRU1TBaiIsUiCdA+gy5PL7Y1IX31DNKkRmxtXjQ==` | `b4744d739e1e2e5257f2ddac31eed191aa5152a4` |
+| `zod@4.6.6` | `sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==` | `284243fb0d6532665afdc9239188773bb624f73c` |
+| `undici@8.12.2` | `sha512-XtuDWVdqTLr3NAxm2ly9/hU6kUsJOgGh1RASzMBbsw6aWCOaQzHdW+QQDfdERjfJ2V5vL5pRPa4RetO9UfivDg==` | `bb6cc0ae9b6827ed273ed5ba344148273629638f` |
+
+The SDK source inventory at the registry commit retains client and server exports, the Node.js `>=18` floor, and the `zod@^3.25 || ^4.0` contract.
+Mcporter's `^1.25.1` SDK range accepts `1.32.0`; OpenClaw's exact `1.30.0` dependency is intentionally overridden.
+The existing SDK token-issuer review still applies.
+
+Body-parser's source history at the registry commit identifies the fix for `GHSA-27r3-jxmh-p828`.
+It also adds `zstd` content decoding and stops mutating parser options and request objects while reading bodies.
+Express's `^2.2.1` range accepts `2.4.0`, and its Node.js `>=18` floor remains below the image's Node.js `22.23.1`.
+Its changed transitive ranges include `content-type@^2.1.0`, `iconv-lite@^0.7.3`, and `qs@^6.16.1`.
+
+The official Zod `v4.6.6` release checks array, set, and map bounds before element parsing.
+The release records that compromised source commits were removed and were never published to npm.
+It identifies registry commit `284243fb` as a pre-rewrite copy of `9c219833c3a3764fa1f1ea9c5ecec8254a63c0b1` with identical contents.
+The review therefore binds the npm archive SRI and registry source commit instead of assuming the rewritten release commit has the same identity.
+Mcporter's `^4.2.1` range accepts this replacement; OpenClaw's exact `4.4.3` pin is intentionally overridden.
+
+The official Undici `v8.12.2` release fixes TLS renegotiation process crashes, dropped TLS verification callbacks, redirect-cache origin confusion, and excessive content-encoding crashes.
+It also fixes decompression errors, mixed-case SRI algorithms, and unbounded EventSource and WebSocket buffering.
+The package requires Node.js `>=22.19.0`, which the image's Node.js `22.23.1` satisfies.
+Validation must exercise OpenClaw's HTTP dispatch, TLS options, streaming, and schema consumers before publication.
+
+The review used official npm version records, the SDK package inventory and body-parser history at the immutable commits above, and official Zod and Undici release inventories.
+The candidate does not add an audit exception, lower an audit threshold, disable signature verification, or establish final image acceptance.
+The completed smoke checks cover CLI startup, SDK transport shutdown, Zod size-bound rejection, Undici streaming, and Express/body-parser gzip handling.
+Final runtime and image validation remain pending.
 
 ## Existing security and runtime contracts
 

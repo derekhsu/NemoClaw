@@ -188,7 +188,7 @@ describe("reviewed npm archive", () => {
     expect(verifyReviewedNpmCache(reviewed, cachedArchiveRunner(calls))).toEqual([
       "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
-      "zod@4.4.3",
+      "zod@4.6.6",
     ]);
 
     expect(calls.filter(({ args }) => args[0] === "pack")).toHaveLength(3);
@@ -250,7 +250,7 @@ describe("reviewed npm archive", () => {
     expect(verifyReviewedNpmLockPackages({ ...request, allowNestedShrinkwrap: true })).toEqual([
       "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
-      "zod@4.4.3",
+      "zod@4.6.6",
     ]);
   });
 

@@ -130,7 +130,7 @@ npm --prefix "$runtime_dir" ci \
   --no-audit \
   --no-fund \
   --cache "$trusted_cache"
-for package_spec in "$wechat_spec" "qrcode-terminal@0.12.0" "zod@4.4.3"; do
+for package_spec in "$wechat_spec" "qrcode-terminal@0.12.0" "zod@4.6.6"; do
   npm cache add "$package_spec" \
     --userconfig "$trusted_npmrc" \
     --registry "$npm_registry" \

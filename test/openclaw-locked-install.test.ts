@@ -19,9 +19,9 @@ const PACKAGE_SPEC = "openclaw@2026.9.2";
 const INTEGRITY =
   "sha512-M6C7UsnX815nv26qBJFYGe6aGzv+ftZLRzV6S9oRXUtXg2Yn67eVntpssT94kgkquKVSeUxerUg0j1ONp4WYQg==";
 const TARBALL = "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.2.tgz";
-const LOCK_SHA256 = "31734b077d02076ab3b38fd43ba5d686543d3dccb8f0c4c8f741d905c19ce826";
+const LOCK_SHA256 = "154229a557bdff54be02e8ecd7c06f0355b6c11aa7efab8aa5443dcfb24e928a";
 const MCPORTER_PACKAGE_SPEC = "mcporter@0.7.3";
-const MCPORTER_LOCK_SHA256 = "3c81d752d50113a2781b2aa1e8f1faade088f6fe3ed0bdde6ad0fb67a364f958";
+const MCPORTER_LOCK_SHA256 = "c24649f412f19bebfed29bda9f0b17f714fb4834ff76d06ef97e792952c33ebd";
 const MCP_TOOL_DISCOVERY_PACKAGE_SPEC = "@modelcontextprotocol/sdk@1.30.0";
 const MCP_TOOL_DISCOVERY_LOCK_SHA256 =
   "bc7e34d9eb1f72cf3016c8b88c72d3b7682a4f234903cb93b9476b10d7e954eb";
@@ -180,8 +180,37 @@ describe("locked OpenClaw production installation (#5896)", () => {
     expect(verified).toContain("brace-expansion@5.0.12");
     expect(verified).toContain("fast-uri@3.1.7");
     expect(verified).toContain("ip-address@10.7.4");
-    expect(verified).toContain("undici@8.10.2");
+    expect(verified).toContain("undici@8.12.2");
+    expect(verified).toContain("@modelcontextprotocol/sdk@1.32.0");
+    expect(verified).toContain("body-parser@2.4.0");
+    expect(verified).toContain("zod@4.6.6");
     expect(sha256(LOCKFILE)).toBe(LOCK_SHA256);
+  });
+
+  it("verifies the patched mcporter closure against its reviewed root artifact", () => {
+    const verified = verifyReviewedNpmLock(
+      {
+        expectedIntegrity:
+          "sha512-egoPVYqTnWb3NjRIxo+xc8OrAI0dlPrJm9pAiZx0pImuNIV5rKhGtTnIfH/Y1ldGPVu74ibj3KR5c9U/QSdQFA==",
+        expectedLockSha256: MCPORTER_LOCK_SHA256,
+        label: "mcporter patched production graph",
+        lockfilePath: path.join(
+          REPO_ROOT,
+          "agents",
+          "openclaw",
+          "mcporter-runtime",
+          "package-lock.json",
+        ),
+        packageSpec: MCPORTER_PACKAGE_SPEC,
+        registryOrigin: "https://registry.npmjs.org/",
+        tarballUrl: "https://registry.npmjs.org/mcporter/-/mcporter-0.7.3.tgz",
+      },
+      reviewedMetadata,
+    );
+    expect(verified).toContain(MCPORTER_PACKAGE_SPEC);
+    expect(verified).toContain("@modelcontextprotocol/sdk@1.32.0");
+    expect(verified).toContain("body-parser@2.4.0");
+    expect(verified).toContain("zod@4.6.6");
   });
 
   // source-shape-contract: security -- The committed production lock digest must fail before any registry-controlled metadata is consulted

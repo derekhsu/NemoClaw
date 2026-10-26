@@ -481,7 +481,7 @@ RUN --mount=type=bind,source=nemoclaw-blueprint/blueprint.yaml,target=/tmp/bluep
     OPENCLAW_LOCK_SHA256=none-legacy-fixture; \
     OPENCLAW_RECIPE='ignore-scripts+reviewed-lifecycle-v1'; \
     if [ "$OPENCLAW_VERSION" = "2026.9.2" ]; then \
-        OPENCLAW_LOCK_SHA256=31734b077d02076ab3b38fd43ba5d686543d3dccb8f0c4c8f741d905c19ce826; \
+        OPENCLAW_LOCK_SHA256=154229a557bdff54be02e8ecd7c06f0355b6c11aa7efab8aa5443dcfb24e928a; \
         ACTUAL_OPENCLAW_LOCK_SHA256="$(sha256sum /usr/local/lib/nemoclaw/openclaw-runtime/package-lock.json | awk '{print $1}')"; \
         [ "$ACTUAL_OPENCLAW_LOCK_SHA256" = "$OPENCLAW_LOCK_SHA256" ] \
             || { echo "Error: OpenClaw lock SHA-256 mismatch (expected $OPENCLAW_LOCK_SHA256, found $ACTUAL_OPENCLAW_LOCK_SHA256)"; exit 1; }; \
@@ -604,7 +604,7 @@ RUN if [ "$OPENCLAW_VERSION" = "2026.9.2" ]; then \
 # this with a service-specific probe; otherwise an unresponsive service
 # will still report healthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-    CMD node -e "process.exit(0)"
+    CMD ["node", "-e", "process.exit(0)"]
 
 # Bake Homebrew core (Linuxbrew) into the sandbox base image (#3913).
 #

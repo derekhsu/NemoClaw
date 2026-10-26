@@ -4,7 +4,7 @@
   "legacyMaxLines": {
     "src/lib/inference/nim.test.ts": 2068,
     "src/lib/onboard/preflight.test.ts": 1904,
-    "test/generate-openclaw-config.test.ts": 1909,
+    "test/generate-openclaw-config.test.ts": 1802,
     "test/install-preflight.test.ts": 3908,
     "test/messaging-build-applier.test.ts": 1530,
     "test/nemoclaw-start.test.ts": 4752,

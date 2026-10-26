@@ -223,13 +223,19 @@ describe("locked OpenClaw production installation (#5896)", () => {
       fs.readFileSync(path.join(REPO_ROOT, "ci", "reviewed-npm-audit.json"), "utf8"),
     );
     const graph = config.lockedGraphs.find((entry: { id: string }) => entry.id === graphId);
+    const lockfilePath = path.join(REPO_ROOT, graph.directory, "package-lock.json");
+    const reviewedDigests: string[] = [graph.lockSha256, graph.replacementLockSha256].filter(
+      Boolean,
+    );
+    const expectedLockSha256 = sha256(lockfilePath);
+    expect(reviewedDigests).toContain(expectedLockSha256);
     expect(() =>
       verifyReviewedNpmLock(
         {
           expectedIntegrity: graph.integrity,
-          expectedLockSha256: graph.lockSha256,
+          expectedLockSha256,
           label: graph.label,
-          lockfilePath: path.join(REPO_ROOT, graph.directory, "package-lock.json"),
+          lockfilePath,
           packageSpec: graph.packageSpec,
           registryOrigin: config.registryOrigin,
           tarballUrl: graph.tarballUrl,

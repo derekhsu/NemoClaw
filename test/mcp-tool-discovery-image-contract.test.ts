@@ -118,10 +118,10 @@ describe("MCP tool discovery image contract", () => {
     );
     const reviewedSdk = {
       name: "@modelcontextprotocol/sdk",
-      version: "1.30.0",
-      resolved: "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz",
+      version: "1.32.0",
+      resolved: "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz",
       integrity:
-        "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==",
+        "sha512-8BviX/hK4Gd2eL1KdTwm0gfl4d3wdoErW0Jd00h6nomUAtk6IJk5vwQJc6kfWtJTzN5OEV/lgIiJKI8fiDGAlA==",
     } as const;
     const reviewedPackages = {
       "@hono/node-server": {
@@ -130,11 +130,17 @@ describe("MCP tool discovery image contract", () => {
         integrity:
           "sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==",
       },
-      "fast-uri": {
-        version: "3.1.5",
-        resolved: "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.5.tgz",
+      "body-parser": {
+        version: "2.4.0",
+        resolved: "https://registry.npmjs.org/body-parser/-/body-parser-2.4.0.tgz",
         integrity:
-          "sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==",
+          "sha512-Ifk1KcLrxaGt1occQagQNFNNOqRt1LFuehEnHHzB8Z6cRgIxRU1TBaiIsUiCdA+gy5PL7Y1IX31DNKkRmxtXjQ==",
+      },
+      "fast-uri": {
+        version: "3.1.7",
+        resolved: "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",
+        integrity:
+          "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==",
       },
       hono: {
         version: "4.12.34",
@@ -147,6 +153,18 @@ describe("MCP tool discovery image contract", () => {
         resolved: "https://registry.npmjs.org/ip-address/-/ip-address-10.3.1.tgz",
         integrity:
           "sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==",
+      },
+      "proxy-addr": {
+        version: "2.0.8",
+        resolved: "https://registry.npmjs.org/proxy-addr/-/proxy-addr-2.0.8.tgz",
+        integrity:
+          "sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==",
+      },
+      zod: {
+        version: "4.6.6",
+        resolved: "https://registry.npmjs.org/zod/-/zod-4.6.6.tgz",
+        integrity:
+          "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==",
       },
     } as const;
 
@@ -185,6 +203,7 @@ describe("MCP tool discovery image contract", () => {
       tarballUrl: reviewedSdk.resolved,
       directory: "tools/mcp-tool-discovery-runtime",
       lockSha256: "bc7e34d9eb1f72cf3016c8b88c72d3b7682a4f234903cb93b9476b10d7e954eb",
+      replacementLockSha256: "a055cc6630c19809d3b359dc464ca5684fe86e0155fde2be3cd89e3f436ae679",
     });
     expect(installer).toContain(
       'export NODE_OPTIONS="${NODE_OPTIONS:---dns-result-order=ipv4first}"',
@@ -312,11 +331,11 @@ describe("MCP tool discovery image contract", () => {
       "managed-startup-image-runtime.bundle":
         "7c636c15a60f235a03c09f26649508ee65412ab34db23a4107c9832d638a99b5",
       "mcp-tool-discovery/BUNDLED_PACKAGES.json":
-        "df5dc8f167101085a8e73c444aa56854b2a4716a0bb7de9886fec4e50f402601",
+        "e639c9b532e145ffad3486d39f899a63fabcc845fbbd4a19294b2e5c2853e495",
       "mcp-tool-discovery/THIRD_PARTY_LICENSES.txt":
-        "ae0820debd0e33a10baa3a9c6c7ea831e8ad32a43f8500d52c7dc961ba5513a5",
+        "3ac4c12b0946565b6f5e2066c77758b7e95f2a3e24c37e56bc82aca6e12feb4a",
       "mcp-tool-discovery/mcp-tool-discovery.bundle":
-        "defdba693829bfdfad16ce2edaad6b0a454388a32f15113854850e652a950012",
+        "4c25fb1141259135d0857b3cd3942f9fda61726aedc87b6c249d15733a6d0935",
     } as const;
 
     for (const [relativePath, expectedHash] of Object.entries(expectedHashes)) {
@@ -559,7 +578,7 @@ case "$invocation" in
     ;;
   3)
     echo 'npm error code ENOTCACHED' >&2
-    echo 'npm error request to https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz failed: cache mode is only-if-cached but no cached response is available.' >&2
+    echo 'npm error request to https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz failed: cache mode is only-if-cached but no cached response is available.' >&2
     exit 1
     ;;
   4|5)
@@ -598,9 +617,9 @@ exit 0
           "ci --ignore-scripts --no-audit --no-fund --no-progress",
           "ls --all --json --ignore-scripts --no-audit --no-fund --no-progress",
           "ci --ignore-scripts --no-audit --no-fund --no-progress --offline",
-          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz",
-          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz",
-          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz",
+          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz",
+          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz",
+          "cache add https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz",
           "ci --ignore-scripts --no-audit --no-fund --no-progress --offline",
         ]);
       } finally {

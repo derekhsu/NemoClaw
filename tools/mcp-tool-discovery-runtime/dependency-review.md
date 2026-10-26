@@ -7,17 +7,20 @@ The shared image runtime uses the official `@modelcontextprotocol/sdk` client so
 
 ## Reviewed pin
 
-- Package: `@modelcontextprotocol/sdk@1.30.0`
-- Registry tarball: `https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz`
-- Integrity: `sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==`
+- Package: `@modelcontextprotocol/sdk@1.32.0`
+- Registry tarball: `https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.0.tgz`
+- Integrity: `sha512-8BviX/hK4Gd2eL1KdTwm0gfl4d3wdoErW0Jd00h6nomUAtk6IJk5vwQJc6kfWtJTzN5OEV/lgIiJKI8fiDGAlA==`
 - License: MIT
 - Locked production graph: `package-lock.json` (lockfile version 3)
 - Build-only tools: `typescript@6.0.3`, `@types/node@25.5.2`, and `esbuild@0.27.4` (not copied into the final image)
 - Security overrides:
   - `@hono/node-server@2.0.12`: `sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==`
-  - `fast-uri@3.1.5`: `sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==`
+  - `body-parser@2.4.0`: `sha512-Ifk1KcLrxaGt1occQagQNFNNOqRt1LFuehEnHHzB8Z6cRgIxRU1TBaiIsUiCdA+gy5PL7Y1IX31DNKkRmxtXjQ==`
+  - `fast-uri@3.1.7`: `sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==`
   - `hono@4.12.34`: `sha512-GqXJqY/xJkJmuloTrnV1ZEXG3fqte+VjkUqoRNZXcrUidiUOP4fMSIHHY4tsqZBK++kVyWmt/AAfSUuy57/eSA==`
   - `ip-address@10.3.1`: `sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==`
+  - `proxy-addr@2.0.8`: `sha512-5nnx0yGyVUcY6t9RnWcARWtwT9F1D8O9rt08htPvnd49W1IgZtmLkhu9WfMzQj1cFxjHIO6connUNVW5k7AVyQ==`
+  - `zod@4.6.6`: `sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==`
 
 OpenClaw's `mcporter` dependency graph also resolves the official SDK but remains separately locked. This runtime keeps a direct lock because Hermes and LangChain Deep Agents Code must not depend on OpenClaw's adapter package.
 The client bundle includes the SDK's AJV validation path, including `ajv-formats` and `fast-uri`, plus `content-type` for standards-compliant response media-type parsing. The `fast-uri` override and `content-type` license are therefore runtime-relevant. The bundle does not include the SDK's Hono server adapter or its `hono` and `ip-address` dependencies, but those packages remain part of the installed production graph that the reviewed npm audit CI check evaluates. The build enforces the exact reviewed bundle-package allowlist and emits `BUNDLED_PACKAGES.json` alongside the generated third-party license notice. The exact overrides keep the installed graph outside the affected ranges for `GHSA-7p8r-x3mc-p8w7`, `GHSA-8j4g-w8fx-2239`, `GHSA-mwp4-54f8-5fhr`, `GHSA-4xrf-jv44-h6hh`, and `GHSA-22jq-vg5j-6vgg` without changing the SDK client pin.
@@ -62,6 +65,18 @@ Concern ledger:
 - `MCP-SDK-130-2`: `content-type@1.0.5` becomes executable bundle input. Surface: response media-type parsing and bundled notices. Resolution: add it to the exact bundle allowlist and verify its MIT text in the generated notice. Validation: `npm run bundle`.
 - `MCP-SDK-130-3`: The upstream package widens its Hono server range. Surface: resolved install graph only; the Hono server adapter is absent from the client bundle. Resolution: use the reviewed `@hono/node-server@2.0.12` patch release. Validation: the lock diff and `BUNDLED_PACKAGES.json`.
 - `MCP-SDK-130-4`: Other adjacent commits could alter unrelated transports or server behavior. Surface: upstream stdio and server entry points. Resolution: no migration because NemoClaw imports only `client/index.js` and `client/streamableHttp.js`; classify those commits as no runtime impact. Validation: esbuild's exact input graph.
+
+## 1.30.0 to 1.32.0 security migration review
+
+The reviewed npm audit CI gate reported the SDK `1.30.0` pin inside newly disclosed advisory ranges (`GHSA-22jm-h49p-29qw`, `GHSA-46jr-4wx8-v453`, `GHSA-6qxp-vccf-f47h`), and the same gate flagged the graph's `body-parser`, `fast-uri`, `proxy-addr`, and `zod` resolutions. SDK `1.32.0` is the first release that leaves the disclosed SDK advisory ranges. The migration adopts the upstream NemoClaw reviewed pin and override set from NVIDIA/NemoClaw pull request #13513 and the follow-up audited-graph pinning in pull request #13681: `body-parser@2.4.0`, `fast-uri@3.1.7`, `proxy-addr@2.0.8`, and `zod@4.6.6` join the existing `@hono/node-server@2.0.12`, `hono@4.12.34`, and `ip-address@10.3.1` overrides.
+
+The bundled client keeps importing only `client/index.js` and `client/streamableHttp.js`; SDK server-side changes between `1.30.0` and `1.32.0` stay outside the executable bundle. The regenerated `BUNDLED_PACKAGES.json` and `THIRD_PARTY_LICENSES.txt` record the exact reviewed bundle contents.
+
+SDK 1.32.0 migration evidence on 2026-10-26:
+
+- `npm ci --ignore-scripts`: installed the exact lock recorded by `package-lock.json` (SHA-256 `a055cc6630c19809d3b359dc464ca5684fe86e0155fde2be3cd89e3f436ae679`)
+- `npm audit --omit=dev`: 0 vulnerabilities at or above high severity
+- `npm test` and `npm run bundle:reviewed:check`: passed
 
 ## `@hono/node-server` 2.0.12 review
 

@@ -22,9 +22,9 @@ const TARBALL = "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.2.tgz";
 const LOCK_SHA256 = "154229a557bdff54be02e8ecd7c06f0355b6c11aa7efab8aa5443dcfb24e928a";
 const MCPORTER_PACKAGE_SPEC = "mcporter@0.7.3";
 const MCPORTER_LOCK_SHA256 = "c24649f412f19bebfed29bda9f0b17f714fb4834ff76d06ef97e792952c33ebd";
-const MCP_TOOL_DISCOVERY_PACKAGE_SPEC = "@modelcontextprotocol/sdk@1.30.0";
+const MCP_TOOL_DISCOVERY_PACKAGE_SPEC = "@modelcontextprotocol/sdk@1.32.0";
 const MCP_TOOL_DISCOVERY_LOCK_SHA256 =
-  "bc7e34d9eb1f72cf3016c8b88c72d3b7682a4f234903cb93b9476b10d7e954eb";
+  "a055cc6630c19809d3b359dc464ca5684fe86e0155fde2be3cd89e3f436ae679";
 const roots: string[] = [];
 
 function sha256(file: string): string {

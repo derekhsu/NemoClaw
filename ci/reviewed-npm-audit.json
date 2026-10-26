@@ -92,7 +92,8 @@
       "tarballUrl": "https://registry.npmjs.org/@tencent-weixin/openclaw-weixin/-/openclaw-weixin-2.4.9.tgz",
       "directory": "agents/openclaw/wechat-runtime",
       "lockSha256": "84f2b731e9ffe731d29c28ebbe795116217771971c729b577df1a8816296f9b8",
-      "replacementLockSha256": "74856e20d229528ee7e2d107e6238e2204beea36c0deb733a7102082bcd4e5ea"
+      "replacementLockSha256": "74856e20d229528ee7e2d107e6238e2204beea36c0deb733a7102082bcd4e5ea",
+      "installMode": "legacy-peer-deps"
     },
     {
       "id": "mcp-tool-discovery-runtime",

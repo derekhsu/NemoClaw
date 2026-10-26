@@ -34,6 +34,7 @@ type LockedGraph = ReviewedPackage &
     directory: string;
     id: string;
     lockSha256: string;
+    installMode?: "legacy-peer-deps";
     replacementLockSha256?: string;
   }>;
 type AuditConfig = Readonly<{
@@ -149,6 +150,7 @@ export function parseAuditConfig(contents: string): AuditConfig {
         !graph.directory ||
         typeof graph.lockSha256 !== "string" ||
         !/^[0-9a-f]{64}$/.test(graph.lockSha256) ||
+        (graph.installMode !== undefined && graph.installMode !== "legacy-peer-deps") ||
         (graph.replacementLockSha256 !== undefined &&
           (typeof graph.replacementLockSha256 !== "string" ||
             !/^[0-9a-f]{64}$/.test(graph.replacementLockSha256) ||
@@ -232,7 +234,9 @@ function materializeLockedGraph(
   fs.mkdirSync(destination);
   fs.copyFileSync(sourcePackage, path.join(destination, "package.json"));
   fs.copyFileSync(sourceLock, path.join(destination, "package-lock.json"));
-  run("npm", ["ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"], destination);
+  const installArgs = ["ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund"];
+  if (graph.installMode === "legacy-peer-deps") installArgs.push("--legacy-peer-deps");
+  run("npm", installArgs, destination);
   verifyMaterializedLockedGraph({ destination, expectedLockSha256, label: graph.label });
   return destination;
 }

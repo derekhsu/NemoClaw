@@ -213,6 +213,32 @@ describe("locked OpenClaw production installation (#5896)", () => {
     expect(verified).toContain("zod@4.6.6");
   });
 
+  // source-shape-contract: security -- The reviewed CI audit inventory must stay bound to the exact shipped runtime lock digests
+  it.each([
+    "openclaw-runtime",
+    "mcporter-runtime",
+    "wechat-runtime",
+  ])("verifies %s through the configured CI audit inventory", (graphId) => {
+    const config = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "ci", "reviewed-npm-audit.json"), "utf8"),
+    );
+    const graph = config.lockedGraphs.find((entry: { id: string }) => entry.id === graphId);
+    expect(() =>
+      verifyReviewedNpmLock(
+        {
+          expectedIntegrity: graph.integrity,
+          expectedLockSha256: graph.lockSha256,
+          label: graph.label,
+          lockfilePath: path.join(REPO_ROOT, graph.directory, "package-lock.json"),
+          packageSpec: graph.packageSpec,
+          registryOrigin: config.registryOrigin,
+          tarballUrl: graph.tarballUrl,
+        },
+        reviewedMetadata,
+      ),
+    ).not.toThrow();
+  });
+
   // source-shape-contract: security -- The committed production lock digest must fail before any registry-controlled metadata is consulted
   it("rejects any lock byte tamper before registry metadata is consulted", () => {
     const lockfilePath = mutatedLock((lock) => {

@@ -392,6 +392,11 @@
       "category": "security"
     },
     {
+      "file": "test/openclaw-locked-install.test.ts",
+      "test": "verifies %s through the configured CI audit inventory",
+      "category": "security"
+    },
+    {
       "file": "test/platform-vitest-main-workflow.test.ts",
       "test": "pins and verifies the Node.js archive in the trusted WSL helper",
       "category": "security"

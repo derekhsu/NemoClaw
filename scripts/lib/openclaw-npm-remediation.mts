@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { packReviewedNpmArchive } from "./reviewed-npm-archive.mts";
+import { packReviewedNpmArchive, singleNpmPackResult } from "./reviewed-npm-archive.mts";
 
 type JsonObject = Record<string, any>;
 
@@ -1405,11 +1405,11 @@ export function buildRemediatedOpenClawPluginArchive(
     sourcePackage,
     env,
   );
-  const packed = JSON.parse(packedJson);
-  if (!Array.isArray(packed) || packed.length !== 1 || typeof packed[0]?.filename !== "string") {
+  const packedEntry = singleNpmPackResult(JSON.parse(packedJson));
+  if (typeof packedEntry?.filename !== "string") {
     throw new Error(`npm pack returned an invalid remediation result for ${request.packageSpec}`);
   }
-  const archivePath = resolve(outputDirectory, basename(packed[0].filename));
+  const archivePath = resolve(outputDirectory, basename(packedEntry.filename));
   validateArchiveMembers(archivePath, remediationRoot, env);
   const packedPackage = extractArchive(
     archivePath,

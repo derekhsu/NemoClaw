@@ -339,7 +339,7 @@ function writeLegacyCoreArchiveFixtures(): {
       'case "$1:$2:${3:-}" in',
       '  "view:tar@7.5.21:dist.integrity") value="sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==" ;;',
       '  "view:tar@7.5.21:dist.tarball") value="https://registry.npmjs.org/tar/-/tar-7.5.21.tgz" ;;',
-      '  "pack:https://registry.npmjs.org/tar/-/tar-7.5.21.tgz:--pack-destination") ;;',
+      '  "pack:tar@7.5.21:--pack-destination") ;;',
       '  *) echo "unexpected npm fixture invocation: $*" >&2; exit 1 ;;',
       "esac",
       'if [ "$1" = "view" ]; then printf "%s\\n" "$value"; exit 0; fi',

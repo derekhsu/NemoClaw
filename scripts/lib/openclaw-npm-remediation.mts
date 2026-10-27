@@ -79,10 +79,10 @@ const AGENT_BASE_VERSION = "6.0.2";
 const AGENT_BASE_INTEGRITY =
   "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==";
 const AGENT_BASE_TARBALL = "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz";
-const TAR_VERSION = "7.5.19";
+const TAR_VERSION = "7.5.21";
 const TAR_INTEGRITY =
-  "sha512-4LeEWl96twnS2Q7Bz4MGqgazLqO+hJN63GZxXoIqh1T3VweYD997gbU1ItNsQafqqXTXd5WFyFdReLtwvRBNiw==";
-const TAR_TARBALL = "https://registry.npmjs.org/tar/-/tar-7.5.19.tgz";
+  "sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==";
+const TAR_TARBALL = "https://registry.npmjs.org/tar/-/tar-7.5.21.tgz";
 const FS_SAFE_VERSION = "0.3.0";
 const FS_SAFE_INTEGRITY =
   "sha512-uIBE441CIt1kIURoP9qRGKZ8LkGyfD9ZzeESjwAd29ZPWtghws/5GR3Pjb67jKdcJHP1I6roNXcvnhzAU7lHlA==";
@@ -191,7 +191,7 @@ const REMEDIATIONS: Readonly<Record<string, Remediation>> = Object.freeze({
   "openclaw@2026.3.11": {
     kind: "legacy-core",
     expectedPatchedMetadataIntegrity:
-      "sha512-1i30XSb/2NEcuTcuhXfR/x3YKaXVhWq6ttecFBSD9nrCKrzjNxSNMfK1y3qRcnblNOzRWmHtJZwZKeej02s/EQ==",
+      "sha512-Yz/7GyAgLSPtJkijdUsVzxnjhATMPLRSFFMhl2H565aW7tReHZmuPeExBq0K4EEFkvg7zM2sFm2CP3f2oNw32Q==",
     version: "2026.3.11",
   },
 });

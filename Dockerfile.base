@@ -19,7 +19,7 @@
 #                          docker-pin-check.yaml
 #   apt packages        — pinned to exact Debian trixie versions
 #   util-linux          — pinned Debian package providing setpriv
-#   npm 11.18.0         — reviewed archive + sha512 integrity
+#   npm 12.0.2         — reviewed archive + sha512 integrity
 #   gateway/sandbox     — OS users and groups; names and UIDs are a
 #     users               stable contract with OpenShell
 #   .openclaw dirs      — directory structure is dictated by the OpenClaw
@@ -427,13 +427,13 @@ RUN node --experimental-strip-types /scripts/patch-bundled-npm-tar.mts \
 RUN node --experimental-strip-types /scripts/upgrade-bundled-npm.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
-# npm 11.18.0 contains brace-expansion 5.0.7. Replace only that private
+# npm 12.0.2 contains brace-expansion 5.0.7. Replace only that private
 # package from the reviewed 5.0.9 archive after the complete npm upgrade.
 # hadolint ignore=DL3059
 RUN node --experimental-strip-types /scripts/patch-bundled-npm-brace-expansion.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
-# npm 11.18.0 contains ip-address 10.2.0. Replace only that private package
+# npm 12.0.2 contains ip-address 10.2.0. Replace only that private package
 # with the reviewed 10.3.1 archive after the complete npm upgrade.
 # hadolint ignore=DL3059
 RUN node --experimental-strip-types /scripts/lib/patch-bundled-npm-ip-address.mts \

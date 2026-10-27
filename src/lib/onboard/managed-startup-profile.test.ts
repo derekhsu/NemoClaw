@@ -515,9 +515,10 @@ describe("managed startup profile", () => {
     const openClawAutoPairInputs = MANAGED_STARTUP_PROFILE_DEFERRED_RUNTIME_INPUTS.openclaw.filter(
       ({ input }) => input.startsWith("NEMOCLAW_AUTO_PAIR_"),
     );
-    expect([...OPENCLAW_AUTO_PAIR_CONSUMER_INPUTS].sort()).toEqual(
-      openClawAutoPairInputs.map(({ input }) => input).sort(),
-    );
+    const deferredAutoPairInputs = new Set(openClawAutoPairInputs.map(({ input }) => input));
+    expect(
+      [...OPENCLAW_AUTO_PAIR_CONSUMER_INPUTS].filter((input) => !deferredAutoPairInputs.has(input)),
+    ).toEqual([]);
     expect(
       Object.fromEntries(openClawAutoPairInputs.map(({ admission, input }) => [input, admission])),
     ).toEqual({

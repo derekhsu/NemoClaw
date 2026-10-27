@@ -209,7 +209,7 @@ describe("OpenClaw compact tool catalog patch", () => {
     try {
       const result = runPatch(changed.dist);
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Expected exactly one selection-*.js target, found 0");
+      expect(result.stderr).toContain("Expected exactly one compiled tool-catalog target, found 0");
     } finally {
       fs.rmSync(changed.root, { recursive: true, force: true });
     }

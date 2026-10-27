@@ -76,7 +76,7 @@ describe("sandbox base runtime tools", () => {
   )("%s explicitly installs setpriv through pinned util-linux without gosu", (dockerfile) => {
     const source = fs.readFileSync(dockerfile, "utf-8");
 
-    expect(source).toContain("util-linux=2.41-5");
+    expect(source).toContain("util-linux=2.41.5-0+deb13u1");
     expect(source).not.toMatch(/\bgosu\b/u);
   });
 
@@ -85,8 +85,8 @@ describe("sandbox base runtime tools", () => {
 
     expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
     expect(calls).toContain("procps=2:4.0.4-9");
-    expect(calls).toContain("util-linux=2.41-5");
-    expect(calls).toContain("e2fsprogs=1.47.2-3+b11");
+    expect(calls).toContain("util-linux=2.41.5-0+deb13u1");
+    expect(calls).toContain("e2fsprogs=1.47.2-3+b12");
     expect(calls).toContain("openssh-sftp-server=1:10.0p1-7+deb13u4");
   });
 

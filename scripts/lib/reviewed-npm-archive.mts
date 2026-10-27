@@ -435,6 +435,23 @@ function readReviewedLockPackages(
     const record = value as Record<string, unknown>;
     assertNotProductionDev(productionLocations, location, record);
     if (omitDev && record.dev === true) continue;
+    if (record.inBundle === true) {
+      // Hoisted bundled dependencies belong to the enclosing verified tarball,
+      // not to separately fetched registry archives.
+      let ownerLocation = location;
+      let owner: Record<string, unknown> | undefined;
+      while (ownerLocation.includes("/node_modules/")) {
+        ownerLocation = ownerLocation.slice(0, ownerLocation.lastIndexOf("/node_modules/"));
+        const candidate = packages[ownerLocation];
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) break;
+        if (candidate.inBundle === true) continue;
+        if (Array.isArray(candidate.bundleDependencies) && candidate.bundleDependencies.length > 0
+            && (!omitDev || candidate.dev !== true)) owner = candidate;
+        break;
+      }
+      if (!owner) throw new Error(`bundled package has no reviewed archive owner: ${location}`);
+      continue;
+    }
     if (!allowNestedShrinkwrap && Object.prototype.hasOwnProperty.call(record, "hasShrinkwrap")) {
       throw new Error(
         `reviewed npm lock package must not delegate to nested shrinkwrap: ${location}`,

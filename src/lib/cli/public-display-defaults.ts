@@ -84,6 +84,18 @@ const PUBLIC_DISPLAY_LAYOUT: Record<string, readonly PublicDisplayLayout[]> = {
       flags: "[--json]",
     },
   ],
+  "image:stage": [
+    {
+      group: "Sandbox Management",
+      order: 2.4,
+    },
+  ],
+  "image:build": [
+    {
+      group: "Sandbox Management",
+      order: 2.5,
+    },
+  ],
   "inference:set": [
     {
       group: "Services",

@@ -88,6 +88,35 @@ describe("reviewed npm cache seed", () => {
     ).toEqual(new Map([[PACKAGE_SPEC, copiedArchive]]));
   });
 
+  it("seeds bundled dependency bytes through their reviewed parent archive", async () => {
+    const input = fixture();
+    const lock = JSON.parse(fs.readFileSync(input.lockfilePath, "utf8"));
+    lock.packages[`node_modules/${PACKAGE_NAME}/node_modules/bundled-child`] = {
+      version: "4.5.6",
+      inBundle: true,
+    };
+    fs.writeFileSync(input.lockfilePath, JSON.stringify(lock));
+    const calls: PutCall[] = [];
+
+    await expect(
+      seedReviewedNpmCache(request(input), async (cachePath, key, data, options) => {
+        calls.push({ cachePath, data, key, metadata: options?.metadata });
+      }),
+    ).resolves.toEqual([PACKAGE_SPEC]);
+    expect(calls.filter(({ key }) => key.startsWith("pacote:tarball:"))).toHaveLength(1);
+    expect(calls[0]?.data).toEqual(input.archive);
+  });
+
+  it("rejects a bundled dependency without a reviewed parent archive", async () => {
+    const input = fixture();
+    const lock = JSON.parse(fs.readFileSync(input.lockfilePath, "utf8"));
+    lock.packages["node_modules/orphan"] = { version: "4.5.6", inBundle: true };
+    fs.writeFileSync(input.lockfilePath, JSON.stringify(lock));
+    await expect(seedReviewedNpmCache(request(input), async () => {})).rejects.toThrow(
+      "bundled package has no reviewed archive owner",
+    );
+  });
+
   it("rejects extras and symlinked directories at the archive-directory boundary", () => {
     const input = fixture();
     const archiveDirectory = path.join(input.root, "archives");

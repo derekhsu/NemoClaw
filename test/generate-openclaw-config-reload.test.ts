@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the gateway.reload pin in scripts/generate-openclaw-config.mts
-// (#4710). The in-sandbox OpenClaw gateway must run with reload mode "hot":
+// (#4710). The in-sandbox OpenClaw gateway must run with reload mode "off":
 // in the default "hybrid" mode a restart-class config change makes the
 // gateway SIGUSR1-restart itself in-process, and a failed restart parks the
 // process alive with no HTTP listener — invisible to the PID-wait respawn
 // loop in nemoclaw-start.sh. Split out of test/generate-openclaw-config.test.ts,
 // which is at its size budget (ci/test-file-size-budget.json).
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildConfig, main } from "../scripts/generate-openclaw-config.mts";
 import { baseOpenClawGenerationEnv } from "./helpers/openclaw-env-fixture";
@@ -54,9 +54,9 @@ function buildConfigDirect(envOverrides: Record<string, string> = {}): any {
 }
 
 describe("gateway.reload pin (#4710)", () => {
-  it("pins gateway.reload.mode to hot in the generated config", () => {
+  it("pins gateway.reload.mode to off in the generated config", () => {
     const config = buildConfigDirect();
-    expect(config.gateway.reload).toEqual({ mode: "hot" });
+    expect(config.gateway.reload).toEqual({ mode: "off" });
   });
 
   it("keeps the pin across unrelated env permutations", () => {
@@ -68,13 +68,13 @@ describe("gateway.reload pin (#4710)", () => {
     ];
     for (const overrides of permutations) {
       const config = buildConfigDirect(overrides);
-      expect(config.gateway.reload, JSON.stringify(overrides)).toEqual({ mode: "hot" });
+      expect(config.gateway.reload, JSON.stringify(overrides)).toEqual({ mode: "off" });
     }
   });
 
   // Generous timeout: main() does real file I/O and the suite shares a
   // worker pool with heavier integration files.
-  it("re-pins hot mode when an existing config carries a different reload mode", {
+  it("re-pins off mode when an existing config carries a different reload mode", {
     timeout: 20000,
   }, () => {
     // preserveExistingPluginInstalls() merges plugin install records from an
@@ -94,7 +94,7 @@ describe("gateway.reload pin (#4710)", () => {
     withConfigEnv({}, () => main());
 
     const written = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    expect(written.gateway.reload).toEqual({ mode: "hot" });
+    expect(written.gateway.reload).toEqual({ mode: "off" });
     // The plugin-install carryover still works alongside the pin.
     expect(written.plugins.installs["custom-plugin"]).toEqual({ origin: "npm" });
   });

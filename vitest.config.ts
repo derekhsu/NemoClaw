@@ -55,9 +55,13 @@ const typedSourceTransform = {
     include: /\.(?:[cm]?ts|[jt]sx)$/,
   },
 };
-const sourceNodeOptions = sourceLoaderNodeOptions(process.env.NODE_OPTIONS);
+const fixtureNodeOptions = [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"]
+  .filter(Boolean)
+  .join(" ");
+const sourceNodeOptions = sourceLoaderNodeOptions(fixtureNodeOptions);
 const controlledNonLiveEnv = {
   NEMOCLAW_DISABLE_GATEWAY_DRIFT_PREFLIGHT: "1",
+  NODE_OPTIONS: fixtureNodeOptions,
 };
 // Pin the file-creation umask of every non-live test worker to exactly 0o022 —
 // the conventional CI baseline — so Hermes/OpenClaw guard fixtures are created

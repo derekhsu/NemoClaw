@@ -168,6 +168,12 @@ locked-runtime checks bind the OpenClaw and mcporter installs to exact
 committed lock digests, the official registry origin, and post-install graph
 verification.
 
+The published `@openclaw/msteams@2026.9.2` archive loads `dist/index.cjs`, which selects `./channel-plugin-api.cjs` through `defineBundledChannelEntry`.
+The Teams mention-hint preload recognizes that `.cjs` entry and retains recognition of the `.js` entry.
+Its loader hook remains limited to matching plugin entries within `@openclaw/msteams`.
+The package-contract fixture records the reviewed archive SRI and entry-file SHA-256 values and models this package-load boundary.
+If runtime patching fails, the preload restores the loader hook, emits a bounded warning, and continues with the unmodified upstream plugin.
+
 The final OpenClaw image materializes its optional OTEL, Brave, and Tavily
 plugins, the WeChat runtime, the complete managed-messaging dependency graph,
 and `@zed-industries/codex-acp@0.11.1` without network access in any
@@ -189,6 +195,13 @@ against the committed lockfile SHA-512 identity, and runs `npm ci` with
 off-registry, or integrity-mismatched archives before it creates the minimal
 npm resolver metadata. Package materialization cannot fall back to the public
 registry.
+
+The lock verifier treats nested `inBundle: true` records as contents of an enclosing archive, rather than separately downloadable packages.
+It requires a non-bundled enclosing archive record that declares a nonempty `bundleDependencies` list.
+The enclosing archive must still satisfy the registry-origin and SHA-512 identity checks, which cover its bundled bytes.
+The verifier rejects standalone bundled records and bundled records without that archive owner.
+Cache seeding excludes bundled records from separate archive identities, including when their package name and version match a separately locked archive.
+This correction does not change dependency pins, audit thresholds, or audit exceptions.
 
 ## Dependency Remediation on October 26, 2026
 

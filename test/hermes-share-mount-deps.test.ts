@@ -97,6 +97,7 @@ function runHermesInstallLayer(
     uiTuiLockfile?: "directory" | "workspace" | "missing";
     webLockfile?: "directory" | "workspace" | "missing";
     whatsappBridge?: "lockfile" | "package-json";
+    browserChecksumMismatch?: boolean;
   } = {},
 ) {
   const fixture = path.join(tmp, "hermes");
@@ -105,6 +106,21 @@ function runHermesInstallLayer(
   const electronCache = path.join(tmp, "root-cache", "electron");
   const nodeGypCache = path.join(tmp, "root-cache", "node-gyp");
   const scriptPath = path.join(tmp, "run-hermes-install-layer.sh");
+  const browserSource = path.join(tmp, "browser-source");
+  const browserArchive = path.join(tmp, "browser-source.tgz");
+  const downloadedBrowserArchive = path.join(tmp, "agent-browser.tgz");
+  fs.mkdirSync(path.join(browserSource, "package", "bin"), { recursive: true });
+  fs.writeFileSync(
+    path.join(browserSource, "package", "bin", "agent-browser.js"),
+    "#!/usr/bin/env node\nconsole.log('agent-browser fixture');\n",
+  );
+  const packed = spawnSync("tar", ["-czf", browserArchive, "-C", browserSource, "package"], {
+    encoding: "utf-8",
+  });
+  expect(packed.status, packed.stderr).toBe(0);
+  const browserChecksum = createHash("sha256")
+    .update(fs.readFileSync(browserArchive))
+    .digest("hex");
   const uiTuiLockfile = opts.uiTuiLockfile ?? "missing";
   const webLockfile = opts.webLockfile ?? "directory";
   const rootLockPackages = {
@@ -174,6 +190,16 @@ function runHermesInstallLayer(
     "    chmod 755 .venv/bin/python",
     "  fi",
     "}",
+    "curl() {",
+    '  printf "curl %s\\n" "$*" >> "$call_log"',
+    '  [[ "$*" == *"--proto =https --tlsv1.2"* ]] || return 41',
+    '  [ "${@: -1}" = "https://registry.npmjs.org/agent-browser/-/agent-browser-${HERMES_AGENT_BROWSER_VERSION}.tgz" ] || return 42',
+    '  while [ "$#" -gt 0 ]; do',
+    '    if [ "$1" = "-o" ]; then shift; cp "$browser_archive" "$1"; return; fi',
+    "    shift",
+    "  done",
+    "  return 43",
+    "}",
     "npm() {",
     '  if [ "${1:-}" = "view" ]; then',
     '    printf "%s\\n" "${HERMES_NPM_INTEGRITY}"',
@@ -206,7 +232,13 @@ function runHermesInstallLayer(
     'export HERMES_SEMVER="0.16.0"',
     'export HERMES_NPM_INTEGRITY="sha512-test"',
     'export HERMES_UV_EXTRAS="messaging mcp"',
+    'export HERMES_AGENT_BROWSER_VERSION="0.26.0"',
+    `export HERMES_AGENT_BROWSER_TARBALL_SHA256=${JSON.stringify(
+      opts.browserChecksumMismatch ? "0".repeat(64) : browserChecksum,
+    )}`,
+    `browser_archive=${JSON.stringify(browserArchive)}`,
     command
+      .replaceAll("/tmp/agent-browser.tgz", downloadedBrowserArchive)
       .replaceAll("/opt/hermes", fixture)
       .replaceAll("/root/.npm", npmCache)
       .replaceAll("/root/.cache/electron", electronCache)
@@ -336,10 +368,54 @@ describe("Hermes share mount package parity (#2947)", () => {
       expect(calls).toContain("apt-get update");
       expect(calls).toContain("gnupg=2.4.7-21+deb13u1");
       expect(calls).toContain("procps=2:4.0.4-9");
-      expect(calls).toContain("e2fsprogs=1.47.2-3+b11");
+      expect(calls).toContain("e2fsprogs=1.47.2-3+b12");
       expect(calls).toContain("openssh-sftp-server=1:10.0p1-7+deb13u4");
       expect(fs.existsSync(debianSecurityDebs)).toBe(false);
       expect(fs.existsSync(nativeSecurityDebs)).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies and installs the browser archive before removing it", () => {
+    const dockerfile = fs.readFileSync(HERMES_DOCKERFILE_BASE, "utf-8");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-browser-"));
+
+    try {
+      const { result, calls } = runHermesInstallLayer(extractHermesInstallCommand(dockerfile), tmp);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(calls).toContain(
+        "https://registry.npmjs.org/agent-browser/-/agent-browser-0.26.0.tgz",
+      );
+      const browser = path.join(
+        tmp,
+        "hermes",
+        "node_modules",
+        "agent-browser",
+        "bin",
+        "agent-browser.js",
+      );
+      expect(fs.readFileSync(browser, "utf-8")).toContain("agent-browser fixture");
+      expect(fs.statSync(browser).mode & 0o111).toBe(0o111);
+      expect(fs.existsSync(path.join(tmp, "agent-browser.tgz"))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a browser archive with a mismatched checksum before extraction", () => {
+    const dockerfile = fs.readFileSync(HERMES_DOCKERFILE_BASE, "utf-8");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-browser-mismatch-"));
+
+    try {
+      const { result } = runHermesInstallLayer(extractHermesInstallCommand(dockerfile), tmp, {
+        browserChecksumMismatch: true,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain("FAILED");
+      expect(fs.existsSync(path.join(tmp, "hermes", "node_modules", "agent-browser"))).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

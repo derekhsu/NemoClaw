@@ -922,7 +922,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: PINNED_OPENCLAW_VERSION,
@@ -1302,7 +1302,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: LEGACY_GATEWAY_UPGRADE_OPENCLAW_VERSION,
@@ -1347,7 +1347,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: LEGACY_GATEWAY_UPGRADE_OPENCLAW_VERSION,
@@ -1390,7 +1390,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: LEGACY_REBUILD_OPENCLAW_VERSION,
@@ -1403,7 +1403,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: LEGACY_REBUILD_OPENCLAW_VERSION,
@@ -1417,7 +1417,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
           {
             openclawVersion: LEGACY_GATEWAY_UPGRADE_OPENCLAW_VERSION,
@@ -1588,7 +1588,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
             label: "base Dockerfile",
             file: DOCKERFILE_BASE,
             startMarker: "# Install OpenClaw CLI + PyYAML.",
-            endMarker: "# Baseline health check.",
+            endMarker: "# npm 12 emits package-keyed objects",
           },
         ];
 
@@ -1650,7 +1650,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
             label: "base Dockerfile",
             file: DOCKERFILE_BASE,
             startMarker: "# Install OpenClaw CLI + PyYAML.",
-            endMarker: "# Baseline health check.",
+            endMarker: "# npm 12 emits package-keyed objects",
           },
         ];
 
@@ -1774,7 +1774,7 @@ export function registerOpenClawIntegrityPinTests(group: OpenClawIntegrityPinTes
           extractRunBlock(
             DOCKERFILE_BASE,
             "# Install OpenClaw CLI + PyYAML.",
-            "# Baseline health check.",
+            "# npm 12 emits package-keyed objects",
           ),
         );
 

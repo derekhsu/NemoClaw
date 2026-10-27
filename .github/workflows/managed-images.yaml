@@ -102,6 +102,15 @@ jobs:
         with:
           node-version: 22.19.0
 
+      - name: Validate PR Hermes source-base build args
+        if: matrix.agent == 'hermes'
+        shell: bash
+        env:
+          BASE_DOCKERFILE: ${{ matrix.base_dockerfile }}
+        run: |
+          set -euo pipefail
+          scripts/check-production-build-args.sh -f "$BASE_DOCKERFILE"
+
       - name: Build PR Hermes source base
         if: matrix.agent == 'hermes'
         id: hermes_source_base

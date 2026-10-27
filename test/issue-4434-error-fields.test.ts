@@ -21,7 +21,7 @@ const LIVE_VITEST_GUARD = path.join(
   "test/e2e/live/issue-4434-tui-unreachable-inference.test.ts",
 );
 
-const CURRENT_REVIEWED_OPENCLAW_VERSION = "2026.7.1";
+const CURRENT_REVIEWED_OPENCLAW_VERSION = "2026.9.2";
 const PATCHED_OPENCLAW_2026_7_1_ISSUE_4434_TUI_ERROR_OUTPUT = [
   "run error: LLM request timed out.",
   "Cause: timed out while reaching the upstream API.",

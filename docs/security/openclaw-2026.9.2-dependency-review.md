@@ -262,6 +262,8 @@ removed; the `2026.3.11` and `2026.4.24` pins remain only as E2E legacy
 fixtures gated behind production rejection.
 
 The compiled-dist patch inventory is re-anchored against the `2026.9.2`
+dist. Patch anchors carried from the `2026.7.1` family must be re-verified
+against the `2026.9.2` dist before the agent is declared runnable on a new
 dist. Upstream retired the downstream `chat.send` ordering workaround
 (`patch-openclaw-chat-send.mts`) because run-ID lineage and empty-terminal
 suppression are now upstream-owned; the script, its Dockerfile staging and

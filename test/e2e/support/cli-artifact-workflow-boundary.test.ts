@@ -25,6 +25,12 @@ import {
 const CANDIDATE_SHA = execFileSync("git", ["rev-parse", "HEAD"], {
   encoding: "utf8",
 }).trim();
+const ORIGIN_URL = execFileSync("git", ["remote", "get-url", "origin"], {
+  encoding: "utf8",
+}).trim();
+const CANDIDATE_REPOSITORY = ORIGIN_URL.replace(/^https:\/\/github\.com\//, "")
+  .replace(/^git@github\.com:/, "")
+  .replace(/\.git$/, "");
 const PAYLOAD_SHA256 = "b".repeat(64);
 const CONTENT_ADDRESSED_ARTIFACT_NAME = `artifact_name="nemoclaw-cli-\${CANDIDATE_SHA}-\${payload_sha256}"`;
 const UNBOUND_ARTIFACT_NAME = `artifact_name="nemoclaw-cli-\${CANDIDATE_SHA}"`;
@@ -48,7 +54,7 @@ function runIdentityValidation(overrides: Record<string, unknown> = {}, consumer
           artifactDigest: "c".repeat(64),
           artifactId: "12345",
           artifactName: `nemoclaw-cli-${CANDIDATE_SHA}-${PAYLOAD_SHA256}`,
-          candidateRepository: "NVIDIA/NemoClaw",
+          candidateRepository: CANDIDATE_REPOSITORY,
           candidateSha: CANDIDATE_SHA,
           payloadSha256: PAYLOAD_SHA256,
           runAttempt: "1",
@@ -270,7 +276,7 @@ function runRestoreValidation(options: RestoreFixtureOptions = {}) {
     { mode: 0o755 },
   );
   execFileSync("git", ["init", "--quiet"], { cwd: workspace });
-  execFileSync("git", ["remote", "add", "origin", "https://github.com/NVIDIA/NemoClaw.git"], {
+  execFileSync("git", ["remote", "add", "origin", ORIGIN_URL], {
     cwd: workspace,
   });
   execFileSync("git", ["add", "."], { cwd: workspace });
@@ -317,7 +323,7 @@ function runRestoreValidation(options: RestoreFixtureOptions = {}) {
       kind: "nemoclaw-e2e-cli-artifact-v1",
       artifactName,
       candidate: {
-        repository: "NVIDIA/NemoClaw",
+        repository: CANDIDATE_REPOSITORY,
         sha: options.manifestCandidateSha ?? candidateSha,
         sourceTree,
         lockfileSha256: sha256File(path.join(workspace, "package-lock.json")),
@@ -362,7 +368,7 @@ function runRestoreValidation(options: RestoreFixtureOptions = {}) {
         artifactDigest: "c".repeat(64),
         artifactId: "12345",
         artifactName,
-        candidateRepository: "NVIDIA/NemoClaw",
+        candidateRepository: CANDIDATE_REPOSITORY,
         candidateSha,
         payloadSha256: expectedPayloadSha256,
         runAttempt: producerRunAttempt,

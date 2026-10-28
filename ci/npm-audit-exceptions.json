@@ -144,6 +144,118 @@
         "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
         "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
       ]
+    },
+    {
+      "advisory": "GHSA-2m5v-pch6-74hx",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "7.29.1",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-2m5v-pch6-74hx",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "8.10.2",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-4w7w-5xrc-9h26",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "7.29.1",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-4w7w-5xrc-9h26",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "8.10.2",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-qrxm-fqhp-jwvm",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "7.29.1",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-qrxm-fqhp-jwvm",
+      "graph": "reviewed-archive-graph",
+      "package": "undici",
+      "installedVersion": "8.10.2",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable undici is vendored inside the published OpenClaw 2026.9.2 archives audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 archive set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
+    },
+    {
+      "advisory": "GHSA-f897-62hf-6gxq",
+      "graph": "reviewed-archive-graph",
+      "package": "@modelcontextprotocol/sdk",
+      "installedVersion": "1.30.0",
+      "severity": "high",
+      "decision": "temporary-risk-acceptance",
+      "owner": "derekhsu",
+      "expires": "2026-11-25",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/pull/13513",
+      "rationale": "Vulnerable SDK 1.30.0 is vendored inside the published OpenClaw 2026.9.2 plugin tarballs audited by the reviewed archive graph and cannot be patched through lockfile resolution; upstream resolved it by upgrading the reviewed graph to the 2026.9.5 plugin set.",
+      "compensatingControls": [
+        "The plugin tarballs run inside OpenShell sandboxes governed by nemoclaw-blueprint network policies that restrict egress.",
+        "The reviewed npm audit reports this advisory on every code-changing pull request so the exception cannot silently outlive its expiry."
+      ]
     }
   ]
 }

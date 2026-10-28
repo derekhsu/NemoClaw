@@ -461,8 +461,16 @@ function readReviewedLockPackages(
             && (!omitDev || candidate.dev !== true)) owner = candidate;
         break;
       }
-      if (!owner) throw new Error(`bundled package has no reviewed archive owner: ${location}`);
-      continue;
+      if (!owner) {
+        // Root-level bundleDependencies hoist entries to the top of
+        // node_modules. They keep their own resolved/integrity identity in
+        // npm's lockfile, so validate them like independently pinned packages.
+        if (typeof record.resolved !== "string" || typeof record.integrity !== "string") {
+          throw new Error(`bundled package has no reviewed archive owner: ${location}`);
+        }
+      } else {
+        continue;
+      }
     }
     if (!allowNestedShrinkwrap && Object.prototype.hasOwnProperty.call(record, "hasShrinkwrap")) {
       throw new Error(

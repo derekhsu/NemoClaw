@@ -32,9 +32,9 @@ const pythonBin = execFileSync("python3", ["-c", "import sys; print(sys.executab
   encoding: "utf8",
 }).trim();
 
-const EXPECTED_DCODE_VERSION = "0.1.34";
-const EXPECTED_DEEPAGENTS_VERSION = "0.7.0a6";
-const NATIVE_PROFILE_SHA256 = "c8e8dd2b0182334b54be4f46ff0c7b45fbb95dc13bd9a92c249eb47a14fa13d7";
+const EXPECTED_DCODE_VERSION = "0.1.71";
+const EXPECTED_DEEPAGENTS_VERSION = "0.7.15";
+const NATIVE_PROFILE_SHA256 = "eec0bfdb27522823f80e5f95a00e03071162c2a96aa71fbffc1c112c5184c01f";
 const UNMODIFIED_BOOTSTRAP_SHA256 =
   "005a91e7fc4ca6b21220673dd9d02d6686bf63e1e4f1102d124b01f96886efcf";
 const CANONICAL_MODEL_SPEC = "nvidia:nvidia/nemotron-3-ultra-550b-a55b";
@@ -52,6 +52,14 @@ const BUILTIN_ONLY_PROFILE_STATE = MANAGED_MODEL_ALIASES.map((_alias, index) => 
 const NATIVE_PROFILE_SOURCE = `"""Focused native Nemotron profile fixture."""
 
 NATIVE_PROFILE_MARKER = "reviewed"
+
+
+class NemotronPolicyNudgeMiddleware:
+    def wrap_model_call(self, request, handler):
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(request)
 `;
 
 const BOOTSTRAP_SOURCE = `"""Focused unmodified Deep Agents bootstrap fixture."""
@@ -170,13 +178,27 @@ class HarnessProfile:
         self.extra_middleware = list(extra_middleware)
 
 
+def _merge_middleware(base, override):
+    merged = list(base)
+    for item in override:
+        for index, existing in enumerate(merged):
+            if type(existing) is type(item):
+                merged[index] = item
+                break
+        else:
+            merged.append(item)
+    return merged
+
+
 def register_harness_profile(key, profile):
     existing = _HARNESS_PROFILES.get(key)
     if existing is None:
         _HARNESS_PROFILES[key] = profile
     else:
         _HARNESS_PROFILES[key] = HarnessProfile(
-            extra_middleware=[*existing.extra_middleware, *profile.extra_middleware]
+            extra_middleware=_merge_middleware(
+                existing.extra_middleware, profile.extra_middleware
+            )
         )
     if os.environ.get("NEMOCLAW_TEST_FAIL_KEY") == key:
         raise RuntimeError(f"injected registration failure for {key}")
@@ -193,6 +215,15 @@ def register_harness_profile(key, profile):
     `class TextAccessor(str):
     def __call__(self):
         return str(self)
+
+
+class HumanMessage:
+    def __init__(self, name=None):
+        self.name = name
+
+    def model_copy(self, *, update):
+        clone = HumanMessage(update.get("name", self.name))
+        return clone
 
 
 class ToolMessage:
@@ -268,6 +299,7 @@ function makeValidatorDependencyStubRoot(): string {
       "_HARNESS_PROFILES = {}\nclass HarnessProfile: pass\ndef _harness_profile_for_model(*args, **kwargs): return HarnessProfile()\n",
     "deepagents_code/__init__.py": "",
     "deepagents_code/agent.py": "def create_cli_agent(*args, **kwargs): return None\n",
+    "deepagents_code/config.py": "def is_openai_prompt_cache_key_enabled(): return False\n",
     "langchain/agents/middleware/types.py": "class AgentMiddleware: pass\n",
     "langchain_core/language_models/fake_chat_models.py": "class FakeMessagesListChatModel: pass\n",
     "langchain_core/messages.py":
@@ -417,11 +449,20 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from deepagents.profiles.harness.harness_profiles import HarnessProfile, _HARNESS_PROFILES
 
-class NativeMiddleware:
-    pass
+try:
+    from deepagents.profiles.harness._nvidia_nemotron_3_ultra import (
+        NemotronPolicyNudgeMiddleware,
+    )
+except Exception:
+    class NemotronPolicyNudgeMiddleware:
+        def wrap_model_call(self, request, handler):
+            return handler(request)
+
+        async def awrap_model_call(self, request, handler):
+            return await handler(request)
 
 aliases = ${JSON.stringify(MANAGED_MODEL_ALIASES)}
-canonical = HarnessProfile(extra_middleware=[NativeMiddleware()])
+canonical = HarnessProfile(extra_middleware=[NemotronPolicyNudgeMiddleware()])
 if ${(options.withCanonical ?? true) ? "True" : "False"}:
     _HARNESS_PROFILES[${JSON.stringify(CANONICAL_MODEL_SPEC)}] = canonical
     _HARNESS_PROFILES[aliases[0]] = canonical
@@ -571,10 +612,8 @@ print(json.dumps({
     "aliases": aliases_registered,
     "aliasesShareManagedProfile": (
         all(aliases_registered)
-        and all(
-            _HARNESS_PROFILES[key] is _HARNESS_PROFILES[aliases[0]]
-            for key in aliases[1:]
-        )
+        and _HARNESS_PROFILES[aliases[3]] is _HARNESS_PROFILES[aliases[0]]
+        and _HARNESS_PROFILES[aliases[2]] is _HARNESS_PROFILES[aliases[1]]
     ),
     "aliasMiddleware": alias_middleware,
     "canonicalHasGuard": any(
@@ -652,12 +691,12 @@ describe("LangChain Deep Agents Code managed Nemotron profile plugin (#6424)", (
 
     expect(project).toContain('name = "nemoclaw-deepagents-profile"');
     expect(project).toContain('version = "0.1.0"');
-    expect(project).toContain('requires = ["setuptools==82.0.1"]');
+    expect(project).toContain('requires = ["setuptools==84.0.0"]');
     expect(project).toContain('license = "Apache-2.0"');
     expect(project).toContain('[project.entry-points."deepagents.harness_profiles"]');
     expect(project).toContain('nemoclaw-managed-aliases = "nemoclaw_deepagents_profile:register"');
-    expect(project).toContain('"deepagents-code==0.1.34"');
-    expect(project).toContain('"deepagents==0.7.0a6"');
+    expect(project).toContain('"deepagents-code==0.1.71"');
+    expect(project).toContain('"deepagents==0.7.15"');
   });
 
   it("keeps language-local managed Ultra model ID allowlists in sync", () => {
@@ -739,7 +778,7 @@ describe("LangChain Deep Agents Code managed Nemotron profile plugin (#6424)", (
     expect(result.probe.aliases).toEqual(MANAGED_MODEL_ALIASES.map(() => true));
     expect(result.probe.aliasesShareManagedProfile).toBe(true);
     expect(result.probe.aliasMiddleware).toEqual([
-      "NativeMiddleware",
+      "NemotronPolicyNudgeMiddleware",
       "NemoClawExecutePlaceholderGuardMiddleware",
     ]);
     expect(result.probe.canonicalHasGuard).toBe(false);
@@ -758,7 +797,7 @@ describe("LangChain Deep Agents Code managed Nemotron profile plugin (#6424)", (
     expect(result.probe.aliases).toEqual(MANAGED_MODEL_ALIASES.map(() => true));
     expect(result.probe.aliasesShareManagedProfile).toBe(true);
     expect(result.probe.aliasMiddleware).toEqual([
-      "NativeMiddleware",
+      "NemotronPolicyNudgeMiddleware",
       "NemoClawExecutePlaceholderGuardMiddleware",
     ]);
     expect(result.probe.canonicalHasGuard).toBe(false);
@@ -820,7 +859,7 @@ describe("LangChain Deep Agents Code managed Nemotron profile plugin (#6424)", (
     const validator = fs.readFileSync(validatorPath, "utf8");
     const e2eCheck = fs.readFileSync(e2eProfileCheckPath, "utf8");
 
-    expect(requirements).toMatch(/^langchain-core==1\.4\.8 /m);
+    expect(requirements).toMatch(/^langchain-core==1\.6\.6 /m);
     for (const source of [validator, e2eCheck]) {
       expect(source).toContain("isinstance(sync_result.content, str)");
       expect(source).toContain("isinstance(async_result.content, str)");
@@ -843,8 +882,8 @@ describe("LangChain Deep Agents Code managed Nemotron profile plugin (#6424)", (
   });
 
   it.each([
-    ["Deep Agents Code", { dcode: "0.1.35" }, "deepagents-code==0.1.34"],
-    ["Deep Agents", { deepagents: "0.7.0a7" }, "deepagents==0.7.0a6"],
+    ["Deep Agents Code", { dcode: "0.1.35" }, "deepagents-code==0.1.71"],
+    ["Deep Agents", { deepagents: "0.7.0a7" }, "deepagents==0.7.15"],
   ] as const)("fails closed on %s version drift", (_label, versions, message) => {
     const fixture = makePluginFixture(versions);
     const result = runPlugin(fixture);

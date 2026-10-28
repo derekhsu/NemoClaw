@@ -180,14 +180,14 @@ describe("LangChain Deep Agents Code managed entrypoints", () => {
     { args: ['--model-p={"api_key":"secret"}'], posture: "model parameter" },
     { args: ["--rubric-model", "anthropic:test"], posture: "rubric model" },
     { args: ["--rubric-m=anthropic:test"], posture: "rubric model" },
-    { args: ["--interpreter"], posture: "interpreter" },
-    { args: ["--interpreter-tools", "execute"], posture: "interpreter" },
-    { args: ["--interpreter-t=execute"], posture: "interpreter" },
+    { args: ["-n", "hi", "--interpreter"], posture: "interpreter" },
+    { args: ["-n", "hi", "--interpreter-tools", "execute"], posture: "interpreter" },
+    { args: ["-n", "hi", "--interpreter-t=execute"], posture: "interpreter" },
     { args: ["-y"], posture: "tool approval" },
     { args: ["--auto-approve"], posture: "tool approval" },
     { args: ["--acp"], posture: "ACP approval" },
-    { args: ["--startup-cmd", "touch /tmp/unsafe"], posture: "startup command" },
-    { args: ["--startup-cmd=touch /tmp/unsafe"], posture: "startup command" },
+    { args: ["-n", "hi", "--startup-cmd", "touch /tmp/unsafe"], posture: "startup command" },
+    { args: ["-n", "hi", "--startup-cmd=touch /tmp/unsafe"], posture: "startup command" },
   ])("rejects managed runtime override $args", ({ args, posture }) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-dcode-override-"));
     const { wrapperPath, ranMarker } = makeWrapperFixture(tempDir);
@@ -225,6 +225,23 @@ describe("LangChain Deep Agents Code managed entrypoints", () => {
     expect(fs.existsSync(ranMarker)).toBe(true);
   });
 
+  it.each<[string[]]>([
+    [["--interpreter"]],
+    [["--interpreter-tools", "execute"]],
+    [["--startup-cmd", "touch /tmp/unsafe"]],
+    [["--shell-allow-list=dcode-*"]],
+  ])("allows headless-only overrides through interactive sessions: $0", (args) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-dcode-interactive-"));
+    const { wrapperPath, ranMarker } = makeWrapperFixture(tempDir);
+    const result = spawnSync("bash", [wrapperPath, ...args], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      encoding: "utf8",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.existsSync(ranMarker)).toBe(true);
+  });
+
   it("keeps non-interactive argument scanning fail-closed around auto-approval (#6478)", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-dcode-auto-headless-"));
     const { wrapperPath, ranMarker } = makeWrapperFixture(tempDir, "thread-opt-in\n");
@@ -233,8 +250,9 @@ describe("LangChain Deep Agents Code managed entrypoints", () => {
       encoding: "utf8",
     });
 
-    expect(enabled.status, enabled.stderr).toBe(0);
-    expect(fs.existsSync(ranMarker)).toBe(true);
+    expect(enabled.status).not.toBe(0);
+    expect(enabled.stderr).toContain("tool approval");
+    expect(fs.existsSync(ranMarker)).toBe(false);
 
     const disabledTempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "nemoclaw-dcode-auto-headless-disabled-"),

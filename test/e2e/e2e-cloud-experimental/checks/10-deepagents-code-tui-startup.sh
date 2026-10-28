@@ -23,7 +23,7 @@ PROCESS_CLEANUP_TIMEOUT=20
 # test/deepagents-code-tui-startup-check.test.ts pins this to secret-patterns.ts.
 SECRET_PATTERN='(?:nvapi-[A-Za-z0-9_-]{10,}|nvcf-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{30,}|sk-proj-[A-Za-z0-9_-]{10,}|sk-ant-[A-Za-z0-9_-]{10,}|sk-[A-Za-z0-9_-]{20,}|(?:xox[bpas]|xapp)-[A-Za-z0-9-]{10,}|A(?:K|S)IA[A-Z0-9]{16}|hf_[A-Za-z0-9]{10,}|glpat-[A-Za-z0-9_-]{10,}|gsk_[A-Za-z0-9]{10,}|pypi-[A-Za-z0-9_-]{10,}|\bbot[0-9]{8,10}:[A-Za-z0-9_-]{35}\b|\b[0-9]{8,10}:[A-Za-z0-9_-]{35}\b|\b[A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b|tvly-[A-Za-z0-9_-]{10,}|lsv2_(?:pt|sk)_[A-Za-z0-9]{10,}(?:_[A-Za-z0-9]+)*)'
 CONTEXT_SECRET_VALUE_PATTERN='[A-Za-z0-9_.+\/=-]{10,}'
-# Pinned DCode 0.1.34 renders this exact modal title for `/agents`. Opening it
+# Pinned DCode 0.1.71 renders this exact modal title for `/agents`. Opening it
 # proves input reached the main composer after optional onboarding; headless
 # check 07 independently owns backend readiness and inference acceptance.
 TUI_READY_PATTERN='(select agent)'
@@ -218,7 +218,7 @@ proc append_marker {markers marker} {
 }
 
 proc submit_agents {markers} {
-  # Type at human cadence so DCode 0.1.34's reactive slash completion processes
+  # Type at human cadence so DCode 0.1.71's reactive slash completion processes
   # the exact command before Enter submits the selected /agents entry.
   foreach char [split "/agents" ""] {
     send -- $char
@@ -243,7 +243,7 @@ if {$expect_name_prompt eq "1"} {
       append_marker $markers "NEMOCLAW_TUI_NAME_PROMPT"
       puts "\nNEMOCLAW_TUI_NAME_PROMPT"
       # The prompt copy can render just before its input receives focus. Let the
-      # first frame settle, then submit the empty optional name accepted by 0.1.34.
+      # first frame settle, then submit the empty optional name accepted by 0.1.71.
       after 500
       send -- "\r"
       after 500

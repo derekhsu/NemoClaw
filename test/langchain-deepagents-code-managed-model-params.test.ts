@@ -1,14 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanupPackageFixtures,
   createPackageFixture,
+  managedPatchRegion,
+  MANAGED_STUB_PREAMBLE,
   patchFixture,
+  REAL_HELPER_PREAMBLE,
+  runPython,
 } from "./helpers/langchain-deepagents-code-patch-fixture";
 
 afterEach(cleanupPackageFixtures);
@@ -26,9 +29,23 @@ describe("LangChain Deep Agents Code managed model request parameters", () => {
   it("supplies the reviewed Ultra template argument from the managed provider resolver (#7441)", () => {
     const tempDir = createPackageFixture();
     patchFixture(tempDir);
-    const validation = `
-from deepagents_code import config
+    const region = managedPatchRegion(tempDir, "config.py");
+    const result = runPython(
+      tempDir,
+      `${MANAGED_STUB_PREAMBLE}
+${REAL_HELPER_PREAMBLE}
+import os
+import types
+from typing import Any
 from deepagents_code.model_config import ModelConfigError
+
+config = types.ModuleType("deepagents_code.config")
+config.__dict__.update({
+    "os": os,
+    "Any": Any,
+    "_dotenv_loaded_values": {},
+})
+exec(${JSON.stringify(region)}, config.__dict__)
 
 base_openai_kwargs = {
     "api_key": "nemoclaw-managed-inference",
@@ -83,12 +100,10 @@ assert config._get_provider_kwargs("openai", model_name=ultra_models[0]) == {
     "extra_body": ultra_extra_body,
 }
 print("managed-ultra-template-argument-ok")
-`;
-    const output = execFileSync("python3", ["-c", validation], {
-      env: { PATH: process.env.PATH, PYTHONPATH: tempDir },
-      encoding: "utf8",
-    });
-    expect(output).toContain("managed-ultra-template-argument-ok");
+`,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-ultra-template-argument-ok");
   });
 
   it("binds the live Ultra E2E test to the installed resolver, not the configuration round trip (#7441)", () => {

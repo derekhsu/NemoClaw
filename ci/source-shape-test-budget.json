@@ -232,11 +232,6 @@
       "category": "security"
     },
     {
-      "file": "test/fetch-guard-patch-regression.test.ts",
-      "test": "requires classifier review and integrity evidence when the OpenClaw build pin changes",
-      "category": "security"
-    },
-    {
       "file": "test/growth-guardrails-workflow-boundary.test.ts",
       "test": "flags %s",
       "category": "security"

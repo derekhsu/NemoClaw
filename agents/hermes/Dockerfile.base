@@ -480,12 +480,10 @@ WORKDIR /opt/hermes
 # workspaces disabled; this keeps browser tooling without either UI build tree.
 # Root npm, Electron, and node-gyp caches are build-only. Remove them in the
 # same RUN that creates them so Docker cannot retain their bytes in this layer.
-# Hermes 8.x ships .python-version=3.11, so uv sync installs a managed CPython
-# under UV_PYTHON_INSTALL_DIR. The default (/root/.local/share/uv/python) is
-# not traversable by the sandbox user, which breaks the runtime sandbox exec
-# probe below; relocate the interpreter store under /opt and open it with the
-# same a+rX pass used for the venv.
-ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+# Hermes ships a `.python-version` for Python 3.11. Use the reviewed system
+# Python 3.13 directly and forbid a root-private uv-managed interpreter so the
+# finished virtual environment remains executable by the sandbox user and its
+# pyexpat module loads the reviewed system libexpat.
 # sha256sum is the final pipeline command and rejects a mismatched package hash.
 # hadolint ignore=SC2086,DL4006
 RUN set -eu; \
@@ -493,7 +491,8 @@ RUN set -eu; \
     for extra in ${HERMES_UV_EXTRAS}; do \
         set -- "$@" --extra "$extra"; \
     done; \
-    uv sync --frozen --no-dev "$@" --no-cache \
+    uv sync --python /usr/bin/python3.13 --no-managed-python \
+        --frozen --no-dev "$@" --no-cache \
     && uv pip check --python /opt/hermes/.venv/bin/python \
     && /opt/hermes/.venv/bin/python -I -c \
         "from importlib.metadata import version; expected = {'aiohttp': '3.14.3', 'cryptography': '50.0.0', 'mcp': '2.0.0', 'httpx2': '2.12.0', 'httpcore2': '2.12.0', 'pillow': '12.3.0', 'starlette': '1.3.1', 'tornado': '6.5.7'}; actual = {name: version(name) for name in expected}; assert actual == expected, actual" \
@@ -590,7 +589,7 @@ RUN /usr/local/bin/hermes --version \
     && /opt/hermes/.venv/bin/python -c \
         'import mcp; from tools import mcp_tool; assert getattr(mcp_tool, "_MCP_AVAILABLE", False), "Hermes MCP client runtime is unavailable"; assert mcp_tool._ensure_mcp_sdk(), "Hermes MCP SDK failed to load"; assert getattr(mcp_tool, "_MCP_HTTP_AVAILABLE", False), "Hermes MCP Streamable HTTP runtime is unavailable"'
 
-RUN chmod -R a+rX /opt/hermes/.venv /opt/uv-python \
+RUN chmod -R a+rX /opt/hermes/.venv \
     && test -r /opt/hermes/.venv/pyvenv.cfg \
     && su -s /bin/sh sandbox -c '/opt/hermes/.venv/bin/python3 -c "import urllib.request"'
 

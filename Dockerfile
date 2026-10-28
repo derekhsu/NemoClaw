@@ -646,7 +646,7 @@ ENV NPM_CONFIG_AUDIT=false \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 COPY agents/openclaw/managed-image-messaging-runtime/package.json agents/openclaw/managed-image-messaging-runtime/package-lock.json /opt/managed-image-messaging-runtime/
-COPY scripts/checks/materialize-locked-npm-cache-seed.mts /opt/nemoclaw-build-tools/checks/
+COPY scripts/checks/materialize-locked-npm-cache-seed.mts scripts/checks/verify-managed-messaging-offline-install.mts /opt/nemoclaw-build-tools/checks/
 COPY scripts/lib/reviewed-npm-archive.mts scripts/lib/seed-reviewed-npm-cache.mts /opt/nemoclaw-build-tools/lib/
 COPY --from=openclaw-managed-messaging-npm-archives / /opt/nemoclaw-build-tools/npm-cache-seed/
 RUN --network=none set -eu; \
@@ -666,12 +666,15 @@ RUN --network=none set -eu; \
         --ignore-scripts --omit=dev --legacy-peer-deps \
         --userconfig /dev/null --registry https://registry.npmjs.org/ \
         --cache /out/npm-cache; \
+    node --experimental-strip-types /opt/nemoclaw-build-tools/checks/verify-managed-messaging-offline-install.mts \
+        --lockfile /opt/managed-image-messaging-runtime/package-lock.json \
+        --prefix /opt/managed-image-messaging-runtime; \
+    npm cache verify --cache /out/npm-cache; \
     node --experimental-strip-types /opt/nemoclaw-build-tools/lib/seed-reviewed-npm-cache.mts \
         --packuments-only \
         --lockfile /opt/managed-image-messaging-runtime/package-lock.json \
         --cache /out/npm-cache \
         --registry-origin https://registry.npmjs.org/; \
-    npm cache verify --cache /out/npm-cache; \
     rm -rf /opt/managed-image-messaging-runtime/node_modules \
         /opt/nemoclaw-build-tools/npm-cache-seed; \
     chown -R root:root /out/npm-cache; \

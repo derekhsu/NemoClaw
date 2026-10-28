@@ -350,7 +350,9 @@ COPY --from=hermes-local-uploader-payload / /
 # uv needs the temporary project directory; the installed environment has a fixed path.
 # hadolint ignore=DL3003
 RUN cd /opt/nemoclaw-sandbox-mcp-server \
-    && UV_PROJECT_ENVIRONMENT=/sandbox/.venvs/sandbox-mcp-server uv sync --frozen --no-dev --no-editable --no-cache \
+    && UV_PROJECT_ENVIRONMENT=/sandbox/.venvs/sandbox-mcp-server uv sync \
+        --python /usr/bin/python3.13 --no-managed-python \
+        --frozen --no-dev --no-editable --no-cache \
     && test -x /sandbox/.venvs/sandbox-mcp-server/bin/sandbox-mcp-server \
     && /sandbox/.venvs/sandbox-mcp-server/bin/python -I -c 'from sandbox_mcp_server.server import create_server; assert create_server().name == "sandbox-file-uploader"' \
     && chown -R root:root /sandbox/.venvs/sandbox-mcp-server \

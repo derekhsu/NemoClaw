@@ -32,7 +32,7 @@ describe("corporate proxy CA build-time TLS anchor (#6839)", () => {
       "node --experimental-strip-types /scripts/lib/patch-bundled-npm-ip-address.mts",
       curlAnchorIndex,
     );
-    const auditSignaturesIndex = dockerfile.indexOf("mcporter-runtime audit signatures");
+    const auditSignaturesIndex = dockerfile.indexOf("bash /scripts/lib/verify-mcporter-audit.sh");
 
     for (const [name, index] of Object.entries({
       argIndex,

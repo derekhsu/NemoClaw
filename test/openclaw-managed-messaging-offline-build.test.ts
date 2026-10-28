@@ -2,19 +2,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   type LockedArchive,
   lockedArchives,
 } from "../scripts/checks/materialize-locked-npm-cache-seed.mts";
+import {
+  managedMessagingNestedOverridePaths,
+  verifyManagedMessagingOfflineInstall,
+} from "../scripts/checks/verify-managed-messaging-offline-install.mts";
 
 const repoRoot = path.join(import.meta.dirname, "..");
 const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
-const lockSource = fs.readFileSync(
-  path.join(repoRoot, "agents/openclaw/managed-image-messaging-runtime/package-lock.json"),
-  "utf8",
+const runtimeDirectory = path.join(
+  repoRoot,
+  "agents",
+  "openclaw",
+  "managed-image-messaging-runtime",
 );
+const runtimeManifest = JSON.parse(
+  fs.readFileSync(path.join(runtimeDirectory, "package.json"), "utf8"),
+);
+const lockSource = fs.readFileSync(path.join(runtimeDirectory, "package-lock.json"), "utf8");
+const runtimeLock = JSON.parse(lockSource);
+const nestedOverrideLocations = managedMessagingNestedOverridePaths(runtimeManifest);
 
 interface DockerArchivePin {
   archive: string;
@@ -101,8 +114,53 @@ describe("OpenClaw managed messaging offline image build", () => {
     expect(cacheStage).toContain("--archive-directory /opt/nemoclaw-build-tools/npm-cache-seed");
     expect(cacheStage).toContain("NPM_CONFIG_OFFLINE=true npm ci");
     expect(cacheStage).toContain('--os linux --cpu "$npm_target_cpu" --libc glibc');
+    // npm cache verify keeps a single entry per URL, so the packument Accept
+    // variants must be seeded after verification or npm pack goes ENOTCACHED.
+    expect(cacheStage).toContain(
+      "verify-managed-messaging-offline-install.mts /opt/nemoclaw-build-tools/checks/",
+    );
+    expect(cacheStage.indexOf("verify-managed-messaging-offline-install.mts \\")).toBeGreaterThan(
+      cacheStage.indexOf("NPM_CONFIG_OFFLINE=true npm ci"),
+    );
+    expect(cacheStage.indexOf("npm cache verify")).toBeGreaterThan(
+      cacheStage.indexOf("NPM_CONFIG_OFFLINE=true npm ci"),
+    );
+    expect(cacheStage.indexOf("--packuments-only")).toBeGreaterThan(
+      cacheStage.indexOf("npm cache verify"),
+    );
     expect(cacheStage).not.toContain("--network=default");
     expect(cacheStage).not.toContain("else \\");
     expect(cacheStage).not.toContain("find /opt/nemoclaw-build-tools/npm-cache-seed");
+  });
+
+  it("rejects nested installed versions that differ from the reviewed lock", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "managed-messaging-install-test-"));
+    const writeInstalledVersion = (location: string, version: string) => {
+      const packageDirectory = path.join(temporary, location);
+      fs.mkdirSync(packageDirectory, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDirectory, "package.json"),
+        `${JSON.stringify({ version })}\n`,
+      );
+    };
+    try {
+      expect(nestedOverrideLocations.length).toBeGreaterThan(0);
+      for (const location of nestedOverrideLocations) {
+        writeInstalledVersion(location, runtimeLock.packages[location].version);
+      }
+      verifyManagedMessagingOfflineInstall(
+        path.join(runtimeDirectory, "package-lock.json"),
+        temporary,
+      );
+      writeInstalledVersion(nestedOverrideLocations[0], "0.0.0");
+      expect(() =>
+        verifyManagedMessagingOfflineInstall(
+          path.join(runtimeDirectory, "package-lock.json"),
+          temporary,
+        ),
+      ).toThrow("managed messaging nested override mismatch");
+    } finally {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    }
   });
 });

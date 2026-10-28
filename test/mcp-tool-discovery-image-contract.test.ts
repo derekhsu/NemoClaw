@@ -437,7 +437,10 @@ describe("MCP tool discovery image contract", () => {
       "nemoclaw-openclaw-override-qs": "npm:qs@6.15.3",
       "nemoclaw-openclaw-override-uuid": "npm:uuid@14.0.2",
       openclaw: "2026.9.2",
-      undici: "8.10.2",
+      undici: "8.12.2",
+      zod: "4.6.6",
+      "nemoclaw-openclaw-override-undici7": "npm:undici@7.30.1",
+      "nemoclaw-openclaw-override-msal-node": "npm:@azure/msal-node@7.1.0",
     });
     expect(openClawDockerfile).toContain("AS openclaw-managed-messaging-npm-cache-0");
     expect(openClawDockerfile).toContain("AS openclaw-managed-messaging-npm-cache-1");

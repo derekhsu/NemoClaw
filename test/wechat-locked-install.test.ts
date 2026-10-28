@@ -6,13 +6,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
-
-import { wechatManifest } from "../src/lib/messaging/channels/wechat/manifest.ts";
 import {
   applyMessagingBuildPhase,
   readMessagingBuildPlanFromEnv,
   requireWritableRuntimeInstallCache,
 } from "../src/lib/messaging/applier/build/messaging-build-applier.mts";
+import { wechatManifest } from "../src/lib/messaging/channels/wechat/manifest.ts";
 
 const WECHAT_INTEGRITY =
   "sha512-SfaYehR1Cwq2VV5HxJBp9sVilMms420VfZlMbF4YjRbWomr5+GxfXp9HkeU6y5TbnOc4Ysq0qPw1yBvJwbenBA==";
@@ -167,7 +166,7 @@ printf 'verify|%s|%s|openclaw=%s|offline=%s|cache=%s\n' "$3" "$4" "$5" "$NPM_CON
         `npm|view|@tencent-weixin/openclaw-weixin@2.4.9|cache=${fs.realpathSync(installCache)}|offline=true`,
       );
       expect(calls).toContain(
-        `npm|pack|${WECHAT_TARBALL}|cache=${fs.realpathSync(installCache)}|offline=true`,
+        `npm|pack|@tencent-weixin/openclaw-weixin@2.4.9|cache=${fs.realpathSync(installCache)}|offline=true`,
       );
       expect(calls).toContain(`offline=true|peer=true|cache=${fs.realpathSync(installCache)}`);
       expect(calls).toContain(

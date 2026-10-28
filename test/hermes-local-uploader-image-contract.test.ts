@@ -15,7 +15,16 @@ describe("Hermes managed local uploader image contract", () => {
     const run = runUploaderImageAssembly();
     expect(run.result.status, run.result.stderr).toBe(0);
     expect(run.install).toEqual({
-      args: ["sync", "--frozen", "--no-dev", "--no-editable", "--no-cache"],
+      args: [
+        "sync",
+        "--python",
+        "/usr/bin/python3.13",
+        "--no-managed-python",
+        "--frozen",
+        "--no-dev",
+        "--no-editable",
+        "--no-cache",
+      ],
       target: run.environment,
     });
     expect(run.ownership).toEqual(["-R", "root:root", run.environment]);

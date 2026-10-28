@@ -40,7 +40,7 @@ export const MINIMUM_SAFE_TAR_VERSION = "7.5.21";
  */
 export const NODE_BASES_REQUIRING_BUNDLED_NPM_TAR_PATCH = [
   "node:22-trixie-slim@sha256:e6d9a389d34ff9678438af985c9913fbd1eb6ed36e80fea56644f4b4f6dd70ba",
-  "node:24-trixie-slim@sha256:05c08ce4291e9a58f59456a7985176defb12cdd42271f35ff81a3e167ea61d4c",
+  "node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea",
 ] as const;
 
 type JsonRecord = Record<string, unknown>;

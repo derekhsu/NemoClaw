@@ -15,7 +15,7 @@ const HERMES_DOCKERFILE_BASE = path.join(ROOT, "agents", "hermes", "Dockerfile.b
 
 function extractAptInstallCommand(dockerfile: string): string {
   const runtimeStage = dockerfile.lastIndexOf(
-    "FROM node:24-trixie-slim@sha256:05c08ce4291e9a58f59456a7985176defb12cdd42271f35ff81a3e167ea61d4c",
+    "FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea",
   );
   expect(runtimeStage).toBeGreaterThanOrEqual(0);
   const match = dockerfile

@@ -27,7 +27,7 @@ The Hermes sandbox image build checks `aiohttp==3.14.3` and `cryptography==50.0.
 The check runs when `NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION` is `0` or `1`.
 The Hermes sandbox image build fails if either installed dependency has another version.
 The base image also keeps the hash-verified `python-multipart==0.0.32` install as a build-time re-assertion of the reviewed wheel and sdist digests, even though the frozen lock already selects the same release.
-The base image overlays checksum-pinned Node.js `24.18.1` archives for both supported architectures and installs exact uv `0.11.33`; build-time assertions reject version drift before Hermes is installed.
+The base image builds on the digest-pinned `node:24.22.1-trixie-slim` image and installs exact uv `0.11.33`; build-time assertions reject version drift before Hermes is installed.
 
 ## Reviewed identities
 
@@ -41,7 +41,7 @@ The base image overlays checksum-pinned Node.js `24.18.1` archives for both supp
 | Target source archive SHA-256 | `e622723b5bf3cd6c1db974d92d32242f1cb63f61c1112b6f708b34d619ef0fc7` |
 | Target npm cross-check integrity | `sha512-s5q1IEBifCBb77QMwkse4MRaAaoZSxIa4IkicIO3jL7MIdq15YvnSyiNvsTOWNBi6t3shFpIg+H7+9MJsOiSkg==` |
 | Target npm tarball SHA-1 | `ac12be86eb06ce8ace025cb508fda4b243a5f328` |
-| Target Node.js release | `24.18.1` |
+| Target Node.js release | `24.22.1` |
 | Target uv release | `0.11.33` |
 | Target publish date | `2026-08-27` |
 
@@ -67,7 +67,7 @@ The `hermes-agent` npm package is published from a different bridge repository a
 
 The complete adjacent range contains 9,228 source commits and 7,968 changed files.
 The upstream release-note estimate is not used as the audit boundary.
-Python remains `>=3.11,<3.14`, and the JavaScript runtime remains Node.js `>=20`, so NemoClaw's Python 3.13 and checksum-pinned Node.js 24.18.1 runtime remain compatible.
+Python remains `>=3.11,<3.14`, and the JavaScript runtime remains Node.js `>=20`, so NemoClaw's Python 3.13 and digest-pinned Node.js `24.22.1` runtime remain compatible.
 Later upstream tags (`v2026.8.31`, `v2026.9.x`) exist; `v2026.8.27` is the reviewed target for this upgrade.
 
 ## Semantic migration and retained workarounds
@@ -121,7 +121,7 @@ Two residual deltas remain and are floored by the exact-source patch:
 | `HERMES-7` | High | Test and runtime-proof | The target's `mcp__server__tool` names are compatible by source inspection, while managed-tool discovery and invocation remain a live E2E gate. |
 | `HERMES-8` | High | Guard and runtime-proof | Optional upstream secret sources stay disabled, `--safe-mode` does not broaden the generated environment allowlist, and the live environment boundary must reject raw credentials. |
 | `HERMES-9` | High | Pin and test | The selected Python delta adds no advisory regression: the two floored selections (`httpx2`/`httpcore2` 2.12.0, `alibabacloud-dingtalk` 2.2.54) clear their advisories, and the multipart parser remains the attested `0.0.32` with hash and runtime probes. |
-| `HERMES-10` | High | Pin and test | The exact-source patch updates Hermes metadata and its frozen lock together, floors `httpx2==2.12.0`, `httpcore2==2.12.0`, and `alibabacloud-dingtalk==2.2.54`, and fails the base image build on dependency inconsistency or installed-version drift. The `agents/hermes/Dockerfile` build checks `aiohttp==3.14.3` and `cryptography==50.0.0` in the Hermes sandbox image after messaging package installation. The base image separately checksum-pins Node.js `24.18.1` and checks uv `0.11.33`. |
+| `HERMES-10` | High | Pin and test | The exact-source patch updates Hermes metadata and its frozen lock together, floors `httpx2==2.12.0`, `httpcore2==2.12.0`, and `alibabacloud-dingtalk==2.2.54`, and fails the base image build on dependency inconsistency or installed-version drift. The `agents/hermes/Dockerfile` build checks `aiohttp==3.14.3` and `cryptography==50.0.0` in the Hermes sandbox image after messaging package installation. The base image separately digest-pins Node.js `24.22.1` and checks uv `0.11.33`. |
 | `HERMES-13` | Medium | Document bounded residual | Static `state_files` entries online-back up the default profile only. Cron or Discord ledgers created by a process launched under `profiles/<name>` remain in the raw `profiles` tar capture and can be inconsistent during a concurrent snapshot. Dynamic profile-local SQLite discovery is generic snapshot work outside this upgrade PR. |
 | `HERMES-14` | High | Migrate and test | The browser evaluation denylist remains opt-in upstream. Generated configuration explicitly writes `browser.restrict_evaluate: true`, including when managed browser-gateway settings are merged, so the upgrade does not broaden page-context access. |
 | `HERMES-15` | Medium | Migrate and test | The omitted gateway session-reset policy remains no automatic reset upstream. Generated configuration explicitly writes the complete bounded reset and notification policy to preserve the retention bound without inheriting mutable dependency defaults. |

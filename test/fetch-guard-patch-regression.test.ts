@@ -163,7 +163,7 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
   );
   fs.writeFileSync(blueprint, `min_openclaw_version: "${readBlueprintMinOpenClawVersion()}"\n`);
   fs.mkdirSync(openclawInstall, { recursive: true });
-  fs.mkdirSync(openclawRuntime, { recursive: true });
+  fs.mkdirSync(path.join(openclawRuntime, "node_modules", ".bin"), { recursive: true });
   fs.mkdirSync(mcporterInstall, { recursive: true });
   fs.mkdirSync(reviewedArchiveDir);
   fs.writeFileSync(path.join(mcporterInstall, "package-lock.json"), "{}");
@@ -191,6 +191,7 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
   fs.writeFileSync(mcporterShim, "");
   fs.writeFileSync(auditExceptions, '{"schemaVersion":1,"exceptions":[]}\n');
   fs.writeFileSync(reviewedArchive, "fake reviewed OpenClaw archive");
+  fs.writeFileSync(path.join(tmp, "openclaw-cli-wrapper.sh"), "#!/usr/bin/env bash\n");
   const command = dockerRunCommandBetween(
     "# OPENCLAW_VERSION is the NemoClaw runtime build target",
     "# Patch OpenClaw media fetch",
@@ -211,6 +212,11 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
       `from ${JSON.stringify(REVIEWED_NPM_AUDIT_HELPER)}`,
     )
     .replaceAll("/scripts/lib/verify-mcporter-audit.sh", verifyAuditHelper)
+    .replaceAll(
+      "/usr/local/lib/nemoclaw/openclaw-cli-wrapper.sh",
+      path.join(tmp, "openclaw-cli-wrapper.sh"),
+    )
+    .replaceAll("install -o root -g root ", "install ")
     .replaceAll("/scripts/npm-audit-exceptions.json", auditExceptions);
   const script = [
     "#!/usr/bin/env bash",

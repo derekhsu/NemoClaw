@@ -278,6 +278,13 @@ function runInstallBlock(
   fs.mkdirSync(path.dirname(mcporterBin), { recursive: true });
   fs.mkdirSync(openclawRuntime, { recursive: true });
   fs.mkdirSync(mcporterRuntime, { recursive: true });
+  fs.mkdirSync(path.join(openclawRuntime, "node_modules", ".bin"), { recursive: true });
+  const wrapperFixture = path.join(tmp, "usr-local-lib", "nemoclaw", "openclaw-cli-wrapper.sh");
+  fs.mkdirSync(path.dirname(wrapperFixture), { recursive: true });
+  fs.copyFileSync(
+    path.join(import.meta.dirname, "..", "scripts", "openclaw-cli-wrapper.sh"),
+    wrapperFixture,
+  );
   fs.copyFileSync(OPENCLAW_RUNTIME_LOCKFILE, path.join(openclawRuntime, "package-lock.json"));
   fs.copyFileSync(OPENCLAW_VERSION_EXTRACTOR, openclawVersionExtractor);
   fs.chmodSync(openclawVersionExtractor, 0o755);
@@ -482,6 +489,7 @@ function runInstallBlock(
       .replaceAll("/scripts/lib/openclaw-npm-remediation.mts", remediationHelper)
       .replaceAll("/scripts/lib/reviewed-npm-audit.mts", auditHelper)
       .replaceAll("/scripts/lib/verify-mcporter-audit.sh", verifyAuditHelper)
+      .replaceAll("install -o root -g root ", "install ")
       .replaceAll("/scripts/npm-audit-exceptions.json", auditExceptionFile),
   ].join("\n");
   const scriptPath = path.join(tmp, "run.sh");

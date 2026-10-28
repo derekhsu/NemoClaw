@@ -102,6 +102,15 @@ jobs:
         with:
           node-version: 22.19.0
 
+      - name: Validate PR Hermes source-base build args
+        if: matrix.agent == 'hermes'
+        shell: bash
+        env:
+          BASE_DOCKERFILE: ${{ matrix.base_dockerfile }}
+        run: |
+          set -euo pipefail
+          scripts/check-production-build-args.sh -f "$BASE_DOCKERFILE"
+
       - name: Build PR Hermes source base
         if: matrix.agent == 'hermes'
         id: hermes_source_base
@@ -299,7 +308,7 @@ jobs:
             --platform linux/amd64
 
       - name: Log in to GHCR for exact same-repository PR digest
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -310,7 +319,7 @@ jobs:
       # created, so this proof cannot expose an incomplete all-agent cohort.
       - name: Publish exact same-repository PR managed image by digest
         id: publish
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -336,12 +345,12 @@ jobs:
           sbom: false
 
       - name: Remove PR publication credentials
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        if: always() && github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
         run: docker logout ghcr.io
 
       - name: Export exact published PR managed-image contract
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
         shell: bash
         env:
           AGENT: ${{ matrix.agent }}
@@ -397,7 +406,7 @@ jobs:
             }' > "$contract_dir/contract.json"
 
       - name: Upload exact published PR managed-image contract
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: managed-pr-contract-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.agent }}
@@ -408,7 +417,7 @@ jobs:
   pr-managed-activation:
     name: PR exact all-agent managed runtime activation
     needs: pr-build-and-entrypoint
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'pull_request' && github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -501,7 +510,7 @@ jobs:
 
   build-and-validate:
     name: Build and validate ${{ matrix.display_name }} managed image (${{ matrix.arch }})
-    if: github.event_name != 'pull_request'
+    if: github.repository == 'NVIDIA/NemoClaw' && github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -1098,6 +1107,7 @@ jobs:
   promote:
     name: Promote complete multi-platform managed image cohort
     needs: build-and-validate
+    if: github.repository == 'NVIDIA/NemoClaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

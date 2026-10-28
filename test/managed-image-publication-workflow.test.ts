@@ -501,7 +501,8 @@ describe("complete managed-image publication workflow", () => {
     const logout = step(prBuilder, "Remove PR publication credentials");
     const exportContract = step(prBuilder, "Export exact published PR managed-image contract");
     const uploadContract = step(prBuilder, "Upload exact published PR managed-image contract");
-    const sameRepository = "github.event.pull_request.head.repo.full_name == github.repository";
+    const sameRepository =
+      "github.repository == 'NVIDIA/NemoClaw' && github.event.pull_request.head.repo.full_name == github.repository";
     expect(login.if).toBe(sameRepository);
     expect(publish.if).toBe(sameRepository);
     expect(publish.with).toMatchObject({
@@ -688,7 +689,10 @@ fi
       contents: "read",
       packages: "write",
     });
-    expect(builder.if).toBe("github.event_name != 'pull_request'");
+    expect(builder.if).toBe(
+      "github.repository == 'NVIDIA/NemoClaw' && github.event_name != 'pull_request'",
+    );
+    expect(managedPromoter(workflow).if).toBe("github.repository == 'NVIDIA/NemoClaw'");
     expect(builder["runs-on"]).toBe("${{ matrix.runner }}");
     expect(builder["timeout-minutes"]).toBe(120);
     expect(builder.strategy?.["fail-fast"]).toBe(false);

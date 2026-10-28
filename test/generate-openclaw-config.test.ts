@@ -17,6 +17,7 @@ import {
   applyMessagingBuildPhase,
   readMessagingBuildPlanFromEnv,
 } from "../src/lib/messaging/applier/build/messaging-build-applier.mts";
+import { malformedOpenClawSetupManifests } from "./fixtures/openclaw-malformed-setup-manifests.ts";
 import { baseOpenClawGenerationEnv, buildOpenClawTestEnv } from "./helpers/openclaw-env-fixture";
 import { withLegacyMessagingPlanEnvDirect } from "./messaging-plan-test-helper";
 
@@ -1405,128 +1406,7 @@ describe("generate-openclaw-config.mts: config generation", () => {
   });
 
   it("rejects malformed model-specific setup manifest fields independently", () => {
-    const validManifest = {
-      id: "fixture",
-      agent: "openclaw",
-      description: "Fixture manifest",
-      match: { modelIds: ["test-model"] },
-      effects: { openclawCompat: {} },
-    };
-    const cases = [
-      {
-        name: "non-object root",
-        manifest: null,
-        message: "manifest must be a JSON object",
-      },
-      {
-        name: "missing id",
-        manifest: { ...validManifest, id: "" },
-        message: "field 'id' must be a non-empty string",
-      },
-      {
-        name: "missing description",
-        manifest: { ...validManifest, description: "" },
-        message: "field 'description' must be a non-empty string",
-      },
-      {
-        name: "non-object match",
-        manifest: { ...validManifest, match: null },
-        message: "field 'match' must be an object",
-      },
-      {
-        name: "unknown match key",
-        manifest: { ...validManifest, match: { modelIds: ["test-model"], family: "kimi" } },
-        message: "unknown match keys: family",
-      },
-      {
-        name: "empty modelIds",
-        manifest: { ...validManifest, match: { modelIds: [] } },
-        message: "match.modelIds must be a non-empty string array",
-      },
-      {
-        name: "empty providerKey",
-        manifest: { ...validManifest, match: { providerKey: "" } },
-        message: "match.providerKey must be a non-empty string",
-      },
-      {
-        name: "missing effects",
-        manifest: { ...validManifest, effects: null },
-        message: "field 'effects' must be a non-empty object",
-      },
-      {
-        name: "non-object openclawCompat",
-        manifest: { ...validManifest, effects: { openclawCompat: false } },
-        message: "effects.openclawCompat must be an object",
-      },
-      {
-        name: "non-object openclawTools",
-        manifest: { ...validManifest, effects: { openclawTools: false } },
-        message: "effects.openclawTools must be an object",
-      },
-      {
-        name: "unknown openclawTools key",
-        manifest: { ...validManifest, effects: { openclawTools: { webSearch: true } } },
-        message: "unknown effects.openclawTools keys: webSearch",
-      },
-      {
-        name: "non-array openclawPlugins",
-        manifest: { ...validManifest, effects: { openclawPlugins: {} } },
-        message: "effects.openclawPlugins must be an array",
-      },
-      {
-        name: "non-object openclaw plugin",
-        manifest: { ...validManifest, effects: { openclawPlugins: ["plugin"] } },
-        message: "effects.openclawPlugins[0] must be an object",
-      },
-      {
-        name: "missing openclaw plugin id",
-        manifest: {
-          ...validManifest,
-          effects: {
-            openclawPlugins: [
-              {
-                id: "",
-                path: "openclaw-plugins/fixture",
-                loadPath: "/usr/local/share/nemoclaw/openclaw-plugins/fixture",
-              },
-            ],
-          },
-        },
-        message: "effects.openclawPlugins[0].id must be a non-empty string",
-      },
-      {
-        name: "absolute openclaw plugin source path",
-        manifest: {
-          ...validManifest,
-          effects: {
-            openclawPlugins: [
-              {
-                id: "fixture-plugin",
-                path: "/tmp/plugin",
-                loadPath: "/usr/local/share/nemoclaw/openclaw-plugins/fixture",
-              },
-            ],
-          },
-        },
-        message: "must be relative to nemoclaw-blueprint",
-      },
-      {
-        name: "parent-relative openclaw plugin source path",
-        manifest: {
-          ...validManifest,
-          effects: {
-            openclawPlugins: [
-              {
-                id: "fixture-plugin",
-                path: "../plugin",
-                loadPath: "/usr/local/share/nemoclaw/openclaw-plugins/fixture",
-              },
-            ],
-          },
-        },
-        message: "must be relative to nemoclaw-blueprint",
-      },
-    ];
+    const cases = malformedOpenClawSetupManifests();
 
     for (const testCase of cases) {
       const blueprintDir = path.join(

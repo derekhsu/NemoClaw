@@ -349,6 +349,17 @@ describe("pull request and main workflow contracts", () => {
     ),
   };
 
+  // source-shape-contract: security -- Coverage uploads must not publish fork data to upstream destinations
+  it("limits coverage publication to the upstream repository", () => {
+    const requiredCondition = "github.repository == 'NVIDIA/NemoClaw'";
+    expect(requiredStep(sharedActions.cliCoverageMerge, "Upload CLI coverage report").if).toContain(
+      requiredCondition,
+    );
+    expect(
+      requiredStep(sharedActions.pluginCoverage, "Upload plugin coverage report").if,
+    ).toContain(requiredCondition);
+  });
+
   // source-shape-contract: security -- PR base SHA action execution prevents pull-request code from authorizing installer hashes
   it("executes pull request installer hash checks only from the PR base SHA", () => {
     expect(installerHashTrustViolations(installerHashWorkflow)).toEqual([]);

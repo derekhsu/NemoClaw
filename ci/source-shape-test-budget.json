@@ -600,6 +600,46 @@
       "file": "test/vitest-watch-triggers.test.ts",
       "test": "registers the focused mappings at the root configuration boundary (#6692)",
       "category": "compatibility"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed bundled Axios graph with the patched graph",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces only the reviewed Slack bundled proxy-addr package",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed Jaeger propagator with its aligned patched core",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed OpenClaw Discord undici dependency",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "rebuilds a guarded core archive with the patched fs-safe package bundled",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "rebuilds a guarded plugin archive with the patched Axios graph bundled",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "replaces the reviewed bundled Axios graph with the patched graph",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "replaces the reviewed OpenClaw core tar and brace-expansion graph",
+      "category": "security"
     }
   ]
 }

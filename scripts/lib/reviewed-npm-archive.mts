@@ -80,6 +80,41 @@ export function singleNpmPackResult(value: unknown): Record<string, unknown> | u
     : undefined;
 }
 
+const KNOWN_NPM_ERROR_CODES = new Set(
+  "ENOTCACHED EALLOWREMOTE EALLOWGIT ERESOLVE ETARGET E404 E403 E401 EINTEGRITY EBADPLATFORM EACCES EPERM ENOENT ENOSPC ETIMEDOUT".split(
+    " ",
+  ),
+);
+
+function emitReviewedNpmDiagnostic(
+  args: readonly string[],
+  result: ReturnType<typeof spawnSync>,
+): void {
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const npmCodes = [...output.matchAll(/\bnpm (?:ERR!|error) code (E[A-Z0-9_]+)\b/g)]
+    .map((match) => match[1]!)
+    .filter((code) => KNOWN_NPM_ERROR_CODES.has(code));
+  const registryPaths = [
+    ...output.matchAll(/https:\/\/registry\.npmjs\.org(\/[@a-zA-Z0-9%._/-]+)/g),
+  ]
+    .map((match) => match[1]!)
+    .filter((value) => value.length <= 250);
+  // Emit only fixed status fields and public registry paths. Child output can
+  // contain credentials or configuration and must never be printed verbatim.
+  console.error(
+    `Reviewed npm command diagnostic: ${JSON.stringify({
+      command: "npm",
+      args: [args[0], args[1]],
+      exitCode: result.status,
+      signal: result.signal,
+      errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+      npmCodes: [...new Set(npmCodes)],
+      timedOut: /\b(?:timed out|ETIMEDOUT|termination (?:no-output-)?timeout)\b/i.test(output),
+      registryPaths: [...new Set(registryPaths)].slice(0, 8),
+    })}`,
+  );
+}
+
 function runNpm(args: readonly string[], request: ReviewedNpmArchiveRequest): string {
   const result = spawnSync(request.npmExecutable ?? "npm", args, {
     encoding: "utf-8",
@@ -87,6 +122,7 @@ function runNpm(args: readonly string[], request: ReviewedNpmArchiveRequest): st
     maxBuffer: NPM_OUTPUT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.error || result.status !== 0) emitReviewedNpmDiagnostic(args, result);
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
@@ -173,7 +209,7 @@ export function packReviewedNpmArchive(
   );
   try {
     const packJson = npmRunner(
-      ["pack", request.packageSpec, "--pack-destination", rootDirectory, "--json"],
+      ["pack", request.tarballUrl, "--pack-destination", rootDirectory, "--json"],
       request,
     );
     let parsed: unknown;

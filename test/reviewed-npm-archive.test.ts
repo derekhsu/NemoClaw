@@ -132,7 +132,7 @@ describe("reviewed npm archive", () => {
     expect(calls).toEqual([
       ["view", PACKAGE_SPEC, "dist.integrity"],
       ["view", PACKAGE_SPEC, "dist.tarball"],
-      ["pack", PACKAGE_SPEC, "--pack-destination", archive.rootDirectory, "--json"],
+      ["pack", TARBALL_URL, "--pack-destination", archive.rootDirectory, "--json"],
     ]);
     expect(archive.archivePath).toBe(path.join(archive.rootDirectory, "reviewed-1.2.3.tgz"));
     expect(fs.existsSync(archive.archivePath)).toBe(true);

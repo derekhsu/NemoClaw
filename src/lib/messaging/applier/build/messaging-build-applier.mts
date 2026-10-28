@@ -2202,7 +2202,17 @@ function fatalMessagingBuildDiagnostic(error: unknown): string {
   if (error instanceof MessagingBuildApplierError) {
     return "Messaging build applier rejected invalid or unsafe input.";
   }
-  return "Messaging build applier failed.";
+  // Untyped errors carry no structured detail. Print only the constructor
+  // name and the first message line with URLs stripped; embedded child output
+  // can contain configuration and must never be printed verbatim.
+  const errorName = error instanceof Error ? error.constructor.name : typeof error;
+  const firstLine =
+    error instanceof Error
+      ? (error.message.split("\n")[0] ?? "")
+          .replace(/https?:\/\/\S+/g, "<url>")
+          .slice(0, 200)
+      : "";
+  return `Messaging build applier failed (${errorName}${firstLine ? `: ${firstLine}` : ""}).`;
 }
 
 function isMainModule(): boolean {

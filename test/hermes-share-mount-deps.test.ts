@@ -21,10 +21,13 @@ function extractAptInstallCommand(dockerfile: string): string {
   const match = dockerfile
     .slice(runtimeStage)
     .match(
-      /RUN\s+apt-get update\s*&&\s*apt-get install -y --no-install-recommends[\s\S]*?&&\s*rm -rf \/var\/lib\/apt\/lists\/\*/m,
+      /RUN\s+(?:--mount=\S+\s+\\?\s*\n?\s*)*apt-get update\s*&&\s*apt-get install -y --no-install-recommends[\s\S]*?&&\s*rm -rf \/var\/lib\/apt\/lists\/\*/m,
     );
   expect(match).not.toBeNull();
-  return match![0].replace(/^RUN\s+/, "").replace(/\\\n/g, " ");
+  return match![0]
+    .replace(/^RUN\s+/, "")
+    .replace(/\\\n/g, " ")
+    .replace(/^(?:--mount=\S+\s+)+/, "");
 }
 
 function extractHermesInstallCommand(dockerfile: string): string {
@@ -345,26 +348,53 @@ describe("Hermes share mount package parity (#2947)", () => {
     fs.mkdirSync(debianSecurityDebs);
     fs.mkdirSync(nativeSecurityDebs);
     fs.writeFileSync(path.join(nativeSecurityDebs, "libssh2-1t64.deb"), "fixed libssh2");
+    fs.writeFileSync(path.join(nativeSecurityDebs, "zlib1g.deb"), "fixed zlib");
     fs.writeFileSync(
       path.join(nativeSecurityDebs, "nemoclaw-python3.13-htmlparser-fix.deb"),
       "fixed parser package",
     );
 
     try {
+      const renderer = path.join(
+        import.meta.dirname,
+        "../scripts/security/security-package-inventory.mts",
+      );
+      const renderedProbe = spawnSync(process.execPath, [renderer, "probe", "shared"], {
+        encoding: "utf-8",
+      });
+      expect(renderedProbe.status, renderedProbe.stderr).toBe(0);
+      const probe = renderedProbe.stdout.replaceAll(
+        "/usr/local/share/nemoclaw/security-packages.txt",
+        inventory,
+      );
       const command = extractAptInstallCommand(dockerfile)
+        .replace(
+          /\$\(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \/tmp\/nemoclaw-security\/scripts\/security\/security-package-inventory\.mts probe shared\)/,
+          `$(printf '%s' '${probe.replaceAll("'", "'\\''")}')`,
+        )
         .replaceAll("/var/lib/apt/lists", lists)
         .replaceAll("/tmp/nemoclaw-debian-security", debianSecurityDebs)
         .replaceAll("/tmp/nemoclaw-native-security", nativeSecurityDebs)
+        .replaceAll(
+          "/tmp/nemoclaw-security/scripts/security/security-package-inventory.mts",
+          renderer,
+        )
         .replaceAll("/usr/local/share/nemoclaw/security-packages.txt", inventory)
         .replaceAll("/usr/local/share/nemoclaw", inventoryDirectory)
-        .replaceAll("/usr/lib/python3.13/html/parser.py", fixedParser);
+        .replaceAll("/usr/lib/python3.13/html/parser.py", fixedParser)
+        .replaceAll(
+          'sh -ec "$security_probe"',
+          'bash -ec "$(declare -f dpkg dpkg-query stat node); $(declare -p perl_base_installed perl_installed); $security_probe"',
+        );
       const { result, calls } = runLoggedShell(command, tmp, [
         'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
         'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
+        'stat() { printf "0:0:444\\n"; }',
+        'node() { if [[ "$#" -eq 2 && "$1" == "-p" && "$2" == "process.versions.node" ]]; then printf \'%s\' "24.22.1"; else command node "$@"; fi; }',
         ...useRealPatchedParser(BASE_APT_SECURITY_FUNCTIONS, pythonShim),
       ]);
 
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       expect(calls).toContain("apt-get update");
       expect(calls).toContain("gnupg=2.4.7-21+deb13u1");
       expect(calls).toContain("procps=2:4.0.4-9");

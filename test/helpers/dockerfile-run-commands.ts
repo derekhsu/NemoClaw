@@ -16,7 +16,8 @@ export interface ReviewedDockerfileRunCommand {
 }
 
 const CORPORATE_CA_PATH = "/usr/local/share/nemoclaw/corporate-ca.pem";
-const CORPORATE_CA_GUARD = `if [ -f ${CORPORATE_CA_PATH} ]; then export CURL_CA_BUNDLE=${CORPORATE_CA_PATH}; fi;`;
+const CORPORATE_CA_CURL_GUARD = `if [ -f ${CORPORATE_CA_PATH} ]; then export CURL_CA_BUNDLE=${CORPORATE_CA_PATH}; fi;`;
+const CORPORATE_CA_NODE_CURL_GUARD = `if [ -f ${CORPORATE_CA_PATH} ]; then export CURL_CA_BUNDLE=${CORPORATE_CA_PATH}; export NODE_EXTRA_CA_CERTS=${CORPORATE_CA_PATH}; fi;`;
 
 function lineEnd(source: string, start: number): number {
   const newline = source.indexOf("\n", start);
@@ -46,14 +47,15 @@ export function dockerfileInstructions(source: string): DockerfileInstruction[] 
     }
 
     let end = endOfFirstLine;
-    let currentLine = firstLine;
-    while (continuesInstruction(currentLine)) {
+    let continues = continuesInstruction(firstLine);
+    while (continues) {
       if (end >= source.length) {
         throw new Error(`Dockerfile ends inside the ${instructionMatch[1]} instruction`);
       }
       const nextEnd = lineEnd(source, end);
-      currentLine = source.slice(end, nextEnd);
+      const currentLine = source.slice(end, nextEnd);
       end = nextEnd;
+      continues = /^[ \t]*#/u.test(currentLine) || continuesInstruction(currentLine);
     }
 
     const bodyStart = offset + instructionMatch[0].length;
@@ -133,6 +135,98 @@ function unquotedTextIndexes(source: string, text: string): number[] {
   return indexes;
 }
 
+function shellCommandPrefixWords(source: string, end: number): string[] {
+  const words: string[] = [];
+  let wordStart: number | undefined;
+  let quote: "'" | '"' | "`" | null = null;
+  let comment = false;
+
+  const finishWord = (wordEnd: number): void => {
+    if (wordStart === undefined) return;
+    words.push(source.slice(wordStart, wordEnd));
+    wordStart = undefined;
+  };
+
+  for (let index = 0; index < end; index += 1) {
+    const character = source[index]!;
+    if (comment) {
+      if (character === "\n") {
+        comment = false;
+        words.length = 0;
+      }
+      continue;
+    }
+    if (quote !== null) {
+      if (character === "\\" && quote !== "'") {
+        index += 1;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      wordStart ??= index;
+      quote = character;
+      continue;
+    }
+    if (character === "\\") {
+      wordStart ??= index;
+      index += 1;
+      continue;
+    }
+    if (character === "#" && (index === 0 || /[\s;&|(){}]/u.test(source[index - 1]!))) {
+      finishWord(index);
+      comment = true;
+      continue;
+    }
+    if (/[ \t\r]/u.test(character)) {
+      finishWord(index);
+      continue;
+    }
+    if (character === "\n" || ";&|({)".includes(character)) {
+      finishWord(index);
+      words.length = 0;
+      continue;
+    }
+    wordStart ??= index;
+  }
+
+  finishWord(end);
+  return words;
+}
+
+function followsShellCommandSeparator(source: string, index: number): boolean {
+  return shellCommandPrefixWords(source, index).every(
+    (word) =>
+      ["!", "do", "elif", "else", "if", "then", "until", "while"].includes(word) ||
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(word),
+  );
+}
+
+function startsShellWord(source: string, index: number): boolean {
+  const previousCharacter = source[index - 1];
+  return previousCharacter === undefined || /[\t\r\n &|();<>]/u.test(previousCharacter);
+}
+
+export function dockerfileRunCommandPositions(source: string, command: string): number[] {
+  const positions: number[] = [];
+  for (const instruction of dockerfileInstructions(source)) {
+    if (instruction.keyword !== "RUN") continue;
+    const collapsed = collapseDockerfileContinuations(instruction.body);
+    for (const index of unquotedTextIndexes(collapsed.text, command)) {
+      const afterCommand = collapsed.text[index + command.length];
+      if (
+        startsShellWord(collapsed.text, index) &&
+        followsShellCommandSeparator(collapsed.text, index) &&
+        (afterCommand === undefined || /[ \t\r\n;&|(){}<>]/u.test(afterCommand))
+      ) {
+        positions.push(instruction.bodyStart + collapsed.originalIndexes[index]!);
+      }
+    }
+  }
+  return positions;
+}
+
 function normalizedInstructionBody(source: string): string {
   return source
     .replace(/\\\r?\n/gu, " ")
@@ -140,13 +234,50 @@ function normalizedInstructionBody(source: string): string {
     .replace(/^[ \t\r\n]+|[ \t\r\n]+$/gu, "");
 }
 
-export function requireSingleReviewedDockerfileRunCommand(
+export function requireDockerfileCopySources(
+  source: string,
+  sourcePath: string,
+  destinationPath: string,
+  expectedCount: number,
+): readonly DockerfileInstruction[] {
+  const destinationDirectory = destinationPath.slice(0, destinationPath.lastIndexOf("/") + 1);
+  const matches = dockerfileInstructions(source).filter((instruction) => {
+    if (instruction.keyword !== "COPY") return false;
+    const words = normalizedInstructionBody(instruction.body).split(" ");
+    const destination = words.at(-1);
+    return (
+      words.slice(0, -1).includes(sourcePath) &&
+      (destination === destinationPath || destination === destinationDirectory)
+    );
+  });
+  if (matches.length !== expectedCount) {
+    throw new Error(
+      `Expected ${expectedCount} COPY instruction(s) of ${sourcePath} to ${destinationPath}, found ${matches.length}`,
+    );
+  }
+  return matches;
+}
+
+export function requireSingleDockerfileCopySource(
+  source: string,
+  sourcePath: string,
+  destinationPath: string,
+): DockerfileInstruction {
+  return requireDockerfileCopySources(source, sourcePath, destinationPath, 1)[0]!;
+}
+
+export function requireReviewedDockerfileRunCommands(
   source: string,
   command: string,
   requiredArguments: readonly string[],
-): ReviewedDockerfileRunCommand {
+  expectedCount: number,
+): readonly ReviewedDockerfileRunCommand[] {
   const invocation = [command, ...requiredArguments].join(" ");
-  const reviewedBodies = new Set([invocation, `${CORPORATE_CA_GUARD} ${invocation}`]);
+  const reviewedBodies = new Set([
+    invocation,
+    `${CORPORATE_CA_CURL_GUARD} ${invocation}`,
+    `${CORPORATE_CA_NODE_CURL_GUARD} ${invocation}`,
+  ]);
   const matches: ReviewedDockerfileRunCommand[] = [];
   let unreviewedInstructions = 0;
 
@@ -181,8 +312,19 @@ export function requireSingleReviewedDockerfileRunCommand(
       `Expected '${invocation}' only as a direct RUN or the reviewed corporate CA guarded RUN; found ${unreviewedInstructions} unreviewed RUN instruction(s)`,
     );
   }
-  if (matches.length !== 1) {
-    throw new Error(`Expected one reviewed RUN command '${invocation}', found ${matches.length}`);
+  if (matches.length !== expectedCount) {
+    const expected = expectedCount === 1 ? "one" : String(expectedCount);
+    throw new Error(
+      `Expected ${expected} reviewed RUN command '${invocation}', found ${matches.length}`,
+    );
   }
-  return matches[0];
+  return matches;
+}
+
+export function requireSingleReviewedDockerfileRunCommand(
+  source: string,
+  command: string,
+  requiredArguments: readonly string[],
+): ReviewedDockerfileRunCommand {
+  return requireReviewedDockerfileRunCommands(source, command, requiredArguments, 1)[0]!;
 }

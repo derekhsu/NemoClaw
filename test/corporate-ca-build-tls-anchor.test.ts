@@ -79,7 +79,7 @@ describe("DCode corporate proxy CA cold-build trust (#8119)", () => {
       "RUN bash /scripts/security/build-perl-security-packages.sh",
       nativeFetchIndex,
     );
-    const finalFromIndex = baseDockerfile.indexOf("FROM node:22-trixie-slim", perlFetchIndex);
+    const finalFromIndex = baseDockerfile.indexOf("FROM node:24.22.1-trixie-slim", perlFetchIndex);
     const finalArgIndex = baseDockerfile.indexOf("ARG NEMOCLAW_CORPORATE_CA_B64", finalFromIndex);
     const finalTrustIndex = baseDockerfile.indexOf("update-ca-certificates", finalArgIndex);
     const firstSnapshotCurlIndex = baseDockerfile.indexOf(

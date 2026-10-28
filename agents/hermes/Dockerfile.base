@@ -248,36 +248,37 @@ COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts
 COPY scripts/upgrade-bundled-npm.mts /scripts/upgrade-bundled-npm.mts
 
 # Verify the Node image's bundled tar before npm processes the reviewed archive.
-RUN node --experimental-strip-types /scripts/patch-bundled-npm-tar.mts \
+RUN node /scripts/patch-bundled-npm-tar.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # Upgrade the complete private npm tree before npm processes the
 # checksum-pinned Hermes release lockfiles.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /scripts/upgrade-bundled-npm.mts \
+RUN node /scripts/upgrade-bundled-npm.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # npm 12.0.2 restores affected tar 7.5.19. Replace it from the
 # registry- and SRI-verified 7.5.21 archive before any npm consumers run.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /scripts/patch-bundled-npm-tar.mts \
+RUN node /scripts/patch-bundled-npm-tar.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # Replace npm 12.0.2's private brace-expansion 5.0.7 package with the
 # registry- and SRI-pinned 5.0.9 release.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /scripts/patch-bundled-npm-brace-expansion.mts \
+RUN node /scripts/patch-bundled-npm-brace-expansion.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # Replace npm 12.0.2's private ip-address 10.2.0 package with the
 # registry- and SRI-pinned 10.3.1 release.
 # hadolint ignore=DL3059
-RUN node --experimental-strip-types /scripts/lib/patch-bundled-npm-ip-address.mts \
+RUN node /scripts/lib/patch-bundled-npm-ip-address.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # setpriv runtime contract for gateway and sandbox privilege separation.
 RUN test -x /usr/bin/setpriv \
-    && /usr/bin/setpriv --version
+    && /usr/bin/setpriv --version \
+    && ! command -v gosu
 
 # Create sandbox user (matches OpenShell convention) and gateway user.
 # gateway is a member of the sandbox group so it can read Hermes config files

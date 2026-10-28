@@ -252,6 +252,7 @@ describe("Hermes final image layout", () => {
       {
         stage: "hermes-agent-payload",
         copies: [
+          "COPY scripts/security/standalone-security-package-inventory.mts /opt/nemoclaw-security/scripts/security/security-package-inventory.mts",
           "COPY agents/hermes/plugin/ /opt/nemoclaw-hermes-plugin/",
           "COPY agents/hermes/generate-config.ts /opt/nemoclaw-hermes-config/generate-config.ts",
           "COPY agents/hermes/config/ /opt/nemoclaw-hermes-config/config/",

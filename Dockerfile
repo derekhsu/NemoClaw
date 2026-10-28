@@ -694,6 +694,7 @@ COPY ci/npm-audit-exceptions.json /scripts/npm-audit-exceptions.json
 COPY scripts/lib/reviewed-npm-archive.mts /scripts/lib/reviewed-npm-archive.mts
 COPY scripts/lib/reviewed-npm-audit.mts /scripts/lib/reviewed-npm-audit.mts
 COPY scripts/lib/openclaw-npm-remediation.mts /scripts/lib/openclaw-npm-remediation.mts
+COPY scripts/lib/verify-mcporter-audit.sh /scripts/lib/verify-mcporter-audit.sh
 COPY scripts/patch-bundled-npm-brace-expansion.mts /scripts/patch-bundled-npm-brace-expansion.mts
 COPY scripts/lib/patch-bundled-npm-ip-address.mts /scripts/lib/patch-bundled-npm-ip-address.mts
 COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts
@@ -993,7 +994,14 @@ RUN command -v codex-acp >/dev/null
 # Reviewed-archive invariants (#5896): registry SRI, packed-byte SRI, contained
 # basename in a fresh directory, local-archive-only install, and cleanup.
 # hadolint ignore=DL3059,DL4006,DL3016
-RUN --network=default set -eu; \
+RUN --network=default --mount=type=secret,id=nemoclaw-mcporter-audit-receipt,required=false \
+    --mount=type=secret,id=nemoclaw-mcporter-audit-raw-report,required=false \
+    --mount=type=secret,id=nemoclaw-mcporter-audit-policy-result,required=false \
+    set -eu; \
+    if [ -f /usr/local/share/nemoclaw/corporate-ca.pem ]; then \
+        export CURL_CA_BUNDLE=/usr/local/share/nemoclaw/corporate-ca.pem; \
+        export NODE_EXTRA_CA_CERTS=/usr/local/share/nemoclaw/corporate-ca.pem; \
+    fi; \
     echo "$OPENCLAW_VERSION" | grep -qxE '[0-9]+(\.[0-9]+)*' \
         || { echo "ERROR: OPENCLAW_VERSION='$OPENCLAW_VERSION' is invalid (expected e.g. 2026.3.11)" >&2; exit 1; }; \
     MIN_VER=$(grep -m 1 'min_openclaw_version' /opt/nemoclaw-blueprint/blueprint.yaml | awk '{print $2}' | tr -d '"'); \
@@ -1034,11 +1042,22 @@ RUN --network=default set -eu; \
     MCPORTER_LOCK_SHA256="$(sha256sum /usr/local/lib/nemoclaw/mcporter-runtime/package-lock.json | awk '{print $1}')"; \
     [ -n "$MCPORTER_LOCK_SHA256" ] \
         || { echo "ERROR: Could not hash the committed mcporter lockfile" >&2; exit 1; }; \
-    MCPORTER_AUDIT_POLICY_SHA256="$(sha256sum /scripts/npm-audit-exceptions.json | awk '{print $1}')"; \
-    MCPORTER_EXPECTED_AUDIT_EXCEPTIONS="$(node --experimental-strip-types --input-type=module -e \
-        'import fs from "node:fs"; import { parseAuditExceptionRegistry } from "/scripts/lib/reviewed-npm-audit.mts"; const policy=parseAuditExceptionRegistry(fs.readFileSync("/scripts/npm-audit-exceptions.json", "utf-8")); const ids=policy.exceptions.filter((entry)=>entry.graph==="mcporter-runtime").map((entry)=>entry.advisory).sort(); process.stdout.write(ids.join(",") || "none");')"; \
-    MCPORTER_EXPECTED_AUDIT_STATUS=clean; \
-    if [ "$MCPORTER_EXPECTED_AUDIT_EXCEPTIONS" != "none" ]; then MCPORTER_EXPECTED_AUDIT_STATUS=accepted-exceptions; fi; \
+    MCPORTER_AUDIT_EVIDENCE=0; \
+    if [ -n "${NEMOCLAW_MCPORTER_AUDIT_RECEIPT_SHA256:-}${NEMOCLAW_MCPORTER_AUDIT_POLICY_RESULT_SHA256:-}" ]; then \
+        NEMOCLAW_MCPORTER_AUDIT_REPORT_PATH=/tmp/mcporter-npm-audit.json \
+            NEMOCLAW_MCPORTER_AUDIT_RESULT_PATH=/tmp/mcporter-npm-audit-policy.json \
+            bash /scripts/lib/verify-mcporter-audit.sh; \
+        MCPORTER_AUDIT_EVIDENCE=1; \
+        MCPORTER_AUDIT_POLICY_SHA256="$(node -p "require('/tmp/mcporter-npm-audit-policy.json').exceptionPolicySha256")"; \
+        MCPORTER_EXPECTED_AUDIT_EXCEPTIONS="$(node -p "require('/tmp/mcporter-npm-audit-policy.json').acceptedAdvisories.join(',') || 'none'")"; \
+        MCPORTER_EXPECTED_AUDIT_STATUS="$(node -p "require('/tmp/mcporter-npm-audit-policy.json').status")"; \
+    else \
+        MCPORTER_AUDIT_POLICY_SHA256="$(sha256sum /scripts/npm-audit-exceptions.json | awk '{print $1}')"; \
+        MCPORTER_EXPECTED_AUDIT_EXCEPTIONS="$(node --input-type=module -e \
+            'import fs from "node:fs"; import { parseAuditExceptionRegistry } from "/scripts/lib/reviewed-npm-audit.mts"; const policy=parseAuditExceptionRegistry(fs.readFileSync("/scripts/npm-audit-exceptions.json", "utf-8")); const ids=policy.exceptions.filter((entry)=>entry.graph==="mcporter-runtime").map((entry)=>entry.advisory).sort(); process.stdout.write(ids.join(",") || "none");')"; \
+        MCPORTER_EXPECTED_AUDIT_STATUS=clean; \
+        if [ "$MCPORTER_EXPECTED_AUDIT_EXCEPTIONS" != "none" ]; then MCPORTER_EXPECTED_AUDIT_STATUS=accepted-exceptions; fi; \
+    fi; \
     CUR_VER_OUTPUT="$(openclaw --version 2>/dev/null)" \
         || { echo "ERROR: Could not execute openclaw --version" >&2; exit 1; }; \
     CUR_VER="$(printf '%s\n' "$CUR_VER_OUTPUT" | /usr/local/lib/nemoclaw/extract-semver openclaw)" \
@@ -1048,7 +1067,7 @@ RUN --network=default set -eu; \
     OPENCLAW_PROVENANCE_PATH=/usr/local/share/nemoclaw/openclaw-base-provenance-v1; \
     OPENCLAW_EXPECTED_PROVENANCE="$(mktemp)"; \
     printf '%s\n' \
-        'schema=3' \
+        'schema=4' \
         "package=openclaw@${OPENCLAW_VERSION}" \
         "integrity=${EXPECTED_INTEGRITY}" \
         "tarball=${EXPECTED_TARBALL}" \
@@ -1061,14 +1080,14 @@ RUN --network=default set -eu; \
         "mcporter-audit-policy-sha256=${MCPORTER_AUDIT_POLICY_SHA256}" \
         "mcporter-audit-status=${MCPORTER_EXPECTED_AUDIT_STATUS}" \
         "mcporter-audit-exceptions=${MCPORTER_EXPECTED_AUDIT_EXCEPTIONS}" \
-        'mcporter-recipe=locked-ci+reviewed-audit+signatures-v2' \
+        'mcporter-recipe=locked-ci+reviewed-audit-v3' \
         > "$OPENCLAW_EXPECTED_PROVENANCE"; \
-    TRUSTED_BASE_IMAGE=0; \
+    CI_GATED_BASE_IMAGE=0; \
     case "$BASE_IMAGE" in \
-        ghcr.io/nvidia/nemoclaw/sandbox-base:*|ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:*|nemoclaw-sandbox-base-local|nemoclaw-sandbox-base-local:*) TRUSTED_BASE_IMAGE=1 ;; \
+        ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:*) CI_GATED_BASE_IMAGE=1 ;; \
     esac; \
     USE_REVIEWED_BASE_RUNTIME=0; \
-    if [ "$TRUSTED_BASE_IMAGE" = "1" ] \
+    if [ "$CI_GATED_BASE_IMAGE" = "1" ] \
         && [ -f "$OPENCLAW_PROVENANCE_PATH" ] \
         && [ ! -L "$OPENCLAW_PROVENANCE_PATH" ] \
         && [ "$(stat -c '%u:%g:%a' "$OPENCLAW_PROVENANCE_PATH" 2>/dev/null || true)" = "0:0:444" ] \
@@ -1080,18 +1099,18 @@ RUN --network=default set -eu; \
     rm -f "$OPENCLAW_EXPECTED_PROVENANCE"; \
     rm -rf "$OPENCLAW_PROVENANCE_PATH"; \
     if [ "$USE_REVIEWED_BASE_RUNTIME" = "1" ]; then \
-        echo "INFO: Reusing reviewed base OpenClaw $CUR_VER with exact provenance"; \
+        echo "INFO: Reusing reviewed base OpenClaw $CUR_VER with matching reviewed provenance"; \
     elif [ "$(printf '%s\n%s' "$OPENCLAW_VERSION" "$CUR_VER" | sort -V | head -n1)" = "$OPENCLAW_VERSION" ] \
         && [ "$CUR_VER" != "$OPENCLAW_VERSION" ]; then \
         echo "ERROR: Base image has OpenClaw $CUR_VER, which is newer than reviewed target $OPENCLAW_VERSION" >&2; exit 1; \
     else \
-        echo "INFO: Base image OpenClaw $CUR_VER lacks exact reviewed provenance; installing $OPENCLAW_VERSION"; \
-        # npm 10's atomic-move install can hit EROFS on overlayfs when the prior
+        echo "INFO: Base image OpenClaw $CUR_VER lacks matching reviewed provenance; installing $OPENCLAW_VERSION"; \
+        # npm's atomic-move install can hit EROFS on overlayfs when the prior
         # install spans image layers. Removing it first also prevents unreviewed
         # files from surviving a same-version reinstall.
         rm -rf /usr/local/lib/node_modules/openclaw /usr/local/bin/openclaw; \
         if [ "$OPENCLAW_VERSION" = "2026.9.2" ]; then \
-            node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts --verify-lock \
+            node /scripts/lib/reviewed-npm-archive.mts --verify-lock \
                 --lock-sha256 "$OPENCLAW_LOCK_SHA256" \
                 --lockfile /usr/local/lib/nemoclaw/openclaw-runtime/package-lock.json \
                 --registry-origin https://registry.npmjs.org/ \
@@ -1100,7 +1119,7 @@ RUN --network=default set -eu; \
             npm --prefix /usr/local/lib/nemoclaw/openclaw-runtime ci \
                 --ignore-scripts --omit=dev --no-audit --no-fund --no-progress \
                 --userconfig /dev/null --registry https://registry.npmjs.org/; \
-            node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts \
+            node /scripts/lib/reviewed-npm-archive.mts \
                 --verify-installed-lock --lock-sha256 "$OPENCLAW_LOCK_SHA256" \
                 --lockfile /usr/local/lib/nemoclaw/openclaw-runtime/package-lock.json \
                 --install-root /usr/local/lib/nemoclaw/openclaw-runtime \
@@ -1110,18 +1129,18 @@ RUN --network=default set -eu; \
             ln -s /usr/local/lib/nemoclaw/openclaw-runtime/node_modules/openclaw /usr/local/lib/node_modules/openclaw; \
             ln -s /usr/local/lib/nemoclaw/openclaw-runtime/node_modules/.bin/openclaw /usr/local/bin/openclaw; \
         else \
-            OPENCLAW_SOURCE_PACK_PATH="$(node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts \
+            OPENCLAW_SOURCE_PACK_PATH="$(node /scripts/lib/reviewed-npm-archive.mts \
                 --package-spec "openclaw@${OPENCLAW_VERSION}" --integrity "$EXPECTED_INTEGRITY" \
                 --tarball-url "$EXPECTED_TARBALL" --label "OpenClaw ${OPENCLAW_VERSION}")"; \
             OPENCLAW_PACK_PATH="$OPENCLAW_SOURCE_PACK_PATH"; \
             OPENCLAW_PACK_DIR="$(dirname "$OPENCLAW_PACK_PATH")"; \
             if [ "$OPENCLAW_VERSION" = "2026.3.11" ]; then \
-                OPENCLAW_REMEDIATION_JSON="$(node --experimental-strip-types /scripts/lib/openclaw-npm-remediation.mts \
+                OPENCLAW_REMEDIATION_JSON="$(node /scripts/lib/openclaw-npm-remediation.mts \
                     --archive "$OPENCLAW_SOURCE_PACK_PATH" --package-spec "openclaw@${OPENCLAW_VERSION}" \
                     --working-directory "$OPENCLAW_PACK_DIR")"; \
                 OPENCLAW_PACK_PATH="$(node -e 'const value = JSON.parse(process.argv[1]); if (!value.remediated || typeof value.archivePath !== "string") process.exit(1); process.stdout.write(value.archivePath)' "$OPENCLAW_REMEDIATION_JSON")"; \
             fi; \
-            npm install -g --no-audit --no-fund --no-progress --ignore-scripts "$OPENCLAW_PACK_PATH"; \
+            npm install -g --no-audit --no-fund --no-progress --ignore-scripts --allow-git=root "$OPENCLAW_PACK_PATH"; \
             case "$OPENCLAW_VERSION" in \
                 2026.4.24) node /usr/local/lib/node_modules/openclaw/scripts/postinstall-bundled-plugins.mjs ;; \
                 2026.3.11) ;; \
@@ -1134,28 +1153,28 @@ RUN --network=default set -eu; \
         2026.3.11) npm ls -g --depth=1 openclaw tar >/dev/null ;; \
     esac; \
     if [ "$USE_REVIEWED_BASE_RUNTIME" = "1" ]; then \
-        echo "INFO: Reusing reviewed base mcporter $CUR_MCPORTER_VER with exact lock provenance"; \
+        echo "INFO: Reusing reviewed base mcporter $CUR_MCPORTER_VER with matching lock provenance"; \
     else \
-        node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts --verify-only \
+        node /scripts/lib/reviewed-npm-archive.mts --verify-only \
             --package-spec "mcporter@${MCPORTER_VERSION}" --integrity "$MCPORTER_EXPECTED_INTEGRITY" \
             --tarball-url "$MCPORTER_EXPECTED_TARBALL" --label "mcporter ${MCPORTER_VERSION}"; \
-        # Reinstall from the committed lock when exact protected base provenance
+        # Reinstall from the committed lock when matching protected base provenance
         # is unavailable; matching top-level versions can hide transitive drift.
         echo "INFO: Installing locked mcporter $MCPORTER_VERSION dependency graph"; \
         rm -rf /usr/local/lib/node_modules/mcporter /usr/local/bin/mcporter; \
         npm --prefix /usr/local/lib/nemoclaw/mcporter-runtime ci \
             --ignore-scripts --omit=dev --no-audit --no-fund --no-progress; \
         npm --prefix /usr/local/lib/nemoclaw/mcporter-runtime ls \
-            --omit=dev --all @hono/node-server @modelcontextprotocol/sdk mcporter >/dev/null; \
+            --omit=dev --all @hono/node-server @modelcontextprotocol/sdk hono mcporter >/dev/null; \
         node --input-type=module -e \
             'const { StreamableHTTPServerTransport } = await import("file:///usr/local/lib/nemoclaw/mcporter-runtime/node_modules/@modelcontextprotocol/sdk/dist/esm/server/streamableHttp.js"); const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }); await transport.close();'; \
         ln -s /usr/local/lib/nemoclaw/mcporter-runtime/node_modules/.bin/mcporter /usr/local/bin/mcporter; \
         test "$(mcporter --version)" = "$MCPORTER_VERSION"; \
-        node --experimental-strip-types /scripts/lib/reviewed-npm-audit.mts \
-            --directory /usr/local/lib/nemoclaw/mcporter-runtime \
-            --exceptions /scripts/npm-audit-exceptions.json --graph mcporter-runtime --threshold high; \
-        npm --prefix /usr/local/lib/nemoclaw/mcporter-runtime audit signatures; \
-    fi
+    fi; \
+    if [ "$MCPORTER_AUDIT_EVIDENCE" = 0 ]; then \
+        bash /scripts/lib/verify-mcporter-audit.sh; \
+    fi; \
+    rm -f /tmp/mcporter-npm-audit.json /tmp/mcporter-npm-audit-policy.json
 
 # Patch OpenClaw media fetch for proxy-only sandbox (NVIDIA/NemoClaw#1755).
 #

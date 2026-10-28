@@ -55,6 +55,7 @@ describe("OpenClaw final image layout", () => {
           "COPY scripts/lib/reviewed-npm-archive.mts /scripts/lib/reviewed-npm-archive.mts",
           "COPY scripts/lib/reviewed-npm-audit.mts /scripts/lib/reviewed-npm-audit.mts",
           "COPY scripts/lib/openclaw-npm-remediation.mts /scripts/lib/openclaw-npm-remediation.mts",
+          "COPY scripts/lib/verify-mcporter-audit.sh /scripts/lib/verify-mcporter-audit.sh",
           "COPY scripts/patch-bundled-npm-brace-expansion.mts /scripts/patch-bundled-npm-brace-expansion.mts",
           "COPY scripts/lib/patch-bundled-npm-ip-address.mts /scripts/lib/patch-bundled-npm-ip-address.mts",
           "COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts",
@@ -128,8 +129,10 @@ describe("OpenClaw final image layout", () => {
     expect(finalStageIndex).toBe(stages.length - 1);
     expect(hasBuildKitRunMount(finalStage)).toBe(true);
     expect(finalStage.match(/^RUN[^\n]*--mount[^\n]*/gmu)).toEqual([
+      "RUN --network=default --mount=type=secret,id=nemoclaw-mcporter-audit-receipt,required=false \\",
       "RUN --network=none --mount=from=openclaw-optional-plugin-archives,target=/opt/nemoclaw-reviewed-npm-archives,ro set -eu; \\",
       "RUN --mount=from=openclaw-managed-messaging-npm-cache,source=/out/npm-cache,target=/opt/nemoclaw-managed-messaging-npm-cache,ro set -eu; \\",
+      "RUN --mount=type=bind,source=scripts/security/standalone-security-package-inventory.mts,target=/tmp/nemoclaw-security/scripts/security/security-package-inventory.mts \\",
     ]);
     expectManagedBootstrapNativeImageContract(dockerfile);
     expect(finalStage).not.toMatch(/^\s*ENV\b[^\n]*(?:\\\n[^\n]*)*NODE_OPTIONS=/mu);
@@ -197,7 +200,7 @@ describe("OpenClaw final image layout", () => {
     );
     const managedMessagingUnionInstall = indexOfRequired(
       finalStage,
-      "--agent openclaw --phase managed-image-capability-union",
+      "messaging_phase=managed-image-capability-union",
     );
     const messagingPostInstall = indexOfRequired(
       finalStage,

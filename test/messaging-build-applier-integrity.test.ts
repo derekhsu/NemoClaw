@@ -169,7 +169,7 @@ describe("messaging-build-applier.mts: plugin archive integrity", () => {
         const trace = fs.readFileSync(tracePath, "utf-8");
         expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.integrity");
         expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.tarball");
-        expect(trace).toContain(`npm|pack|@openclaw/slack@2026.9.2|--pack-destination`);
+        expect(trace).toContain(`npm|pack|${OPENCLAW_SLACK_2026_9_2_TARBALL}|--pack-destination`);
         expect(trace).toContain(
           "openclaw|plugins|install|--force|--accept-capabilities|npm:@openclaw/slack@2026.9.2",
         );
@@ -290,7 +290,7 @@ describe("messaging-build-applier.mts: plugin archive integrity", () => {
         expect(message).toContain("Actual:   sha512-packed-drift");
         const trace = fs.readFileSync(tracePath, "utf-8");
         expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.integrity");
-        expect(trace).toContain(`npm|pack|@openclaw/slack@2026.9.2|--pack-destination`);
+        expect(trace).toContain(`npm|pack|${OPENCLAW_SLACK_2026_9_2_TARBALL}|--pack-destination`);
         expect(trace).not.toContain("openclaw|plugins|install");
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
@@ -348,11 +348,11 @@ describe("messaging-build-applier.mts: plugin archive integrity", () => {
         );
 
         expect(result.status).not.toBe(0);
-        expect(result.stderr).toContain("Messaging build applier failed.");
+        expect(result.stderr).toContain("Messaging build applier failed (Error).");
         expect(result.stderr).not.toContain("../slack-2026.9.2.tgz");
         const trace = fs.readFileSync(tracePath, "utf-8");
         expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.integrity");
-        expect(trace).toContain(`npm|pack|@openclaw/slack@2026.9.2|--pack-destination`);
+        expect(trace).toContain(`npm|pack|${OPENCLAW_SLACK_2026_9_2_TARBALL}|--pack-destination`);
         expect(trace).not.toContain("openclaw|plugins|install");
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });

@@ -7,31 +7,62 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { NODE_BASES_REQUIRING_BUNDLED_NPM_TAR_PATCH } from "../scripts/patch-bundled-npm-tar.mts";
-import { requireSingleReviewedDockerfileRunCommand } from "./helpers/dockerfile-run-commands";
+import {
+  requireReviewedDockerfileRunCommands,
+  requireSingleDockerfileCopySource,
+  requireSingleReviewedDockerfileRunCommand,
+} from "./helpers/dockerfile-run-commands";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const dockerfiles = [
-  { file: "Dockerfile.base", installsPatchDownloader: false, installsWithNpm: true },
-  { file: "Dockerfile", installsPatchDownloader: false, installsWithNpm: true },
+  {
+    file: "Dockerfile.base",
+    installsPatchDownloader: false,
+    installsWithNpm: true,
+    nodePrefix: "node",
+    patchCount: 2,
+  },
+  {
+    file: "Dockerfile",
+    installsPatchDownloader: false,
+    installsWithNpm: true,
+    nodePrefix: "node --experimental-strip-types",
+    patchCount: 1,
+  },
   {
     file: "agents/hermes/Dockerfile.base",
     installsPatchDownloader: false,
     installsWithNpm: true,
+    nodePrefix: "node",
+    patchCount: 2,
   },
-  { file: "agents/hermes/Dockerfile", installsPatchDownloader: false, installsWithNpm: true },
+  {
+    file: "agents/hermes/Dockerfile",
+    installsPatchDownloader: false,
+    installsWithNpm: true,
+    nodePrefix: "node --experimental-strip-types",
+    patchCount: 1,
+  },
   {
     file: "agents/langchain-deepagents-code/Dockerfile.base",
     installsPatchDownloader: true,
     installsWithNpm: false,
+    nodePrefix: "node",
+    patchCount: 2,
   },
   {
     file: "agents/langchain-deepagents-code/Dockerfile",
     installsPatchDownloader: false,
     installsWithNpm: false,
+    nodePrefix: "node --experimental-strip-types",
+    patchCount: 1,
   },
 ] as const;
-const patchCommand = "node --experimental-strip-types /scripts/patch-bundled-npm-tar.mts";
 const npmRootArguments = ["--npm-root", "/usr/local/lib/node_modules/npm"] as const;
+
+function patchCommand(nodePrefix: string): string {
+  return `${nodePrefix} /scripts/patch-bundled-npm-tar.mts`;
+}
 
 function completedStage(source: string): string {
   const finalStageStart = [...source.matchAll(/^FROM\b/gmu)].at(-1)?.index;
@@ -48,7 +79,12 @@ function namedStage(source: string, name: string): string {
 
 describe("node-tar image remediation contract", () => {
   it("binds the remediation lifecycle to the affected upstream Node image pins", () => {
-    const pinnedBaseSources = ["Dockerfile.base", "agents/hermes/Dockerfile.base"]
+    const pinnedBaseSources = [
+      "Dockerfile.base",
+      "Dockerfile",
+      "agents/hermes/Dockerfile.base",
+      "agents/langchain-deepagents-code/Dockerfile.base",
+    ]
       .map((file) => fs.readFileSync(path.join(repoRoot, file), "utf8"))
       .join("\n");
 
@@ -57,27 +93,30 @@ describe("node-tar image remediation contract", () => {
     }
   });
 
-  it.each([
-    "Dockerfile.base",
-    "agents/hermes/Dockerfile.base",
-    "agents/langchain-deepagents-code/Dockerfile.base",
-  ])("installs curl before patching the bundled npm tar in $file", (file) => {
+  it.each(
+    dockerfiles.filter((entry) => entry.file.endsWith(".base")),
+  )("installs curl before patching the bundled npm tar in $file", (entry) => {
+    const { file, nodePrefix, patchCount } = entry;
     const source = completedStage(fs.readFileSync(path.join(repoRoot, file), "utf8"));
     const curlInstall = source.indexOf("curl=");
-    const patchRun = requireSingleReviewedDockerfileRunCommand(
+    const patchRuns = requireReviewedDockerfileRunCommands(
       source,
-      patchCommand,
+      patchCommand(nodePrefix),
       npmRootArguments,
-    ).commandStart;
+      patchCount,
+    );
 
     expect(curlInstall, file).toBeGreaterThanOrEqual(0);
-    expect(patchRun, file).toBeGreaterThan(curlInstall);
+    expect(
+      patchRuns.every((patchRun) => patchRun.commandStart > curlInstall),
+      file,
+    ).toBe(true);
   });
 
   it.each(
     dockerfiles,
   )("places bundled npm tar remediation in the final $file stage before any npm consumers", (entry) => {
-    const { file, installsPatchDownloader, installsWithNpm } = entry;
+    const { file, installsPatchDownloader, installsWithNpm, nodePrefix, patchCount } = entry;
     const dockerfile = fs.readFileSync(path.join(repoRoot, file), "utf8");
     const source = completedStage(dockerfile);
     const patchPayloadStage = ["hermes-npm-patch-payload", "openclaw-dependency-payload"].find(
@@ -87,32 +126,31 @@ describe("node-tar image remediation contract", () => {
       patchPayloadStage === undefined ? -1 : source.indexOf(`COPY --from=${patchPayloadStage} / /`);
     const patchInputStage =
       patchPayloadStage === undefined ? source : namedStage(dockerfile, patchPayloadStage);
-    const flattenedPatchInputStage = patchInputStage.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ");
-    const reviewedCopy = patchInputStage.indexOf("COPY scripts/lib/reviewed-npm-archive.mts");
-    const patchCopy = patchInputStage.indexOf(
-      "COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts",
+    const reviewedCopyInstruction = requireSingleDockerfileCopySource(
+      patchInputStage,
+      "scripts/lib/reviewed-npm-archive.mts",
+      "/scripts/lib/reviewed-npm-archive.mts",
     );
-    const patchRun = requireSingleReviewedDockerfileRunCommand(
+    const reviewedCopy = reviewedCopyInstruction.start;
+    const patchCopy = requireSingleDockerfileCopySource(
+      patchInputStage,
+      "scripts/patch-bundled-npm-tar.mts",
+      "/scripts/patch-bundled-npm-tar.mts",
+    ).start;
+    const patchRuns = requireReviewedDockerfileRunCommands(
       source,
-      patchCommand,
+      patchCommand(nodePrefix),
       npmRootArguments,
-    ).commandStart;
+      patchCount,
+    );
+    const patchRun = patchRuns[0]!.commandStart;
+    const lastPatchRun = patchRuns[patchRuns.length - 1]!.commandStart;
     const patchInputReady = patchPayloadLayer >= 0 ? patchPayloadLayer : patchCopy;
 
-    expect(reviewedCopy, file).toBeGreaterThanOrEqual(0);
-    expect(
-      flattenedPatchInputStage.includes(
-        "COPY scripts/lib/reviewed-npm-archive.mts scripts/lib/reviewed-npm-audit.mts scripts/lib/openclaw-npm-remediation.mts /scripts/lib/",
-      ) ||
-        patchInputStage.includes(
-          "COPY scripts/lib/reviewed-npm-archive.mts /scripts/lib/reviewed-npm-archive.mts",
-        ),
-      file,
-    ).toBe(true);
     expect(patchCopy, file).toBeGreaterThan(reviewedCopy);
     expect(patchRun, file).toBeGreaterThan(patchInputReady);
     const aptInstall = source.indexOf(
-      "RUN apt-get update && apt-get install -y --no-install-recommends",
+      "apt-get update && apt-get install -y --no-install-recommends",
       patchInputReady,
     );
     const curlPackage = source.indexOf("curl=8.14.1-2+deb13u7", aptInstall);
@@ -130,7 +168,7 @@ describe("node-tar image remediation contract", () => {
     );
     expect(npmConsumers.length > 0, file).toBe(installsWithNpm);
     expect(
-      npmConsumers.every((index) => index > patchRun),
+      npmConsumers.every((index) => index > lastPatchRun),
       file,
     ).toBe(true);
   });
@@ -138,28 +176,34 @@ describe("node-tar image remediation contract", () => {
 
 describe("reviewed npm image remediation contract", () => {
   it.each([
-    { file: "Dockerfile.base", installsWithNpm: true },
-    { file: "agents/hermes/Dockerfile.base", installsWithNpm: true },
-    { file: "agents/langchain-deepagents-code/Dockerfile.base", installsWithNpm: false },
-  ])("upgrades npm before use in $file", ({ file, installsWithNpm }) => {
+    { file: "Dockerfile.base", installsWithNpm: true, nodePrefix: "node" },
+    { file: "agents/hermes/Dockerfile.base", installsWithNpm: true, nodePrefix: "node" },
+    {
+      file: "agents/langchain-deepagents-code/Dockerfile.base",
+      installsWithNpm: false,
+      nodePrefix: "node",
+    },
+  ])("upgrades npm before use in $file", ({ file, installsWithNpm, nodePrefix }) => {
     const source = completedStage(fs.readFileSync(path.join(repoRoot, file), "utf8"));
-    const patchRun = requireSingleReviewedDockerfileRunCommand(
+    const patchRuns = requireReviewedDockerfileRunCommands(
       source,
-      patchCommand,
+      patchCommand(nodePrefix),
       npmRootArguments,
-    ).commandStart;
+      2,
+    );
     const upgradeCopy = source.indexOf(
       "COPY scripts/upgrade-bundled-npm.mts /scripts/upgrade-bundled-npm.mts",
     );
     const upgradeRun = requireSingleReviewedDockerfileRunCommand(
       source,
-      "node --experimental-strip-types /scripts/upgrade-bundled-npm.mts",
+      `${nodePrefix} /scripts/upgrade-bundled-npm.mts`,
       npmRootArguments,
     ).commandStart;
 
     expect(upgradeCopy, file).toBeGreaterThanOrEqual(0);
-    expect(patchRun, file).toBeGreaterThan(upgradeCopy);
-    expect(upgradeRun, file).toBeGreaterThan(patchRun);
+    expect(patchRuns[0]!.commandStart, file).toBeGreaterThan(upgradeCopy);
+    expect(upgradeRun, file).toBeGreaterThan(patchRuns[0]!.commandStart);
+    expect(patchRuns[1]!.commandStart, file).toBeGreaterThan(upgradeRun);
 
     const executableSource = source.replace(/^\s*#.*$/gmu, (comment) => " ".repeat(comment.length));
     const npmConsumers = [...executableSource.matchAll(/\bnpm\s+(?:ci|install)\b/gu)].map(
@@ -167,7 +211,7 @@ describe("reviewed npm image remediation contract", () => {
     );
     expect(npmConsumers.length > 0, file).toBe(installsWithNpm);
     expect(
-      npmConsumers.every((index) => index > upgradeRun),
+      npmConsumers.every((index) => index > patchRuns[1]!.commandStart),
       file,
     ).toBe(true);
   });

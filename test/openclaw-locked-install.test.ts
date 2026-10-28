@@ -372,13 +372,13 @@ describe("locked OpenClaw production installation (#5896)", () => {
 
   // source-shape-contract: compatibility -- Both shipped Dockerfiles must preserve the reviewed lock verification and installation sequence
   it.each([
-    "Dockerfile",
-    "Dockerfile.base",
-  ])("invokes the locked installer before exposing OpenClaw in %s", (dockerfileName) => {
+    ["Dockerfile", "node"],
+    ["Dockerfile.base", "node"],
+  ])("invokes the locked installer before exposing OpenClaw in %s", (dockerfileName, nodePrefix) => {
     const contents = fs.readFileSync(path.join(REPO_ROOT, dockerfileName), "utf-8");
     const flattenedContents = contents.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ");
     const verifyIndex = contents.indexOf(
-      "node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts --verify-lock",
+      `${nodePrefix} /scripts/lib/reviewed-npm-archive.mts --verify-lock`,
     );
     const installIndex = contents.indexOf(
       "npm --prefix /usr/local/lib/nemoclaw/openclaw-runtime ci",
@@ -416,7 +416,7 @@ describe("locked OpenClaw production installation (#5896)", () => {
     expect(branchEnd).toBeGreaterThan(installIndex);
     expect(currentInstallBranch).toContain(`--lock-sha256 \"$OPENCLAW_LOCK_SHA256\"`);
     expect(currentInstallBranch).not.toContain("npm install -g");
-    expect(contents).toContain("'schema=3'");
+    expect(contents).toContain("'schema=4'");
     expect(contents).toContain('"lock-sha256=${OPENCLAW_LOCK_SHA256}"');
     expect(contents).toContain("locked-ci+reviewed-lifecycle-v2");
   });

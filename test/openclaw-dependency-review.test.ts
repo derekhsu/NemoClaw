@@ -553,15 +553,9 @@ describe("OpenClaw 2026.6.10 dependency review contract", () => {
   it("copies the legacy OpenClaw remediation helper before the base build invokes it", () => {
     const dockerfile = readFileSync(path.join(REPO_ROOT, "Dockerfile.base"), "utf-8");
     const flattenedDockerfile = dockerfile.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ");
-    const groupedHelperCopy = flattenedDockerfile.indexOf(
-      "COPY scripts/lib/reviewed-npm-archive.mts scripts/lib/reviewed-npm-audit.mts scripts/lib/openclaw-npm-remediation.mts /scripts/lib/",
-    );
-    const legacyHelperCopy = flattenedDockerfile.indexOf(
-      "COPY scripts/lib/openclaw-npm-remediation.mts /scripts/lib/openclaw-npm-remediation.mts",
-    );
-    const helperCopy = groupedHelperCopy >= 0 ? groupedHelperCopy : legacyHelperCopy;
-    const helperInvocation = flattenedDockerfile.indexOf(
-      "node --experimental-strip-types /scripts/lib/openclaw-npm-remediation.mts",
+    const helperCopy = flattenedDockerfile.indexOf("openclaw-npm-remediation.mts /scripts/lib/");
+    const helperInvocation = flattenedDockerfile.search(
+      /\bnode(?:\s+--\S+)*\s+\/scripts\/lib\/openclaw-npm-remediation\.mts/u,
     );
 
     expect(helperCopy).toBeGreaterThanOrEqual(0);
@@ -644,7 +638,7 @@ for dockerfile in Dockerfile Dockerfile.base; do
   check_contains "$openclaw_block" 'mcporter-audit-policy-sha256=' "$dockerfile mcporter audit policy hash"
   check_contains "$openclaw_block" 'mcporter-audit-status=' "$dockerfile mcporter audit status"
   check_contains "$openclaw_block" 'mcporter-audit-exceptions=' "$dockerfile mcporter audit exceptions"
-  check_contains "$openclaw_block" 'mcporter-recipe=locked-ci+reviewed-audit+signatures-v2' "$dockerfile mcporter provenance recipe"
+  check_contains "$openclaw_block" 'mcporter-recipe=locked-ci+reviewed-audit-v3' "$dockerfile mcporter provenance recipe"
 done
 
 check_contains "$(cat Dockerfile.base)" 'chmod 0444 "$OPENCLAW_PROVENANCE_TMP"' "base provenance protected mode"
@@ -751,10 +745,10 @@ check_not_contains "$optional_plugin_block" 'pack_reviewed_npm_tarball' "optiona
 	grep -Fq 'node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts \\' Dockerfile
 	! grep -Fq 'patch-openclaw-mcp-tools-list-timeout.js' Dockerfile
 
-	phase_count="$(grep -Ec -- '--phase (runtime-setup|agent-install|post-agent-install)' Dockerfile)"
-test "$phase_count" -eq 3
-grep -Fq -- '--phase runtime-setup' Dockerfile
-grep -Fq -- '--phase agent-install' Dockerfile
+	grep -Fq -- '--phase runtime-setup' Dockerfile
+grep -Fq -- 'messaging_phase=agent-install' Dockerfile
+grep -Fq -- 'messaging_phase=managed-image-capability-union' Dockerfile
+grep -Fq -- '--phase "$messaging_phase"' Dockerfile
 grep -Fq -- '--phase post-agent-install' Dockerfile
 `,
       ],

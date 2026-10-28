@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -177,6 +178,15 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     ),
     path.join(openclawRuntime, "package-lock.json"),
   );
+  const openclawLockSha256 = createHash("sha256")
+    .update(fs.readFileSync(path.join(openclawRuntime, "package-lock.json")))
+    .digest("hex");
+  const verifyAuditHelper = path.join(tmp, "verify-mcporter-audit.sh");
+  fs.writeFileSync(
+    verifyAuditHelper,
+    `#!/usr/bin/env bash\nprintf 'bash verify-mcporter-audit.sh %s\\n' "$*" >> ${JSON.stringify(log)}\n`,
+    { mode: 0o755 },
+  );
   fs.writeFileSync(openclawShim, "");
   fs.writeFileSync(mcporterShim, "");
   fs.writeFileSync(auditExceptions, '{"schemaVersion":1,"exceptions":[]}\n');
@@ -200,6 +210,7 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
       'from "/scripts/lib/reviewed-npm-audit.mts"',
       `from ${JSON.stringify(REVIEWED_NPM_AUDIT_HELPER)}`,
     )
+    .replaceAll("/scripts/lib/verify-mcporter-audit.sh", verifyAuditHelper)
     .replaceAll("/scripts/npm-audit-exceptions.json", auditExceptions);
   const script = [
     "#!/usr/bin/env bash",
@@ -217,7 +228,10 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     `OPENCLAW_2026_9_2_TARBALL=${JSON.stringify(openclawTarball)}`,
     `MCPORTER_0_7_3_INTEGRITY=${JSON.stringify(mcporterIntegrity)}`,
     `MCPORTER_0_7_3_TARBALL=${JSON.stringify(mcporterTarball)}`,
+    "export NODE_OPTIONS= NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW=1",
     "node() {",
+    '  case "${1:-}" in /*.mts) set -- --experimental-strip-types "$@";; esac',
+    '  if [ "${1:-}" = "--input-type=module" ] && [ "${2:-}" = "-e" ] && printf "%s\\n" "${3:-}" | grep -q "parseAuditExceptionRegistry"; then printf "none\\n"; return 0; fi',
     '  if [ "${1:-}" = "$postinstall_path" ]; then printf "node %s\\n" "$*" >> "$call_log"; return 0; fi',
     '  if [ "${1:-}" = "--input-type=module" ] && [ "${2:-}" = "-e" ] && printf "%s\\n" "${3:-}" | grep -q "StreamableHTTPServerTransport"; then printf "node %s\\n" "$*" >> "$call_log"; return 0; fi',
     '  if [ "${2:-}" = "/scripts/lib/reviewed-npm-audit.mts" ]; then',
@@ -275,9 +289,12 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     "    return 0",
     "  fi",
     '  if [ "${1:-}" = "install" ]; then return 0; fi',
+    '  if [ "${1:-}" = "ls" ]; then return 0; fi',
     '  if [ "${1:-}" = "--prefix" ]; then return 0; fi',
     "  return 1",
     "}",
+    `sha256sum() { if [ "\${1:-}" = ${JSON.stringify(path.join(openclawRuntime, "package-lock.json"))} ]; then printf '%s  %s\\n' ${JSON.stringify(openclawLockSha256)} "$1"; else printf '%064d  %s\\n' 0 "$1"; fi; }`,
+    "pip3() { return 0; }",
     'command() { if [ "${1:-}" = "-v" ] && [ "${2:-}" = "codex-acp" ]; then return 0; fi; builtin command "$@"; }',
     command,
   ].join("\n");
@@ -376,7 +393,7 @@ describe("fetch-guard patch regression guard", () => {
     const stale = runOpenClawUpgradeBlock("2026.3.11");
     expect(stale.result.status, stale.result.stderr).toBe(0);
     expect(stale.result.stdout).toContain(
-      `Base image OpenClaw 2026.3.11 lacks exact reviewed provenance; installing ${readDockerfileOpenClawVersion()}`,
+      `Base image OpenClaw 2026.3.11 lacks matching reviewed provenance; installing ${readDockerfileOpenClawVersion()}`,
     );
     expect(stale.calls).toMatch(
       /npm --prefix \S+\/openclaw-runtime ci --ignore-scripts --omit=dev --no-audit --no-fund --no-progress/,
@@ -388,7 +405,7 @@ describe("fetch-guard patch regression guard", () => {
     const current = runOpenClawUpgradeBlock(readDockerfileOpenClawVersion());
     expect(current.result.status, current.result.stderr).toBe(0);
     expect(current.result.stdout).toContain(
-      `Base image OpenClaw ${readDockerfileOpenClawVersion()} lacks exact reviewed provenance; installing ${readDockerfileOpenClawVersion()}`,
+      `Base image OpenClaw ${readDockerfileOpenClawVersion()} lacks matching reviewed provenance; installing ${readDockerfileOpenClawVersion()}`,
     );
     expect(current.calls).toMatch(
       /npm --prefix \S+\/openclaw-runtime ci --ignore-scripts --omit=dev --no-audit --no-fund --no-progress/,
@@ -421,9 +438,7 @@ describe("fetch-guard patch regression guard", () => {
       /npm --prefix \S+ ci --ignore-scripts --omit=dev --no-audit --no-fund --no-progress/,
     );
     expect(invocation.calls).toContain("StreamableHTTPServerTransport");
-    expect(invocation.calls).toMatch(
-      /node --experimental-strip-types \/scripts\/lib\/reviewed-npm-audit\.mts --directory \S+ --exceptions \S+ --graph mcporter-runtime --threshold high/,
-    );
+    expect(invocation.calls).toMatch(/bash \S*verify-mcporter-audit\.sh/);
     readRequiredMatch(
       DOCKERFILE_BASE,
       /(npm --prefix \/usr\/local\/lib\/nemoclaw\/mcporter-runtime ci\s*\\\s*--ignore-scripts --omit=dev --no-audit --no-fund --no-progress)/,

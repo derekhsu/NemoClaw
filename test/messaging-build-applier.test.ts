@@ -81,11 +81,11 @@ function fakeOpenClawPluginNpmPackScriptLines(): string[] {
     'if [ "${1:-}" = "pack" ]; then',
     '  pack_dir="${4:-}";',
     '  case "${2:-}" in',
-    `    "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.9.2.tgz") pack_file="discord-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_DISCORD_INTEGRITY:-\${OPENCLAW_DISCORD_2026_9_2_INTEGRITY:-}}" ;;`,
-    `    "https://registry.npmjs.org/@tencent-weixin/openclaw-weixin/-/openclaw-weixin-2.4.9.tgz") pack_file="openclaw-weixin-2.4.9.tgz"; pack_integrity="\${TENCENT_WEIXIN_2_4_9_INTEGRITY:-}" ;;`,
-    `    "https://registry.npmjs.org/@openclaw/slack/-/slack-2026.9.2.tgz") pack_file="slack-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_SLACK_INTEGRITY:-\${OPENCLAW_SLACK_2026_9_2_INTEGRITY:-}}" ;;`,
-    `    "https://registry.npmjs.org/@openclaw/whatsapp/-/whatsapp-2026.9.2.tgz") pack_file="whatsapp-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_WHATSAPP_2026_9_2_INTEGRITY:-}" ;;`,
-    `    "https://registry.npmjs.org/@openclaw/msteams/-/msteams-2026.9.2.tgz") pack_file="msteams-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_MSTEAMS_2026_9_2_INTEGRITY:-}" ;;`,
+    `    "@openclaw/discord@2026.9.2") pack_file="openclaw-discord-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_DISCORD_INTEGRITY:-\${OPENCLAW_DISCORD_2026_9_2_INTEGRITY:-}}" ;;`,
+    `    "@tencent-weixin/openclaw-weixin@2.4.9") pack_file="tencent-weixin-openclaw-weixin-2.4.9.tgz"; pack_integrity="\${TENCENT_WEIXIN_2_4_9_INTEGRITY:-}" ;;`,
+    `    "@openclaw/slack@2026.9.2") pack_file="openclaw-slack-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_SLACK_INTEGRITY:-\${OPENCLAW_SLACK_2026_9_2_INTEGRITY:-}}" ;;`,
+    `    "@openclaw/whatsapp@2026.9.2") pack_file="openclaw-whatsapp-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_WHATSAPP_2026_9_2_INTEGRITY:-}" ;;`,
+    `    "@openclaw/msteams@2026.9.2") pack_file="openclaw-msteams-2026.9.2.tgz"; pack_integrity="\${OPENCLAW_MSTEAMS_2026_9_2_INTEGRITY:-}" ;;`,
     "    *) exit 1 ;;",
     "  esac",
     '  test -n "$pack_dir"; test -n "$pack_integrity";',
@@ -705,9 +705,7 @@ describe("messaging-build-applier.mts: agent-install", () => {
       expect(applyMessagingBuildPhase(serializedPlan, "agent-install", env)).toEqual([]);
       const trace = fs.readFileSync(tracePath, "utf-8");
       expect(trace).toContain("npm|view|@openclaw/discord@2026.9.2|dist.integrity");
-      expect(trace).toContain(
-        "npm|pack|https://registry.npmjs.org/@openclaw/discord/-/discord-2026.9.2.tgz|--pack-destination",
-      );
+      expect(trace).toContain("npm|pack|@openclaw/discord@2026.9.2|--pack-destination");
       expect(trace).toContain(
         "plugins|install|--force|--accept-capabilities|npm:@openclaw/discord@2026.9.2|ignore-scripts=true/true",
       );
@@ -737,8 +735,8 @@ describe("messaging-build-applier.mts: agent-install", () => {
         "  process.stdout.write('https://registry.npmjs.org/@openclaw/msteams/-/msteams-2026.9.2.tgz\\n');",
         "  process.exit(0);",
         "}",
-        "if (command === 'pack' && packageSpec === 'https://registry.npmjs.org/@openclaw/msteams/-/msteams-2026.9.2.tgz') {",
-        "  const packFile = 'msteams-2026.9.2.tgz';",
+        "if (command === 'pack' && packageSpec === '@openclaw/msteams@2026.9.2') {",
+        "  const packFile = 'openclaw-msteams-2026.9.2.tgz';",
         "  fs.writeFileSync(path.join(destination, packFile), 'fake plugin tarball');",
         "  process.stdout.write(JSON.stringify([{ filename: packFile, integrity: process.env.OPENCLAW_MSTEAMS_2026_9_2_INTEGRITY }]) + '\\n');",
         "  process.exit(0);",
@@ -778,9 +776,7 @@ describe("messaging-build-applier.mts: agent-install", () => {
       const trace = fs.readFileSync(tracePath, "utf-8");
       expect(trace).toContain("npm|view|@openclaw/msteams@2026.9.2|dist.integrity");
       expect(trace).toContain("npm|view|@openclaw/msteams@2026.9.2|dist.tarball");
-      expect(trace).toContain(
-        "npm|pack|https://registry.npmjs.org/@openclaw/msteams/-/msteams-2026.9.2.tgz|--pack-destination",
-      );
+      expect(trace).toContain("npm|pack|@openclaw/msteams@2026.9.2|--pack-destination");
       expect(trace).toContain(
         "openclaw|plugins|install|--force|--accept-capabilities|npm:@openclaw/msteams@2026.9.2",
       );
@@ -1002,7 +998,7 @@ describe("messaging-build-applier.mts: agent-install", () => {
         ] as const) {
           expect(trace).toContain(`npm|view|${packageSpec}|dist.integrity`);
           expect(trace).toContain(`npm|view|${packageSpec}|dist.tarball`);
-          expect(trace).toContain(`npm|pack|${tarballUrl}|--pack-destination`);
+          expect(trace).toContain(`npm|pack|${packageSpec}|--pack-destination`);
         }
         for (const [installSpec, pluginId] of [
           ["npm:@openclaw/discord@2026.9.2", "discord"],
@@ -1014,7 +1010,7 @@ describe("messaging-build-applier.mts: agent-install", () => {
           expect(trace).toContain(`plugins|inspect|${pluginId}|--json|`);
         }
         expect(trace).toContain("plugins|install|--force|--accept-capabilities|npm-pack:");
-        expect(trace).toContain("openclaw-weixin-2.4.9.tgz|");
+        expect(trace).toContain("tencent-weixin-openclaw-weixin-2.4.9.tgz|");
         expect(remediateReviewedArchive).toHaveBeenCalledTimes(1);
         expect(remediateReviewedArchive).toHaveBeenCalledWith(
           expect.objectContaining({ packageSpec: "@tencent-weixin/openclaw-weixin@2.4.9" }),
@@ -1073,9 +1069,7 @@ describe("messaging-build-applier.mts: agent-install", () => {
       const trace = fs.readFileSync(tracePath, "utf-8");
       expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.integrity");
       expect(trace).toContain("npm|view|@openclaw/slack@2026.9.2|dist.tarball");
-      expect(trace).toContain(
-        "npm|pack|https://registry.npmjs.org/@openclaw/slack/-/slack-2026.9.2.tgz|--pack-destination",
-      );
+      expect(trace).toContain("npm|pack|@openclaw/slack@2026.9.2|--pack-destination");
       expect(trace).toContain(
         "openclaw|plugins|install|--force|--accept-capabilities|npm:@openclaw/slack@2026.9.2",
       );

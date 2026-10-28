@@ -209,7 +209,7 @@ export function packReviewedNpmArchive(
   );
   try {
     const packJson = npmRunner(
-      ["pack", request.tarballUrl, "--pack-destination", rootDirectory, "--json"],
+      ["pack", request.packageSpec, "--pack-destination", rootDirectory, "--json"],
       request,
     );
     let parsed: unknown;

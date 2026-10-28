@@ -20,8 +20,8 @@ export function writeReviewedNpmFixture(
     `  ${JSON.stringify(`${reviewed.packageSpec}|dist.tarball`)}) printf '%s\\n' ${JSON.stringify(reviewed.tarballUrl)} ;;`,
   ]);
   const packCases = packages.map((reviewed) => {
-    const filename = path.basename(new URL(reviewed.tarballUrl).pathname);
-    return `  ${JSON.stringify(reviewed.tarballUrl)}) printf 'fixture' > "$pack_dir/${filename}"; printf '[{"filename":"${filename}","integrity":"%s"}]\\n' ${JSON.stringify(reviewed.integrity)} ;;`;
+    const filename = `${reviewed.packageSpec.replace(/^@/, "").replace(/[/@]/g, "-")}.tgz`;
+    return `  ${JSON.stringify(reviewed.packageSpec)}) printf 'fixture' > "$pack_dir/${filename}"; printf '[{"filename":"${filename}","integrity":"%s"}]\\n' ${JSON.stringify(reviewed.integrity)} ;;`;
   });
   fs.writeFileSync(
     fixturePath,

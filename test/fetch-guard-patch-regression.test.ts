@@ -255,7 +255,7 @@ function runOpenClawUpgradeBlock(currentVersion: string) {
     '    [ "${5:-}" = "--integrity" ] && [ "${6:-}" = "$OPENCLAW_2026_9_2_INTEGRITY" ] || return 96;',
     '    [ "${7:-}" = "--tarball-url" ] && [ "${8:-}" = "$OPENCLAW_2026_9_2_TARBALL" ] || return 97;',
     '    [ "${9:-}" = "--label" ] && [ "${10:-}" = "OpenClaw ${OPENCLAW_VERSION}" ] || return 98;',
-    '    printf "npm pack %s --pack-destination reviewed-temp\\n" "${8:-}" >> "$call_log";',
+    '    printf "npm pack %s --pack-destination reviewed-temp\\n" "${4:-}" >> "$call_log";',
     '    printf "%s\\n" "$reviewed_archive"; return 0;',
     "  fi",
     '  "$real_node" "$@"',
@@ -420,7 +420,7 @@ describe("fetch-guard patch regression guard", () => {
       "newer than reviewed target " + readDockerfileOpenClawVersion(),
     );
     expect(newer.calls).not.toContain(
-      `npm pack https://registry.npmjs.org/openclaw/-/openclaw-${readDockerfileOpenClawVersion()}.tgz --pack-destination`,
+      `npm pack openclaw@${readDockerfileOpenClawVersion()} --pack-destination`,
     );
     expect(newer.calls).not.toContain("npm install -g --no-audit --no-fund --no-progress ");
     expect(newer.calls).not.toMatch(/npm --prefix \S+ ci/);

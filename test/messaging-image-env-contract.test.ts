@@ -52,15 +52,15 @@ describe("messaging plan final image environment contract", () => {
     expect(imageEnvNames).not.toContain(MESSAGING_PLAN_ENV_KEY);
 
     for (const phase of ["runtime-setup", "agent-install", "post-agent-install"]) {
-      let phaseIndex = dockerfile.indexOf(`--agent ${agent} --phase ${phase}`);
-      if (
-        phaseIndex === -1 &&
-        phase === "agent-install" &&
+      const indirectIndex =
         dockerfile.includes(`messaging_phase=${phase};`) &&
         dockerfile.includes(`--agent ${agent} --phase "$messaging_phase"`)
-      ) {
-        phaseIndex = dockerfile.indexOf(`messaging_phase=${phase};`);
-      }
+          ? dockerfile.indexOf(`messaging_phase=${phase};`)
+          : -1;
+      const phaseIndex = Math.max(
+        dockerfile.indexOf(`--agent ${agent} --phase ${phase}`),
+        indirectIndex,
+      );
       expect(phaseIndex, `${agent} is missing the ${phase} messaging build phase`).toBeGreaterThan(
         planArgIndex,
       );

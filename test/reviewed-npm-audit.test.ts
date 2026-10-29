@@ -124,12 +124,22 @@ describe("reviewed npm audit gate", () => {
       CHECKED_IN_POLICY.exceptions.filter((exception) => exception.package === "brace-expansion"),
     ).toEqual([]);
   });
-  it("removes checked-in exceptions remediated by the runtime dependency repair (#8)", () => {
+  it("removes only obsolete checked-in exceptions after the runtime dependency repair (#8)", () => {
     expect(
-      CHECKED_IN_POLICY.exceptions.filter((exception) =>
-        ["body-parser", "undici", "zod"].includes(exception.package),
+      CHECKED_IN_POLICY.exceptions.filter(
+        (exception) =>
+          exception.package === "body-parser" ||
+          exception.installedVersion === "7.29.1" ||
+          exception.installedVersion === "3.25.76",
       ),
     ).toEqual([]);
+    expect(
+      CHECKED_IN_POLICY.exceptions.filter(
+        (exception) =>
+          (exception.package === "undici" && exception.installedVersion === "8.10.2") ||
+          (exception.package === "zod" && exception.installedVersion === "4.4.3"),
+      ),
+    ).toHaveLength(5);
   });
 
   it("fails at high or critical findings while retaining lower severities", () => {

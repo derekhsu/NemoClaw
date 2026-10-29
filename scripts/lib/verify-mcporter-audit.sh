@@ -4,12 +4,15 @@
 
 set -euo pipefail
 
-receipt=/run/secrets/nemoclaw-mcporter-audit-receipt
-raw_report=/run/secrets/nemoclaw-mcporter-audit-raw-report
-policy_result=/run/secrets/nemoclaw-mcporter-audit-policy-result
+secrets_dir="${NEMOCLAW_MCPORTER_AUDIT_SECRETS_DIR:-/run/secrets}"
+receipt="$secrets_dir/nemoclaw-mcporter-audit-receipt"
+raw_report="$secrets_dir/nemoclaw-mcporter-audit-raw-report"
+policy_result="$secrets_dir/nemoclaw-mcporter-audit-policy-result"
+exceptions_file="${NEMOCLAW_MCPORTER_AUDIT_EXCEPTIONS_FILE:-/scripts/npm-audit-exceptions.json}"
+lockfile="${NEMOCLAW_MCPORTER_AUDIT_LOCKFILE:-/usr/local/lib/nemoclaw/mcporter-runtime/package-lock.json}"
 receipt_sha256="${NEMOCLAW_MCPORTER_AUDIT_RECEIPT_SHA256:-}"
 policy_result_sha256="${NEMOCLAW_MCPORTER_AUDIT_POLICY_RESULT_SHA256:-}"
-seed=/run/nemoclaw-mcporter-audit-cache/reviewed-npm-audit
+seed="${NEMOCLAW_MCPORTER_AUDIT_SEED_PATH:-/run/nemoclaw-mcporter-audit-cache/reviewed-npm-audit}"
 report_path="${NEMOCLAW_MCPORTER_AUDIT_REPORT_PATH:-}"
 result_path="${NEMOCLAW_MCPORTER_AUDIT_RESULT_PATH:-}"
 audit_output_args=()
@@ -59,7 +62,7 @@ printf '%s  %s\n' "$raw_report_sha256" "$raw_report" | sha256sum --check --statu
   exit 1
 }
 jq -e '
-  .schemaVersion == 1 and .graph == "mcporter-runtime" and
+  .schemaVersion == 1 and .graph == "mcporter-runtime" and .blockingThreshold == "high" and
   (.status == "clean" or .status == "accepted-exceptions")
 ' "$policy_result" >/dev/null || {
   echo "ERROR: cached mcporter audit policy result is not a passing mcporter-runtime policy result" >&2
@@ -71,13 +74,13 @@ policy_exceptions_sha256="$(jq -er '
   echo "ERROR: cached mcporter audit policy result does not declare an exceptions policy SHA-256" >&2
   exit 1
 }
-printf '%s  %s\n' "$policy_exceptions_sha256" /scripts/npm-audit-exceptions.json | sha256sum --check --status - || {
+printf '%s  %s\n' "$policy_exceptions_sha256" "$exceptions_file" | sha256sum --check --status - || {
   echo "ERROR: cached mcporter audit policy result does not match the installed exceptions policy" >&2
   exit 1
 }
 receipt_lockfile_sha256="$(jq -r '.lockfileSha256 // empty' "$receipt")"
 if [[ -n "$receipt_lockfile_sha256" ]]; then
-  printf '%s  %s\n' "$receipt_lockfile_sha256" /usr/local/lib/nemoclaw/mcporter-runtime/package-lock.json | sha256sum --check --status - || {
+  printf '%s  %s\n' "$receipt_lockfile_sha256" "$lockfile" | sha256sum --check --status - || {
     echo "ERROR: cached mcporter audit receipt does not match the installed lockfile" >&2
     exit 1
   }

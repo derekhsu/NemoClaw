@@ -4,6 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -296,5 +297,136 @@ describe("mcporter image supply-chain controls", () => {
       graph?.replacementLockSha256 ?? graph?.lockSha256,
     );
     expect(reviewedAuditDriver).toContain("runReviewedNpmAudit");
+  });
+});
+
+describe("verify-mcporter-audit.sh cached-evidence branch", () => {
+  const helper = path.join(repoRoot, "scripts", "lib", "verify-mcporter-audit.sh");
+
+  const sha256 = (value: string | Buffer): string =>
+    createHash("sha256").update(value).digest("hex");
+
+  type CachedFixture = {
+    exceptionsBody: string;
+    lockfileBody: string;
+    policy: Record<string, unknown>;
+    rawBody: string;
+    receipt: Record<string, unknown>;
+  };
+
+  function runCachedVerify(fixture: Partial<CachedFixture> = {}) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mcporter-audit-verify-"));
+    const secretsDir = path.join(tempDir, "secrets");
+    fs.mkdirSync(secretsDir, { recursive: true });
+
+    const exceptionsBody = fixture.exceptionsBody ?? '{"exceptions":[]}';
+    const lockfileBody = fixture.lockfileBody ?? '{"lockfileVersion":3}';
+    const rawBody = fixture.rawBody ?? '{"vulnerabilities":{}}';
+    const policy = {
+      schemaVersion: 1,
+      graph: "mcporter-runtime",
+      blockingThreshold: "high",
+      status: "clean",
+      exceptionPolicySha256: sha256(exceptionsBody),
+      acceptedAdvisories: [],
+      reported: {},
+      unacceptedBlockingAdvisories: [],
+      ...(fixture.policy ?? {}),
+    };
+    const receipt = {
+      rawResponseSha256: sha256(rawBody),
+      ...(fixture.receipt ?? {}),
+    };
+
+    const exceptionsPath = path.join(tempDir, "npm-audit-exceptions.json");
+    const lockfilePath = path.join(tempDir, "mcporter-runtime", "package-lock.json");
+    const receiptPath = path.join(secretsDir, "nemoclaw-mcporter-audit-receipt");
+    const rawPath = path.join(secretsDir, "nemoclaw-mcporter-audit-raw-report");
+    const policyPath = path.join(secretsDir, "nemoclaw-mcporter-audit-policy-result");
+    const reportOut = path.join(tempDir, "out-report.json");
+    const resultOut = path.join(tempDir, "out-policy.json");
+
+    fs.mkdirSync(path.dirname(lockfilePath), { recursive: true });
+    fs.writeFileSync(exceptionsPath, exceptionsBody);
+    fs.writeFileSync(lockfilePath, lockfileBody);
+    fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+    fs.writeFileSync(rawPath, rawBody);
+    fs.writeFileSync(policyPath, JSON.stringify(policy));
+
+    try {
+      const result = spawnSync("bash", [helper], {
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          NEMOCLAW_MCPORTER_AUDIT_SECRETS_DIR: secretsDir,
+          NEMOCLAW_MCPORTER_AUDIT_EXCEPTIONS_FILE: exceptionsPath,
+          NEMOCLAW_MCPORTER_AUDIT_LOCKFILE: lockfilePath,
+          NEMOCLAW_MCPORTER_AUDIT_SEED_PATH: path.join(tempDir, "absent-seed"),
+          NEMOCLAW_MCPORTER_AUDIT_RECEIPT_SHA256: sha256(fs.readFileSync(receiptPath)),
+          NEMOCLAW_MCPORTER_AUDIT_POLICY_RESULT_SHA256: sha256(fs.readFileSync(policyPath)),
+          NEMOCLAW_MCPORTER_AUDIT_REPORT_PATH: reportOut,
+          NEMOCLAW_MCPORTER_AUDIT_RESULT_PATH: resultOut,
+        },
+      });
+      return {
+        reportCopied: fs.existsSync(reportOut),
+        result,
+        resultCopied: fs.existsSync(resultOut),
+      };
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  it("copies verified evidence when the policy result passes at the high threshold", () => {
+    const run = runCachedVerify();
+    expect(run.result.status).toBe(0);
+    expect(run.reportCopied).toBe(true);
+    expect(run.resultCopied).toBe(true);
+  });
+
+  it("rejects a blocked policy result instead of trusting the transport hash", () => {
+    const run = runCachedVerify({ policy: { status: "blocked" } });
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("not a passing mcporter-runtime policy result");
+    expect(run.reportCopied).toBe(false);
+  });
+
+  it("rejects a policy result for a different audit graph", () => {
+    const run = runCachedVerify({ policy: { graph: "openclaw-runtime" } });
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("not a passing mcporter-runtime policy result");
+  });
+
+  it("rejects a policy result produced at a lower blocking threshold", () => {
+    const run = runCachedVerify({ policy: { blockingThreshold: "critical" } });
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("not a passing mcporter-runtime policy result");
+  });
+
+  it("rejects a policy result bound to different exceptions contents", () => {
+    const run = runCachedVerify({
+      policy: { exceptionPolicySha256: "f".repeat(64) },
+    });
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("does not match the installed exceptions policy");
+  });
+
+  it("rejects a declared lockfile hash that does not match the installed lockfile", () => {
+    const run = runCachedVerify({
+      receipt: { lockfileSha256: "f".repeat(64) },
+    });
+    expect(run.result.status).toBe(1);
+    expect(run.result.stderr).toContain("does not match the installed lockfile");
+  });
+
+  it("accepts a declared lockfile hash that matches the installed lockfile", () => {
+    const lockfileBody = '{"lockfileVersion":3,"packages":{}}';
+    const run = runCachedVerify({
+      lockfileBody,
+      receipt: { lockfileSha256: sha256(lockfileBody) },
+    });
+    expect(run.result.status).toBe(0);
+    expect(run.reportCopied).toBe(true);
   });
 });

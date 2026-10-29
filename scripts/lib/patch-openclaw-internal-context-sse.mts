@@ -22,6 +22,9 @@ const MARKER = "/* nemoclaw: sanitize internal context before append-only SSE */
 export const STREAM_HELPER = `${MARKER}
 function createNemoClawInternalContextStream() {
 \tlet raw = "";
+\tlet itemRaw = "";
+\tlet itemId;
+\tlet committedVisible = "";
 \tlet visible = "";
 \tconst clean = (text, final) => {
 \t\tif (!final) {
@@ -32,13 +35,34 @@ function createNemoClawInternalContextStream() {
 \t\tconst cleaned = stripInternalRuntimeContext(final ? text : text.trimEnd());
 \t\treturn final ? cleaned : cleaned.trimEnd();
 \t};
+\tconst finishItem = () => {
+\t\tcommittedVisible += clean(itemRaw, true);
+\t\titemRaw = "";
+\t};
 \treturn {
 \t\tproject(data) {
 \t\t\tif (typeof data?.text !== "string" && typeof data?.delta !== "string") return data;
 \t\t\tif (data.replaceable === true) return { ...data, text: clean(typeof data.text === "string" ? data.text : data.delta, false), delta: "" };
 \t\t\tconst previousVisible = visible;
-\t\t\traw = typeof data.text === "string" && (data.replace === true || data.text.startsWith(raw)) ? data.text : raw + (typeof data.delta === "string" ? data.delta : data.text);
-\t\t\tvisible = clean(raw, false);
+\t\t\tif (data.itemId !== undefined && itemId !== undefined && data.itemId !== itemId) finishItem();
+\t\t\tif (data.itemId !== undefined) itemId = data.itemId;
+\t\t\tif (typeof data.text === "string" && (data.replace === true || data.text.startsWith(raw))) {
+\t\t\t\tif (data.text.startsWith(raw)) {
+\t\t\t\t\titemRaw += data.text.slice(raw.length);
+\t\t\t\t} else {
+\t\t\t\t\tcommittedVisible = "";
+\t\t\t\t\titemRaw = data.text;
+\t\t\t\t}
+\t\t\t\traw = data.text;
+\t\t\t} else if (typeof data.text === "string") {
+\t\t\t\tif (itemRaw !== "" && !data.text.startsWith(itemRaw)) finishItem();
+\t\t\t\titemRaw = data.text;
+\t\t\t\traw += typeof data.delta === "string" ? data.delta : data.text;
+\t\t\t} else {
+\t\t\t\titemRaw += data.delta;
+\t\t\t\traw += data.delta;
+\t\t\t}
+\t\t\tvisible = committedVisible + clean(itemRaw, false);
 \t\t\treturn {
 \t\t\t\t...data,
 \t\t\t\ttext: visible,
@@ -46,8 +70,8 @@ function createNemoClawInternalContextStream() {
 \t\t\t};
 \t\t},
 \t\tfinish() {
-\t\t\tconst final = clean(raw, true);
-\t\t\treturn final.startsWith(visible) ? final.slice(visible.length) : "";
+\t\t\tfinishItem();
+\t\t\treturn committedVisible.startsWith(visible) ? committedVisible.slice(visible.length) : "";
 \t\t}
 \t};
 }

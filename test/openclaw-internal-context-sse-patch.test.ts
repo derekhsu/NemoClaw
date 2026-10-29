@@ -34,6 +34,24 @@ describe("native OpenClaw SSE internal context", () => {
     expect(dataFrames(frames).some((frame) => frame.error)).toBe(false);
     expect(frames.at(-1)).toBe("DONE");
   });
+  it("sanitizes internal context that begins at an assistant item boundary (#9)", async () => {
+    const block =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPRIVATE_SENTINEL\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n";
+    const frames = await probe(
+      runtime(),
+      [
+        { itemId: "a", text: "Before", delta: "Before" },
+        { itemId: "b", text: block + "VISIBLE", delta: block + "VISIBLE" },
+        { text: "BeforeVISIBLE", delta: "", replace: true },
+      ],
+      { payloads: [{ text: "BeforeVISIBLE" }], meta: {} },
+    );
+    expect(content(frames)).toBe("BeforeVISIBLE");
+    expect(content(frames)).not.toContain("PRIVATE_SENTINEL");
+    expect(content(frames)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(dataFrames(frames).some((frame) => frame.error)).toBe(false);
+    expect(frames.at(-1)).toBe("DONE");
+  });
   it("withholds split delimiters after visible text (#9)", async () => {
     const raw = "Before\n\n" + internal + "VISIBLE";
     const updates: AssistantData[] = Array.from(raw, (_, index) => ({

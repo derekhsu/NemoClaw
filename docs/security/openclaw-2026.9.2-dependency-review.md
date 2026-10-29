@@ -290,6 +290,7 @@ The native HTTP handler then rejects the replacement because an append-only stre
 The candidate image recipe applies `scripts/lib/patch-openclaw-internal-context-sse.mts` before the OpenClaw runtime payload is assembled.
 The patch projects assistant-event text through the existing canonical runtime-context stripper before the native handler checks replacement snapshots.
 It withholds incomplete delimiter lines and trailing whitespace during streaming.
+Assistant-item transitions close the previous item's sanitization state so a new item cannot hide a leading internal-context block inside a visible line.
 After a successful agent result, it releases withheld literal text that does not form a protected delimiter.
 The native handler retains its error for a genuine non-prefix replacement and continues to report upstream failures.
 This change does not suppress structured errors in an external gateway.
@@ -303,8 +304,8 @@ Remove the patch when a reviewed published OpenClaw runtime passes the native in
 
 The regression harness supplies synthetic assistant events to the extracted native SSE branch.
 It substitutes ingress and response objects instead of running an HTTP listener, a Gateway, or a provider.
-It tests the boundary where internal-context text precedes a sanitized replacement.
-The focused test run passed 31 tests, with one existing opt-in artifact test skipped.
+It tests the boundary where internal-context text precedes a sanitized replacement, including an internal-context block that begins at a new assistant item.
+The focused test run passed 32 tests, with one existing opt-in artifact test skipped.
 Scoped TypeScript, formatting, and Dockerfile lint checks passed.
 A local diagnostic image built on the published `2026.9.2-r1` image applied the patch and passed its source audit during the build.
 The subsequent installed-runtime probe did not run because the Docker socket became unavailable.

@@ -9,12 +9,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
-
-import { patchOpenClawContainerRestart } from "../scripts/lib/patch-openclaw-container-restart.mts";
 import { buildManagedInferenceSafeguardCompaction } from "../scripts/generate-openclaw-config.mts";
+import { patchOpenClawContainerRestart } from "../scripts/lib/patch-openclaw-container-restart.mts";
+import { patchOpenClawInternalContextSse } from "../scripts/lib/patch-openclaw-internal-context-sse.mts";
 import { runRealOpenClawCompactionRetryProof } from "./helpers/openclaw-real-compaction-retry-proof";
 import { runRealOpenClawDeviceSelfApprovalProof } from "./helpers/openclaw-real-device-self-approval-proof";
 import { runRealOpenClawInstallPathProof } from "./helpers/openclaw-real-install-path-proof";
+import { runRealOpenClawInternalContextSseProof } from "./helpers/openclaw-real-internal-context-sse-proof";
 import { runRealOpenClawMcpStartRetryProof } from "./helpers/openclaw-real-mcp-start-retry-proof";
 
 const REPO_ROOT = path.join(import.meta.dirname, "..");
@@ -675,6 +676,10 @@ describe.skipIf(process.env.NEMOCLAW_REAL_OPENCLAW_DIST_HARNESS !== "1")(
         } finally {
           process.env.PATH = previousPath;
         }
+
+        patchOpenClawInternalContextSse(dist);
+        patchOpenClawInternalContextSse(dist, true);
+        await runRealOpenClawInternalContextSseProof(dist);
 
         patchOpenClawContainerRestart(dist);
         patchOpenClawContainerRestart(dist, true);

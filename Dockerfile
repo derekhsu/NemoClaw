@@ -743,6 +743,7 @@ COPY scripts/lib/patch-openclaw-container-restart.mts /usr/local/lib/nemoclaw/pa
 COPY scripts/patch-openclaw-mcp-npx.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts
 COPY scripts/patch-openclaw-mcp-reliability.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-reliability.mts
 COPY scripts/patch-openclaw-mcp-tools-list-timeout.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts
+COPY scripts/lib/patch-openclaw-internal-context-sse.mts /usr/local/lib/nemoclaw/patch-openclaw-internal-context-sse.mts
 COPY scripts/patch-openclaw-issue-4434-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.mts
 COPY scripts/patch-openclaw-managed-transport-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-managed-transport-diagnostics.mts
 COPY scripts/patch-openclaw-device-self-approval.mts /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts
@@ -984,6 +985,7 @@ RUN chmod 755 /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-reliability.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts \
+        /usr/local/lib/nemoclaw/patch-openclaw-internal-context-sse.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-managed-transport-diagnostics.mts \
         /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts \
@@ -1660,6 +1662,15 @@ RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-r
 # tools/list-only runtime setting.
 # hadolint ignore=DL3059
 RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts \
+    /usr/local/lib/node_modules/openclaw/dist
+
+# Remove internal context before native append-only SSE emission. Hold partial
+# delimiter lines and trailing whitespace until they can be classified. Keep
+# genuine non-prefix replacements and upstream errors visible to clients.
+# Removal criterion: the published OpenClaw runtime passes the native SSE
+# internal-context replacement and split-delimiter regressions without this patch.
+# hadolint ignore=DL3059
+RUN node --experimental-strip-types /usr/local/lib/nemoclaw/patch-openclaw-internal-context-sse.mts \
     /usr/local/lib/node_modules/openclaw/dist
 
 # Emit a redacted managed-transport diagnostic when a remote Streamable HTTP MCP

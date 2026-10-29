@@ -30,9 +30,12 @@ describe("OpenClaw final image layout", () => {
     ["same-line", "RUN --network=none --mount=type=cache,target=/tmp true", true],
     ["line-continuation", "RUN --security=sandbox \\\n  --mount=type=secret,id=token true", true],
     ["shell-command argument", "RUN printf '%s' --mount=type=cache", false],
-  ] as const)("recognizes BuildKit mounts only in the RUN option prefix for %s form (#7611)", (_form, dockerfile, expected) => {
-    expect(hasBuildKitRunMount(dockerfile)).toBe(expected);
-  });
+  ] as const)(
+    "recognizes BuildKit mounts only in the RUN option prefix for %s form (#7611)",
+    (_form, dockerfile, expected) => {
+      expect(hasBuildKitRunMount(dockerfile)).toBe(expected);
+    },
+  );
 
   // source-shape-contract: compatibility -- Legacy-compatible grouped payload copies preserve cold-onboard export work while retaining intentional cache and scan boundaries
   it("uses grouped legacy-compatible payload layers at their cache boundaries (#7611)", () => {
@@ -78,6 +81,7 @@ describe("OpenClaw final image layout", () => {
           "COPY scripts/patch-openclaw-mcp-npx.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-npx.mts",
           "COPY scripts/patch-openclaw-mcp-reliability.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-reliability.mts",
           "COPY scripts/patch-openclaw-mcp-tools-list-timeout.mts /usr/local/lib/nemoclaw/patch-openclaw-mcp-tools-list-timeout.mts",
+          "COPY scripts/lib/patch-openclaw-internal-context-sse.mts /usr/local/lib/nemoclaw/patch-openclaw-internal-context-sse.mts",
           "COPY scripts/patch-openclaw-issue-4434-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-issue-4434-diagnostics.mts",
           "COPY scripts/patch-openclaw-managed-transport-diagnostics.mts /usr/local/lib/nemoclaw/patch-openclaw-managed-transport-diagnostics.mts",
           "COPY scripts/patch-openclaw-device-self-approval.mts /usr/local/lib/nemoclaw/patch-openclaw-device-self-approval.mts",

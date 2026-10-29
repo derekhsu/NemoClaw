@@ -280,3 +280,34 @@ group-shared modes on the `2026.9.2` migration shapes.
 `patch-gateway-daemon-dialback.mts` drops its call-context spec because
 `2026.9.2` merged both env-URL resolution sites into one unified resolver;
 the remaining specs keep strict exact-one semantics.
+
+## Internal Context Streaming Compatibility
+
+Issue `#9` records an intermittent OpenClaw `2026.9.2` failure during native Chat Completions server-sent event (SSE) delivery.
+Assistant events can expose an internal runtime-context block before a sanitized replacement removes that block.
+The native HTTP handler then rejects the replacement because an append-only stream cannot retract bytes already sent to the client.
+
+The candidate image recipe applies `scripts/lib/patch-openclaw-internal-context-sse.mts` before the OpenClaw runtime payload is assembled.
+The patch projects assistant-event text through the existing canonical runtime-context stripper before the native handler checks replacement snapshots.
+It withholds incomplete delimiter lines and trailing whitespace during streaming.
+After a successful agent result, it releases withheld literal text that does not form a protected delimiter.
+The native handler retains its error for a genuine non-prefix replacement and continues to report upstream failures.
+This change does not suppress structured errors in an external gateway.
+
+The patch accepts only the reviewed OpenClaw `2026.9.2` runtime.
+SHA-256 checks bind the HTTP handler, canonical runtime-context stripper, and regular-expression helper to their reviewed source bytes.
+A changed source file or an unsupported runtime version stops patch application.
+The existing `2026.3.11` and `2026.4.24` legacy test fixtures skip this patch.
+Applying the patch again preserves the patched source, and `--audit` rejects an unpatched reviewed runtime.
+Remove the patch when a reviewed published OpenClaw runtime passes the native internal-context replacement and split-delimiter regressions without it.
+
+The regression harness supplies synthetic assistant events to the extracted native SSE branch.
+It substitutes ingress and response objects instead of running an HTTP listener, a Gateway, or a provider.
+It tests the boundary where internal-context text precedes a sanitized replacement.
+The focused test run passed 31 tests, with one existing opt-in artifact test skipped.
+Scoped TypeScript, formatting, and Dockerfile lint checks passed.
+A local diagnostic image built on the published `2026.9.2-r1` image applied the patch and passed its source audit during the build.
+The subsequent installed-runtime probe did not run because the Docker socket became unavailable.
+That diagnostic build does not establish acceptance of the complete image recipe or the installed native stream behavior.
+These results do not reproduce a complete provider session or the live `sessions_spawn` and `sessions_yield` sequence.
+The complete image recipe build, real sandbox and model acceptance, multi-architecture builds, publication, and deployment remain separate validation steps.

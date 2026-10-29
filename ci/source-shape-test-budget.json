@@ -620,6 +620,11 @@
       "file": "test/pr-workflow-contract.test.ts",
       "test": "limits coverage publication to the upstream repository",
       "category": "security"
+    },
+    {
+      "file": "test/reviewed-npm-audit-workflow.test.ts",
+      "test": "pins the trusted audit action to the reviewed Node and npm contract",
+      "category": "security"
     }
   ]
 }

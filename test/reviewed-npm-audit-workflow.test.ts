@@ -844,4 +844,27 @@ esac
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // source-shape-contract: security -- The trusted audit action must run the exact reviewed Node and npm toolchain declared in the pinned audit config
+  it("pins the trusted audit action to the reviewed Node and npm contract", () => {
+    const config = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "ci", "reviewed-npm-audit.json"), "utf8"),
+    ) as { nodeVersion: string; npmIntegrity: string; npmVersion: string };
+    const action = readYaml<{
+      runs: {
+        steps: Array<{
+          env?: Record<string, string>;
+          name?: string;
+          uses?: string;
+          with?: Record<string, unknown>;
+        }>;
+      };
+    }>(".github/actions/ci-reviewed-npm-audit/action.yaml");
+    const steps = action.runs.steps;
+    const nodeStep = steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    expect(nodeStep?.with?.["node-version"]).toBe(config.nodeVersion);
+    const npmStep = steps.find((step) => step.name === "Download and verify production npm");
+    expect(npmStep?.env?.NEMOCLAW_REVIEWED_NPM_VERSION).toBe(config.npmVersion);
+    expect(npmStep?.env?.NEMOCLAW_REVIEWED_NPM_INTEGRITY).toBe(config.npmIntegrity);
+  });
 });

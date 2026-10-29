@@ -627,7 +627,6 @@ FROM scratch AS openclaw-managed-messaging-npm-common-archives
 # hadolint ignore=DL3067
 COPY --from=openclaw-managed-messaging-npm-common-archives-1 / /
 # hadolint ignore=DL3067
-# hadolint ignore=DL3067
 COPY --from=openclaw-managed-messaging-npm-common-archives-2 / /
 # hadolint ignore=DL3067
 COPY --from=openclaw-managed-messaging-npm-common-archives-3 / /
@@ -878,11 +877,11 @@ RUN if [ -n "${NEMOCLAW_CORPORATE_CA_B64}" ]; then \
     fi
 
 # Anchor the corporate CA for build-time TLS too, not just runtime. The
-# OpenClaw/mcporter reinstall path runs npm audit signatures, which fetches the
-# sigstore TUF root over TLS; behind a TLS-intercepting corporate proxy that
-# fetch needs the operator CA or it fails with SELF_SIGNED_CERT_IN_CHAIN. Node
-# ignores a missing file, so this is a no-op when no CA was baked; at runtime
-# nemoclaw-start overrides it with the merged OpenShell + corporate bundle.
+# OpenClaw/mcporter reinstall path fetches packages from the npm registry over
+# TLS; behind a TLS-intercepting corporate proxy that fetch needs the operator
+# CA or it fails with SELF_SIGNED_CERT_IN_CHAIN. Node ignores a missing file,
+# so this is a no-op when no CA was baked; at runtime nemoclaw-start overrides
+# it with the merged OpenShell + corporate bundle.
 ENV NODE_EXTRA_CA_CERTS=/usr/local/share/nemoclaw/corporate-ca.pem
 
 # Reassert the npm-private ip-address fix for the exact final filesystem. When
@@ -2087,12 +2086,12 @@ RUN --mount=from=openclaw-managed-messaging-npm-cache,source=/out/npm-cache,targ
     cp -R "$trusted_cache"/. "$install_cache"/; \
     chmod -R u+rwX,go-w "$install_cache"; \
     export NPM_CONFIG_CACHE="$install_cache"; \
-    export NPM_CONFIG_OFFLINE=true; \
     export NPM_CONFIG_AUDIT=false; \
     export NPM_CONFIG_FUND=false; \
     messaging_phase=agent-install; \
     if [ "$NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION" = "1" ]; then \
         messaging_phase=managed-image-capability-union; \
+        export NPM_CONFIG_OFFLINE=true; \
     fi; \
     NEMOCLAW_WECHAT_NPM_INSTALL_CACHE="$install_cache" \
         OPENCLAW_VERSION="${OPENCLAW_VERSION}" \
@@ -2163,7 +2162,7 @@ ENV NPM_CONFIG_OFFLINE=false
 # Also add the final OpenClaw managed proxy config after build-time OpenClaw
 # commands are done, so runtime Discord/WebSocket traffic uses the OpenShell
 # gateway proxy without forcing image-build npm traffic through that proxy.
-RUN python3 -c "\
+RUN PATH=/usr/bin:/bin python3 -c "\
 import json, os; \
 path = os.path.expanduser('~/.openclaw/openclaw.json'); \
 cfg = json.load(open(path)); \
@@ -2596,13 +2595,13 @@ RUN --mount=type=bind,source=scripts/security/standalone-security-package-invent
     ldd /usr/bin/tmux | grep -Eq 'libevent_core-2[.]1[.]so[.]7'; \
     test "$(jq --version)" = "jq-1.8.2"; \
     printf '%s\n' '{"sandbox":"healthy"}' | jq -e '.sandbox == "healthy"' >/dev/null; \
-    python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"; \
+    PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"; \
     printf '%s  %s\n' \
         "4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7" \
         /usr/lib/python3.13/html/parser.py \
         | sha256sum -c -; \
-    python3 -c "import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('/usr/lib/python3.13/html/parser.py').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')"; \
-    python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')"; \
+    PATH=/usr/bin:/bin python3 -c "import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('/usr/lib/python3.13/html/parser.py').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')"; \
+    PATH=/usr/bin:/bin python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')"; \
     vim.tiny --version | head -n 1 | grep -Eq '^VIM - Vi IMproved 9[.]2 '; \
     vim.tiny --version | grep -Fx 'Included patches: 1-858'; \
     test -z "$(dpkg --audit)"

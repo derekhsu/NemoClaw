@@ -25,8 +25,10 @@ The Deep Agents Code selector is the published `0.1.71` release at commit
 the corresponding source archive has SHA-256
 `17de53006896f341c27ee8b9ab3b074ac994bbac0189eb2db77212f9a79129ee`.
 This semantic migration from `0.1.55` through `0.1.71` crosses the mapped MCP, TUI,
-tool-streaming, plugin-wait, and harness-profile contracts. MCP `2.0.0` satisfies the new consumer requirement while retaining Host/Origin validation. The managed patch follows the renamed MCP discovery function, the shared server environment builder, the module entrypoint import, and all six package-mutation subprocess sites. These changes retain the
-managed hook, approval, credential, update, and startup-mode guards at the
+tool-streaming, plugin-wait, and harness-profile contracts. MCP `2.0.0` satisfies the new consumer requirement while retaining Host/Origin validation. The managed patch follows the renamed MCP discovery function, the shared server environment builder, the module entrypoint import, and all six package-mutation subprocess sites. Hook suppression,
+`--startup-cmd`, `--interpreter-tools`, and `--interpreter` restrictions apply to
+managed headless sessions; interactive sessions keep those user-facing features.
+Approval, credential, and update guards apply to every managed session at the
 NemoClaw launcher and exact-version package-patch boundaries.
 
 The image build runs `pip3 check` and asserts all eight installed package versions, including Deep Agents Code itself, before publishing.

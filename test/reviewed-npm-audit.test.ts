@@ -124,6 +124,13 @@ describe("reviewed npm audit gate", () => {
       CHECKED_IN_POLICY.exceptions.filter((exception) => exception.package === "brace-expansion"),
     ).toEqual([]);
   });
+  it("removes checked-in exceptions remediated by the runtime dependency repair (#8)", () => {
+    expect(
+      CHECKED_IN_POLICY.exceptions.filter((exception) =>
+        ["body-parser", "undici", "zod"].includes(exception.package),
+      ),
+    ).toEqual([]);
+  });
 
   it("fails at high or critical findings while retaining lower severities", () => {
     const report = {
@@ -491,17 +498,17 @@ describe("reviewed npm audit provenance", () => {
     expect(extractAdvisoryIds(report as Record<string, unknown>)).toEqual([]);
   });
 
-  it.each([
-    "https://registry.npmjs.org/",
-    "https://registry.npmjs.org",
-  ])("derives the bulk advisory endpoint npm audit uses from %s", (registry) => {
-    const endpoints = deriveAuditEndpoints(registry);
-    expect(endpoints).toEqual({
-      configuredRegistry: "https://registry.npmjs.org/",
-      bulkAdvisoryEndpoint: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
-      note: expect.stringMatching(/bulk advisory endpoint.*no advisory data/s),
-    });
-  });
+  it.each(["https://registry.npmjs.org/", "https://registry.npmjs.org"])(
+    "derives the bulk advisory endpoint npm audit uses from %s",
+    (registry) => {
+      const endpoints = deriveAuditEndpoints(registry);
+      expect(endpoints).toEqual({
+        configuredRegistry: "https://registry.npmjs.org/",
+        bulkAdvisoryEndpoint: "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+        note: expect.stringMatching(/bulk advisory endpoint.*no advisory data/s),
+      });
+    },
+  );
 
   it("redacts registry URL credentials from retained provenance", () => {
     expect(deriveAuditEndpoints("https://audit-user:audit-token@registry.npmjs.org/")).toEqual({
@@ -563,16 +570,16 @@ describe("reviewed npm audit provenance", () => {
     expect(provenance.advisoryIds).toEqual([]);
   });
 
-  it.each([
-    "",
-    "   ",
-  ])("records an unknown registry explicitly instead of deriving a nonsense endpoint (%j)", (registry) => {
-    expect(deriveAuditEndpoints(registry)).toEqual({
-      configuredRegistry: null,
-      bulkAdvisoryEndpoint: null,
-      note: expect.stringMatching(/registry could not be safely recorded/),
-    });
-  });
+  it.each(["", "   "])(
+    "records an unknown registry explicitly instead of deriving a nonsense endpoint (%j)",
+    (registry) => {
+      expect(deriveAuditEndpoints(registry)).toEqual({
+        configuredRegistry: null,
+        bulkAdvisoryEndpoint: null,
+        note: expect.stringMatching(/registry could not be safely recorded/),
+      });
+    },
+  );
 
   it("writes the failure sidecar before rethrowing when npm audit hard-fails", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-audit-provenance-"));

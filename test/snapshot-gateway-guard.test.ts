@@ -9,6 +9,7 @@ import { type ChildProcess, execSync, spawn, spawnSync } from "node:child_proces
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { execTimeout } from "./helpers/timeouts";
@@ -144,6 +145,61 @@ function makeStoppedGatewayEnv(prefix: string): Record<string, string> {
   };
 }
 
+function writeVmSnapshotSsh(localBin: string, home: string): void {
+  const stateRoot = path.join(home, "remote-openclaw-state");
+  fs.mkdirSync(path.join(stateRoot, "state"), { recursive: true });
+  const database = new DatabaseSync(path.join(stateRoot, "state", "openclaw.sqlite"));
+  try {
+    database.exec(
+      "CREATE TABLE sessions (id TEXT); INSERT INTO sessions VALUES ('portable-session');",
+    );
+  } finally {
+    database.close();
+  }
+  const remoteOpenClawJson = path.join(home, "remote-openclaw.json");
+  fs.writeFileSync(remoteOpenClawJson, JSON.stringify({ gateway: { auth: { token: "fresh" } } }));
+  fs.writeFileSync(
+    path.join(localBin, "ssh"),
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      'const { spawnSync } = require("node:child_process");',
+      'const command = process.argv.at(-1) || "";',
+      'if (command.includes("nemoclaw-sqlite-backup") && command.includes("state/openclaw.sqlite")) {',
+      `  const mapped = command.split("/sandbox/.openclaw").join(${JSON.stringify(stateRoot)});`,
+      '  const result = spawnSync("/bin/sh", ["-c", mapped], { stdio: ["ignore", "pipe", "pipe"] });',
+      "  if (result.stdout) fs.writeSync(1, result.stdout);",
+      "  if (result.stderr) fs.writeSync(2, result.stderr);",
+      "  process.exit(result.status ?? 1);",
+      "}",
+      'if (command.includes("openclaw.json")) {',
+      `  const config = ${JSON.stringify(remoteOpenClawJson)};`,
+      '  if (command.includes("cat --")) { fs.writeSync(1, fs.readFileSync(config)); process.exit(0); }',
+      '  if (command.includes(".nemoclaw-restore")) { fs.writeFileSync(config, fs.readFileSync(0)); process.exit(0); }',
+      "}",
+      "process.exit(0);",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+}
+
+function expectSnapshotDatabase(home: string): void {
+  const backupsRoot = path.join(home, ".nemoclaw", "rebuild-backups", "alpha");
+  const snapshots = fs.readdirSync(backupsRoot);
+  expect(snapshots).toHaveLength(1);
+  const database = new DatabaseSync(
+    path.join(backupsRoot, snapshots[0], "state", "openclaw.sqlite"),
+    {
+      readOnly: true,
+    },
+  );
+  try {
+    expect(database.prepare("SELECT id FROM sessions").all()).toEqual([{ id: "portable-session" }]);
+  } finally {
+    database.close();
+  }
+}
+
 function makeHealthyVmGatewayEnv(prefix: string): Record<string, string> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const localBin = path.join(home, "bin");
@@ -163,7 +219,7 @@ function makeHealthyVmGatewayEnv(prefix: string): Record<string, string> {
     "exit 0",
   ]);
 
-  writeExecutable(path.join(localBin, "ssh"), ["exit 0"]);
+  writeVmSnapshotSsh(localBin, home);
   writeExecutable(path.join(localBin, "docker"), [
     'if [ "$1" = "inspect" ]; then echo "false"; exit 0; fi',
     "exit 0",
@@ -204,6 +260,7 @@ function makeVmRestoreToEnv(
     `  "sandbox list") if [ -f ${JSON.stringify(cloneReadyMarker)} ]; then printf "NAME STATUS\\nalpha Ready\\nclone-1 Ready\\n"; else printf "NAME STATUS\\nalpha Ready\\n"; fi; exit 0 ;;`,
     '  "sandbox exec")',
     '    case "$*" in',
+    `      *"/readyz"*) printf '__NEMOCLAW_SANDBOX_EXEC_STARTED__\\n{"ready":true}\\n200\\n'; exit 0 ;;`,
     '      *"__NEMOCLAW_SANDBOX_EXEC_STARTED__"*) printf "__NEMOCLAW_SANDBOX_EXEC_STARTED__\\nRUNNING\\n"; exit 0 ;;',
     "    esac",
     '    printf "NEMOCLAW_DCODE_PROBE=no-runtime\\n"; exit 0 ;;',
@@ -216,17 +273,7 @@ function makeVmRestoreToEnv(
     "exit 0",
   ]);
 
-  const remoteOpenClawJson = path.join(home, "remote-openclaw.json");
-  fs.writeFileSync(remoteOpenClawJson, JSON.stringify({ gateway: { auth: { token: "fresh" } } }));
-  writeExecutable(path.join(localBin, "ssh"), [
-    `REMOTE_OPENCLAW_JSON=${JSON.stringify(remoteOpenClawJson)}`,
-    'cmd=""; for arg do cmd="$arg"; done',
-    'if printf "%s" "$cmd" | grep -q "openclaw.json"; then',
-    '  if printf "%s" "$cmd" | grep -q "cat --"; then cat "$REMOTE_OPENCLAW_JSON"; exit 0; fi',
-    '  if printf "%s" "$cmd" | grep -q ".nemoclaw-restore"; then cat > "$REMOTE_OPENCLAW_JSON"; exit 0; fi',
-    "fi",
-    "exit 0",
-  ]);
+  writeVmSnapshotSsh(localBin, home);
 
   // Model the supervisor-mediated gateway lifecycle used after restore. Keep the
   // kubectl-via-gateway probe rejected so an image-resolution regression
@@ -296,8 +343,9 @@ describe("snapshot VM-driver gateway guard", () => {
   it("snapshot create accepts healthy macOS VM-driver gateways without legacy cluster container", () => {
     const env = makeHealthyVmGatewayEnv("nemoclaw-snap-vm-gw-create-");
     const r = runCli("alpha snapshot create --name baseline", env);
-    expect(r.code).toBe(0);
+    expect(r.code, r.out).toBe(0);
     expect(r.out).toContain("Snapshot v1 name=baseline created");
+    expectSnapshotDatabase(env.HOME);
     expect(r.out).not.toContain("Failed to query live sandbox state");
   });
 
@@ -307,7 +355,8 @@ describe("snapshot VM-driver gateway guard", () => {
     const env = makeVmRestoreToEnv("nemoclaw-snap-vm-gw-restore-to-");
 
     const seed = runCli("alpha snapshot create --name baseline", env);
-    expect(seed.code).toBe(0);
+    expect(seed.code, seed.out).toBe(0);
+    expectSnapshotDatabase(env.HOME);
     expect(seed.out).toContain("Snapshot v1 name=baseline created");
 
     const r = runCli("alpha snapshot restore baseline --to clone-1", env);
@@ -326,7 +375,8 @@ describe("snapshot VM-driver gateway guard", () => {
     });
 
     const seed = runCli("alpha snapshot create --name baseline", env);
-    expect(seed.code).toBe(0);
+    expect(seed.code, seed.out).toBe(0);
+    expectSnapshotDatabase(env.HOME);
 
     const r = runCli("alpha snapshot restore baseline --to clone-1", env);
     expect(r.code).toBe(1);

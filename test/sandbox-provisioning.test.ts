@@ -67,9 +67,12 @@ function dockerHealthCommandBetween(
   const instruction = healthLines.join("\n").trim().replace(/\\\n/g, " ");
   const command = instruction.match(/(?:^|\s)CMD\s+([\s\S]+)$/)?.[1];
   if (!command) {
-    throw new Error(`Expected shell-form HEALTHCHECK CMD after ${startMarker}`);
+    throw new Error(`Expected HEALTHCHECK CMD after ${startMarker}`);
   }
-  return command.trim();
+  const value = command.trim();
+  return value.startsWith("[")
+    ? (JSON.parse(value) as string[]).map((arg) => JSON.stringify(arg)).join(" ")
+    : value;
 }
 
 function runOpenclawRepairLayoutCase(legacy: boolean) {
@@ -211,7 +214,10 @@ describe("sandbox provisioning: runtime npm online state", () => {
   });
 
   it("exercises the staged plugin install with the offline lock still applied", () => {
-    const stage = stageDockerfileUntil(DOCKERFILE, "openclaw plugins install /opt/nemoclaw");
+    const stage = stageDockerfileUntil(
+      DOCKERFILE,
+      "openclaw plugins install --force --accept-capabilities /opt/nemoclaw",
+    );
     const probe = [
       "#!/usr/bin/env bash",
       "set -eo pipefail",
@@ -1054,9 +1060,11 @@ describe("sandbox provisioning: base runtime tools", () => {
     ["Deep Agents Code", DEEPAGENTS_DOCKERFILE_BASE],
   ])("installs pinned nftables for OpenShell bypass enforcement in %s", (_agent, file) => {
     const dockerfile = completedDockerStage(fs.readFileSync(file, "utf-8"));
-    const aptInstall = dockerfile.match(
-      /^RUN apt-get update && apt-get install -y --no-install-recommends \\\n(?:.*\\\n)*.*$/m,
-    )?.[0];
+    const aptInstall = dockerfile
+      .replace(/\\\r?\n[ \t]*/g, " ")
+      .match(
+        /^RUN (?:--mount=\S+[ \t]+)*apt-get update && apt-get install -y --no-install-recommends [^;&\n]*/m,
+      )?.[0];
     expect(aptInstall).toBeDefined();
     expect(aptInstall).toContain("nftables=1.1.3-1");
   });
@@ -1082,7 +1090,7 @@ describe("sandbox provisioning: base runtime tools", () => {
       `chattr_marker=${JSON.stringify(chattrMarker)}`,
       `tmux_marker=${JSON.stringify(tmuxMarker)}`,
       'apt-mark() { printf "apt-mark %s\\n" "$*" >> "$call_log"; }',
-      'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; if [[ "$*" == *"install"* && "$*" == *"procps=2:4.0.4-9"* ]]; then touch "$ps_marker"; fi; if [[ "$*" == *"install"* && "$*" == *"e2fsprogs=1.47.2-3+b11"* ]]; then touch "$chattr_marker"; fi; if [[ "$*" == *"install"* && "$*" == *"tmux=3.5a-3"* ]]; then touch "$tmux_marker"; fi; }',
+      'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; if [[ "$*" == *"install"* && "$*" == *"procps=2:4.0.4-9"* ]]; then touch "$ps_marker"; fi; if [[ "$*" == *"install"* && "$*" == *"e2fsprogs=1.47.2-3+b12"* ]]; then touch "$chattr_marker"; fi; if [[ "$*" == *"install"* && "$*" == *"tmux=3.5a-3"* ]]; then touch "$tmux_marker"; fi; }',
       'command() { if [ "${1:-}" = "-v" ] && [ "${2:-}" = "ps" ]; then [ -f "$ps_marker" ]; elif [ "${1:-}" = "-v" ] && [ "${2:-}" = "chattr" ]; then [ -f "$chattr_marker" ]; elif [ "${1:-}" = "-v" ] && [ "${2:-}" = "tmux" ]; then [ -f "$tmux_marker" ]; else builtin command "$@"; fi; }',
       'ps() { [ -f "$ps_marker" ] || return 127; printf "procps test version\\n"; }',
       command,
@@ -1097,7 +1105,7 @@ describe("sandbox provisioning: base runtime tools", () => {
       expect(calls).toContain("apt-get autoremove --purge -y");
       expect(calls).toContain("apt-get update");
       expect(calls).toContain("apt-get install -y --no-install-recommends procps=2:4.0.4-9");
-      expect(calls).toContain("apt-get install -y --no-install-recommends e2fsprogs=1.47.2-3+b11");
+      expect(calls).toContain("apt-get install -y --no-install-recommends e2fsprogs=1.47.2-3+b12");
       expect(result.stdout).toContain("procps test version");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });

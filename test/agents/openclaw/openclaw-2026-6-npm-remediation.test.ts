@@ -15,10 +15,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildRemediatedOpenClawArchive,
+  buildRemediatedOpenClawPluginArchive,
   patchOpenClawCorePackageGraph,
   patchOpenClawPluginPackageGraph,
-} from "../scripts/lib/openclaw-npm-remediation.mts";
+} from "../../../scripts/lib/openclaw-npm-remediation.mts";
 
 const temporaryDirectories: string[] = [];
 
@@ -284,9 +284,9 @@ function writePluginArchiveFixtures(): {
       '  "view:https-proxy-agent@5.0.1:dist.tarball") value="https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz" ;;',
       '  "view:agent-base@6.0.2:dist.integrity") value="sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==" ;;',
       '  "view:agent-base@6.0.2:dist.tarball") value="https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz" ;;',
-      '  "pack:https://registry.npmjs.org/axios/-/axios-1.18.0.tgz:--pack-destination") archive="axios-1.18.0-source.tgz"; filename="axios-1.18.0.tgz"; integrity="sha512-E32NzpYKp++W7XRe52rHiXV2ehxmh3wbdgO7MHeFM+vqxLBYHzt0ElkiImtOBxtOmyp0yoC8C6uESVV84Y2/hw==" ;;',
-      '  "pack:https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz:--pack-destination") archive="https-proxy-agent-5.0.1-source.tgz"; filename="https-proxy-agent-5.0.1.tgz"; integrity="sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==" ;;',
-      '  "pack:https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz:--pack-destination") archive="agent-base-6.0.2-source.tgz"; filename="agent-base-6.0.2.tgz"; integrity="sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==" ;;',
+      '  "pack:axios@1.18.0:--pack-destination") archive="axios-1.18.0-source.tgz"; filename="axios-1.18.0.tgz"; integrity="sha512-E32NzpYKp++W7XRe52rHiXV2ehxmh3wbdgO7MHeFM+vqxLBYHzt0ElkiImtOBxtOmyp0yoC8C6uESVV84Y2/hw==" ;;',
+      '  "pack:https-proxy-agent@5.0.1:--pack-destination") archive="https-proxy-agent-5.0.1-source.tgz"; filename="https-proxy-agent-5.0.1.tgz"; integrity="sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==" ;;',
+      '  "pack:agent-base@6.0.2:--pack-destination") archive="agent-base-6.0.2-source.tgz"; filename="agent-base-6.0.2.tgz"; integrity="sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==" ;;',
       '  *) echo "unexpected npm fixture invocation: $*" >&2; exit 1 ;;',
       "esac",
       'if [ "$1" = "view" ]; then printf "%s\\n" "$value"; exit 0; fi',
@@ -384,14 +384,14 @@ describe("OpenClaw npm remediation", () => {
       bundledDependencies?: string[];
       dependencies?: Record<string, string>;
     }>(path.join(directory, "package.json"));
-    expect(packageJson.dependencies).toMatchObject({ jszip: "3.10.1", tar: "7.5.19" });
+    expect(packageJson.dependencies).toMatchObject({ jszip: "3.10.1", tar: "7.5.21" });
     expect(packageJson.bundledDependencies).toEqual(["@openclaw/fs-safe"]);
-    expect(shrinkwrap.packages[""]).toMatchObject({ dependencies: { tar: "7.5.19" } });
+    expect(shrinkwrap.packages[""]).toMatchObject({ dependencies: { tar: "7.5.21" } });
     expect(shrinkwrap.packages["node_modules/tar"]).toMatchObject({
-      version: "7.5.19",
-      resolved: "https://registry.npmjs.org/tar/-/tar-7.5.19.tgz",
+      version: "7.5.21",
+      resolved: "https://registry.npmjs.org/tar/-/tar-7.5.21.tgz",
       integrity:
-        "sha512-4LeEWl96twnS2Q7Bz4MGqgazLqO+hJN63GZxXoIqh1T3VweYD997gbU1ItNsQafqqXTXd5WFyFdReLtwvRBNiw==",
+        "sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==",
     });
     expect(shrinkwrap.packages["node_modules/@openclaw/fs-safe"]?.optionalDependencies).toBe(
       undefined,
@@ -423,7 +423,7 @@ describe("OpenClaw npm remediation", () => {
     };
     let metadataIntegrity = "";
     try {
-      buildRemediatedOpenClawArchive({
+      buildRemediatedOpenClawPluginArchive({
         ...request,
         expectedPatchedMetadataIntegrity: "sha512-deliberate-mismatch",
       });
@@ -434,7 +434,7 @@ describe("OpenClaw npm remediation", () => {
     }
     expect(metadataIntegrity).toMatch(/^sha512-/u);
 
-    const remediated = buildRemediatedOpenClawArchive({
+    const remediated = buildRemediatedOpenClawPluginArchive({
       ...request,
       expectedPatchedMetadataIntegrity: metadataIntegrity,
     });
@@ -454,7 +454,7 @@ describe("OpenClaw npm remediation", () => {
     );
     expect(packageJson).toMatchObject({
       bundledDependencies: ["@openclaw/fs-safe"],
-      dependencies: { jszip: "3.10.1", tar: "7.5.19" },
+      dependencies: { jszip: "3.10.1", tar: "7.5.21" },
     });
     expect(fsSafePackageJson.optionalDependencies).toBeUndefined();
   });
@@ -470,7 +470,7 @@ describe("OpenClaw npm remediation", () => {
     };
     let metadataIntegrity = "";
     try {
-      buildRemediatedOpenClawArchive({
+      buildRemediatedOpenClawPluginArchive({
         ...request,
         expectedPatchedMetadataIntegrity: "sha512-deliberate-mismatch",
       });
@@ -481,7 +481,7 @@ describe("OpenClaw npm remediation", () => {
     }
     expect(metadataIntegrity).toMatch(/^sha512-/u);
 
-    const remediated = buildRemediatedOpenClawArchive({
+    const remediated = buildRemediatedOpenClawPluginArchive({
       ...request,
       expectedPatchedMetadataIntegrity: metadataIntegrity,
     });

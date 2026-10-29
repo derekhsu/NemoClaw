@@ -22,8 +22,8 @@
       "category": "security"
     },
     {
-      "file": "src/lib/onboard/managed-startup-profile.test.ts",
-      "test": "classifies every stock Docker ARG as startup-affordance or deliberate exclusion",
+      "file": "src/lib/onboard/inference-providers/compatible-endpoint-gateway-route.test.ts",
+      "test": "matches the bundled local-inference host-gateway ports (#5744)",
       "category": "compatibility"
     },
     {
@@ -32,19 +32,29 @@
       "category": "compatibility"
     },
     {
-      "file": "src/lib/readiness/host.test.ts",
-      "test": "bounds and redacts successful probe text before schema validation",
+      "file": "src/lib/onboard/managed-startup-profile.test.ts",
+      "test": "classifies every stock Docker ARG as startup-affordance or deliberate exclusion",
       "category": "compatibility"
     },
     {
-      "file": "src/lib/onboard/inference-providers/compatible-endpoint-gateway-route.test.ts",
-      "test": "matches the bundled local-inference host-gateway ports (#5744)",
+      "file": "src/lib/readiness/host.test.ts",
+      "test": "bounds and redacts successful probe text before schema validation",
       "category": "compatibility"
     },
     {
       "file": "test/code-change-considerations.test.ts",
       "test": "keeps the stage-neutral questions in one concise owner",
       "category": "compatibility"
+    },
+    {
+      "file": "test/corporate-ca-build-tls-anchor.test.ts",
+      "test": "accepts the corporate CA build arg in the DCode base image before HTTPS fetches",
+      "category": "security"
+    },
+    {
+      "file": "test/corporate-ca-build-tls-anchor.test.ts",
+      "test": "copies the reviewed DCode discovery runtime without registry access",
+      "category": "security"
     },
     {
       "file": "test/corporate-ca-build-tls-anchor.test.ts",
@@ -58,17 +68,7 @@
     },
     {
       "file": "test/corporate-ca-build-tls-anchor.test.ts",
-      "test": "accepts the corporate CA build arg in the DCode base image before HTTPS fetches",
-      "category": "security"
-    },
-    {
-      "file": "test/corporate-ca-build-tls-anchor.test.ts",
       "test": "decodes the corporate CA again in the DCode final image",
-      "category": "security"
-    },
-    {
-      "file": "test/corporate-ca-build-tls-anchor.test.ts",
-      "test": "copies the reviewed DCode discovery runtime without registry access",
       "category": "security"
     },
     {
@@ -94,11 +94,6 @@
     {
       "file": "test/e2e/support/dockerhub-auth-workflow-boundary.test.ts",
       "test": "binds the composite action and helper to their immutable reviewed revision (#6961)",
-      "category": "security"
-    },
-    {
-      "file": "test/e2e/support/e2e-host-dependency-workflow-boundary.test.ts",
-      "test": "binds the host-dependency action and helper to their immutable reviewed revision (#6961)",
       "category": "security"
     },
     {
@@ -140,6 +135,11 @@
       "file": "test/e2e/support/e2e-expected-state.test.ts",
       "test": "resolves every state id consumed by the typed target registry",
       "category": "compatibility"
+    },
+    {
+      "file": "test/e2e/support/e2e-host-dependency-workflow-boundary.test.ts",
+      "test": "binds the host-dependency action and helper to their immutable reviewed revision (#6961)",
+      "category": "security"
     },
     {
       "file": "test/e2e/support/e2e-live-project-config.test.ts",
@@ -232,14 +232,9 @@
       "category": "security"
     },
     {
-      "file": "test/fetch-guard-patch-regression.test.ts",
-      "test": "requires classifier review and integrity evidence when the OpenClaw build pin changes",
+      "file": "test/growth-guardrails-workflow-boundary.test.ts",
+      "test": "flags %s",
       "category": "security"
-    },
-    {
-      "file": "test/hermes-final-image-layout.test.ts",
-      "test": "uses grouped legacy-compatible payload layers at their cache boundaries (#7611)",
-      "category": "compatibility"
     },
     {
       "file": "test/hermes-final-image-layout.test.ts",
@@ -248,22 +243,22 @@
     },
     {
       "file": "test/hermes-final-image-layout.test.ts",
-      "test": "verifies CLI adapter integrity before executing its validator",
-      "category": "security"
-    },
-    {
-      "file": "test/openclaw-final-image-layout.test.ts",
       "test": "uses grouped legacy-compatible payload layers at their cache boundaries (#7611)",
       "category": "compatibility"
     },
     {
-      "file": "test/hermes-runtime-config-guard-topology.test.ts",
-      "test": "restores exact locked posture after root-separated repair and later failure (#7033)",
+      "file": "test/hermes-final-image-layout.test.ts",
+      "test": "verifies CLI adapter integrity before executing its validator",
       "category": "security"
     },
     {
       "file": "test/hermes-runtime-config-guard-topology.test.ts",
       "test": "allows the sandbox identity to create runtime state but refuses sealed configuration writes, unlinks, and renames (#7865)",
+      "category": "security"
+    },
+    {
+      "file": "test/hermes-runtime-config-guard-topology.test.ts",
+      "test": "restores exact locked posture after root-separated repair and later failure (#7033)",
       "category": "security"
     },
     {
@@ -282,14 +277,9 @@
       "category": "security"
     },
     {
-      "file": "test/messaging-image-env-contract.test.ts",
-      "test": "%s keeps the full plan in build processes but not final runtime environments (#5896)",
-      "category": "security"
-    },
-    {
-      "file": "test/mcp-tool-discovery-image-contract.test.ts",
-      "test": "pins reviewed packages and audits their lock outside image builds (#8253)",
-      "category": "security"
+      "file": "test/mcp-openshell-workflow.test.ts",
+      "test": "keeps the setup docs aligned with the stable default",
+      "category": "compatibility"
     },
     {
       "file": "test/mcp-tool-discovery-image-contract.test.ts",
@@ -297,18 +287,13 @@
       "category": "compatibility"
     },
     {
-      "file": "test/mcp-openshell-workflow.test.ts",
-      "test": "keeps the setup docs aligned with the stable default",
-      "category": "compatibility"
-    },
-    {
-      "file": "test/openshell-0.0.101-migration-review.test.ts",
-      "test": "binds the newly generated credential manifest to reviewed source identities (#8599)",
+      "file": "test/mcp-tool-discovery-image-contract.test.ts",
+      "test": "pins reviewed packages and audits their lock outside image builds (#8253)",
       "category": "security"
     },
     {
-      "file": "test/openshell-0.0.99-migration-review.test.ts",
-      "test": "associates every reviewed release identity with the 0.0.99 manifest (#8497)",
+      "file": "test/messaging-image-env-contract.test.ts",
+      "test": "%s keeps the full plan in build processes but not final runtime environments (#5896)",
       "category": "security"
     },
     {
@@ -332,29 +317,14 @@
       "category": "compatibility"
     },
     {
-      "file": "test/openclaw-2026-6-npm-remediation.test.ts",
-      "test": "rebuilds a guarded core archive with the patched fs-safe package bundled",
-      "category": "security"
-    },
-    {
-      "file": "test/openclaw-2026-6-npm-remediation.test.ts",
-      "test": "rebuilds a guarded plugin archive with the patched Axios graph bundled",
-      "category": "security"
-    },
-    {
-      "file": "test/openclaw-2026-6-npm-remediation.test.ts",
-      "test": "replaces the reviewed bundled Axios graph with the patched graph",
-      "category": "security"
-    },
-    {
-      "file": "test/openclaw-2026-6-npm-remediation.test.ts",
-      "test": "replaces the reviewed OpenClaw core tar and brace-expansion graph",
-      "category": "security"
-    },
-    {
       "file": "test/openclaw-dependency-review.test.ts",
       "test": "copies the legacy OpenClaw remediation helper before the base build invokes it",
       "category": "security"
+    },
+    {
+      "file": "test/openclaw-final-image-layout.test.ts",
+      "test": "uses grouped legacy-compatible payload layers at their cache boundaries (#7611)",
+      "category": "compatibility"
     },
     {
       "file": "test/openclaw-lifecycle-policy.test.ts",
@@ -392,8 +362,38 @@
       "category": "security"
     },
     {
+      "file": "test/openclaw-locked-install.test.ts",
+      "test": "verifies %s through the configured CI audit inventory",
+      "category": "security"
+    },
+    {
+      "file": "test/openclaw-real-patched-dist-harness.test.ts",
+      "test": "accepts an explicit absolute Node runtime in the reviewed production lane",
+      "category": "security"
+    },
+    {
+      "file": "test/openclaw-real-patched-dist-harness.test.ts",
+      "test": "rejects an unsupported explicit real-dist Node runtime before OpenClaw starts",
+      "category": "security"
+    },
+    {
+      "file": "test/openshell-0.0.101-migration-review.test.ts",
+      "test": "binds the newly generated credential manifest to reviewed source identities (#8599)",
+      "category": "security"
+    },
+    {
+      "file": "test/openshell-0.0.99-migration-review.test.ts",
+      "test": "associates every reviewed release identity with the 0.0.99 manifest (#8497)",
+      "category": "security"
+    },
+    {
+      "file": "test/package-contract/msteams-message-hints-preload.test.ts",
+      "test": "requires package-shape re-review when the repository OpenClaw pin changes",
+      "category": "security"
+    },
+    {
       "file": "test/platform-vitest-main-workflow.test.ts",
-      "test": "pins and verifies the Node.js archive in the trusted WSL helper",
+      "test": "keeps the WSL suite unprivileged with explicit root-only contracts",
       "category": "security"
     },
     {
@@ -403,7 +403,7 @@
     },
     {
       "file": "test/platform-vitest-main-workflow.test.ts",
-      "test": "keeps the WSL suite unprivileged with explicit root-only contracts",
+      "test": "pins and verifies the Node.js archive in the trusted WSL helper",
       "category": "security"
     },
     {
@@ -462,41 +462,6 @@
       "category": "security"
     },
     {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "keeps migrated provider identities and implementations behind the one bundle composition",
-      "category": "compatibility"
-    },
-    {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "activates Docker llama.cpp only through its durable lifecycle controller (#8433)",
-      "category": "security"
-    },
-    {
-      "file": "test/source-architecture.test.ts",
-      "test": "keeps removed step mutation APIs out of production source (#7703)",
-      "category": "compatibility"
-    },
-    {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "keeps the dormant managed-bootstrap protocol driver-neutral",
-      "category": "security"
-    },
-    {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "keeps central activation paths disconnected from driver bootstrap adapters",
-      "category": "security"
-    },
-    {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "composes Docker bootstrap locally while keeping Kubernetes unsupported",
-      "category": "security"
-    },
-    {
-      "file": "test/runtime-provider-source-shape.test.ts",
-      "test": "packages the dormant managed-bootstrap native boundary for every agent image",
-      "category": "security"
-    },
-    {
       "file": "test/release-latest-tag-workflow.test.ts",
       "test": "binds latest promotion to the exact GitHub-verified tag object",
       "category": "security"
@@ -525,6 +490,41 @@
       "file": "test/runner.test.ts",
       "test": "walkthrough.sh does not embed NVIDIA_INFERENCE_API_KEY in tmux or sandbox commands",
       "category": "security"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "activates Docker llama.cpp only through its durable lifecycle controller (#8433)",
+      "category": "security"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "composes Docker bootstrap locally while keeping Kubernetes unsupported",
+      "category": "security"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "keeps central activation paths disconnected from driver bootstrap adapters",
+      "category": "security"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "keeps migrated provider identities and implementations behind the one bundle composition",
+      "category": "compatibility"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "keeps the dormant managed-bootstrap protocol driver-neutral",
+      "category": "security"
+    },
+    {
+      "file": "test/runtime-provider-source-shape.test.ts",
+      "test": "packages the dormant managed-bootstrap native boundary for every agent image",
+      "category": "security"
+    },
+    {
+      "file": "test/source-architecture.test.ts",
+      "test": "keeps removed step mutation APIs out of production source (#7703)",
+      "category": "compatibility"
     },
     {
       "file": "test/starter-prompt-docs.test.ts",
@@ -563,13 +563,13 @@
     },
     {
       "file": "test/vitest-temp-root.test.ts",
-      "test": "wires cleanup into root and standalone plugin test runs",
-      "category": "compatibility"
+      "test": "isolates stateful non-live projects without redirecting live E2E state",
+      "category": "security"
     },
     {
       "file": "test/vitest-temp-root.test.ts",
-      "test": "isolates stateful non-live projects without redirecting live E2E state",
-      "category": "security"
+      "test": "wires cleanup into root and standalone plugin test runs",
+      "category": "compatibility"
     },
     {
       "file": "test/vitest-watch-triggers.test.ts",
@@ -577,18 +577,43 @@
       "category": "compatibility"
     },
     {
-      "file": "test/growth-guardrails-workflow-boundary.test.ts",
-      "test": "flags %s",
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed bundled Axios graph with the patched graph",
       "category": "security"
     },
     {
-      "file": "test/openclaw-real-patched-dist-harness.test.ts",
-      "test": "accepts an explicit absolute Node runtime in the reviewed production lane",
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces only the reviewed Slack bundled proxy-addr package",
       "category": "security"
     },
     {
-      "file": "test/openclaw-real-patched-dist-harness.test.ts",
-      "test": "rejects an unsupported explicit real-dist Node runtime before OpenClaw starts",
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed Jaeger propagator with its aligned patched core",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-npm-remediation.test.ts",
+      "test": "replaces the reviewed OpenClaw Discord undici dependency",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "rebuilds a guarded core archive with the patched fs-safe package bundled",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "rebuilds a guarded plugin archive with the patched Axios graph bundled",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "replaces the reviewed bundled Axios graph with the patched graph",
+      "category": "security"
+    },
+    {
+      "file": "test/agents/openclaw/openclaw-2026-6-npm-remediation.test.ts",
+      "test": "replaces the reviewed OpenClaw core tar and brace-expansion graph",
       "category": "security"
     },
     {

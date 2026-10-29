@@ -18,6 +18,54 @@ const MANAGED_BASE_DOCKERFILES = [
 ] as const;
 const fixtures: string[] = [];
 
+type RuntimeToolsFixture = "valid" | "missing-setpriv" | "gosu-present";
+
+function runtimeToolsEndMarker(dockerfile: string): string {
+  return dockerfile === MANAGED_BASE_DOCKERFILES[2]
+    ? "COPY src/lib/agent/deep-agents-code-runtime-identity.json"
+    : "RUN groupadd";
+}
+
+function writeSetprivFixture(setpriv: string) {
+  fs.writeFileSync(setpriv, "#!/usr/bin/env bash\nprintf 'setpriv fixture\\n'\n", {
+    mode: 0o755,
+  });
+}
+
+const RUNTIME_TOOLS_FIXTURES: Record<
+  RuntimeToolsFixture,
+  (setpriv: string, fakeBin: string) => void
+> = {
+  valid: (setpriv) => writeSetprivFixture(setpriv),
+  "missing-setpriv": () => undefined,
+  "gosu-present": (setpriv, fakeBin) => {
+    writeSetprivFixture(setpriv);
+    fs.writeFileSync(path.join(fakeBin, "gosu"), "#!/usr/bin/env bash\nexit 0\n", {
+      mode: 0o755,
+    });
+  },
+};
+
+function runRuntimeToolsContract(dockerfile: string, fixture: RuntimeToolsFixture) {
+  const source = fs.readFileSync(dockerfile, "utf-8");
+  const runtimeContract = dockerRunCommandBetween(
+    source,
+    "# setpriv runtime contract",
+    runtimeToolsEndMarker(dockerfile),
+  );
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-runtime-tools-"));
+  fixtures.push(tmp);
+  const fakeBin = path.join(tmp, "bin");
+  const setpriv = path.join(tmp, "usr", "bin", "setpriv");
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.mkdirSync(path.dirname(setpriv), { recursive: true });
+  fs.symlinkSync("/bin/bash", path.join(fakeBin, "bash"));
+  RUNTIME_TOOLS_FIXTURES[fixture](setpriv, fakeBin);
+  return runLoggedDockerShell(runtimeContract.replaceAll("/usr/bin/setpriv", setpriv), tmp, [], {
+    env: { PATH: fakeBin },
+  }).result;
+}
+
 function runBaseAptLayer(prefix: string) {
   const source = fs.readFileSync(DOCKERFILE_BASE, "utf-8");
   const completedStage = source.lastIndexOf("\nFROM ");
@@ -34,6 +82,7 @@ function runBaseAptLayer(prefix: string) {
   fs.mkdirSync(nativeSecurityDebs);
   fs.mkdirSync(path.dirname(fakePythonLink), { recursive: true });
   fs.writeFileSync(path.join(nativeSecurityDebs, "libssh2-1t64.deb"), "fixed libssh2");
+  fs.writeFileSync(path.join(nativeSecurityDebs, "zlib1g.deb"), "fixed zlib");
   fs.writeFileSync(
     path.join(nativeSecurityDebs, "nemoclaw-python3.13-htmlparser-fix.deb"),
     "fixed parser package",
@@ -73,11 +122,44 @@ afterEach(() => {
 describe("sandbox base runtime tools", () => {
   it.each(
     MANAGED_BASE_DOCKERFILES,
-  )("%s explicitly installs setpriv through pinned util-linux without gosu", (dockerfile) => {
+  )("%s declares the setpriv and gosu build contract (#8805)", (dockerfile) => {
     const source = fs.readFileSync(dockerfile, "utf-8");
+    const runtimeContract = dockerRunCommandBetween(
+      source,
+      "# setpriv runtime contract",
+      runtimeToolsEndMarker(dockerfile),
+    );
 
-    expect(source).toContain("util-linux=2.41-5");
-    expect(source).not.toMatch(/\bgosu\b/u);
+    expect(source).toContain("util-linux=2.41.5-0+deb13u1");
+    expect(runtimeContract).toContain("test -x /usr/bin/setpriv");
+    expect(runtimeContract).toContain("/usr/bin/setpriv --version");
+    expect(runtimeContract).toContain("! command -v gosu");
+  });
+
+  it.each(
+    MANAGED_BASE_DOCKERFILES,
+  )("%s accepts executable setpriv when gosu is absent (#8805)", (dockerfile) => {
+    const result = runRuntimeToolsContract(dockerfile, "valid");
+
+    expect({ status: result.status, stderr: result.stderr }).toEqual({
+      status: 0,
+      stderr: "",
+    });
+    expect(result.stdout).toContain("setpriv fixture");
+  });
+
+  it.each(
+    MANAGED_BASE_DOCKERFILES,
+  )("%s rejects a missing setpriv executable (#8805)", (dockerfile) => {
+    const result = runRuntimeToolsContract(dockerfile, "missing-setpriv");
+
+    expect(result.status).not.toBe(0);
+  });
+
+  it.each(MANAGED_BASE_DOCKERFILES)("%s rejects gosu on PATH (#8805)", (dockerfile) => {
+    const result = runRuntimeToolsContract(dockerfile, "gosu-present");
+
+    expect(result.status).not.toBe(0);
   });
 
   it("installs the required process, filesystem, and SFTP tools", () => {
@@ -85,8 +167,9 @@ describe("sandbox base runtime tools", () => {
 
     expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
     expect(calls).toContain("procps=2:4.0.4-9");
-    expect(calls).toContain("util-linux=2.41-5");
-    expect(calls).toContain("e2fsprogs=1.47.2-3+b11");
+    expect(calls).toContain("util-linux=2.41.5-0+deb13u1");
+    expect(calls).toContain("e2fsprogs=1.47.2-3+b12");
+    expect(calls).toContain("lsof=4.99.4+dfsg-2");
     expect(calls).toContain("openssh-sftp-server=1:10.0p1-7+deb13u4");
   });
 

@@ -270,6 +270,7 @@ If the command trace contains no reviewer-request write, report the event as an 
 
 ### Gotchas
 
+- This checkout is a fork (`derekhsu/NemoClaw`), not `NVIDIA/NemoClaw`. Workflow and build changes must never publish artifacts to NVIDIA-owned destinations (`ghcr.io/nvidia/*`, NVIDIA-only upload endpoints) or push to the upstream repository. Fork-context CI jobs must skip or fork-scope any publication, coverage upload, or registry push step.
 - `npm install` at root triggers `prek install` which sets up git hooks. If hooks fail, check that `core.hooksPath` is unset: `git config --unset core.hooksPath`
 - The `nemoclaw/` subdirectory has its own `package.json` and `node_modules`, while sharing the root Biome config — it's a separate npm project
 - SPDX headers are auto-inserted by pre-commit hooks; don't worry about adding them manually

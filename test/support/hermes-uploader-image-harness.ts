@@ -92,7 +92,9 @@ os.execv('/usr/bin/find', ['find', *args])
     // The image probe uses -I, so a fixture wrapper installs its dependency
     // doubles explicitly rather than relying on PYTHONPATH's isolated behavior.
     const python = path.join(bin, "python3");
-    const hostPython = spawnSync("which", ["python3"], { encoding: "utf8" }).stdout.trim();
+    const hostPython = spawnSync("python3", ["-c", "import sys;print(sys.executable)"], {
+      encoding: "utf8",
+    }).stdout.trim();
     fs.writeFileSync(
       python,
       `#!/bin/sh

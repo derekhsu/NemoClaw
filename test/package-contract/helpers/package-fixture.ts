@@ -10,16 +10,20 @@ const REPOSITORY_ROOT = path.join(import.meta.dirname, "..", "..", "..");
 export function createPackageFixture(options: {
   readonly prefix: string;
   readonly entries: readonly string[];
+  readonly omitDevDependencies?: boolean;
 }): string {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), options.prefix));
   const packageJson = JSON.parse(
     readFileSync(path.join(REPOSITORY_ROOT, "package.json"), "utf8"),
-  ) as { scripts?: Record<string, string> };
+  ) as { scripts?: Record<string, string>; devDependencies?: Record<string, string> };
 
   // npm runs `prepare` when it packs a local directory, even with
   // `--ignore-scripts`. Remove package scripts so parallel package-contract
   // workers only read the copied package inputs.
   packageJson.scripts = {};
+  if (options.omitDevDependencies) {
+    delete packageJson.devDependencies;
+  }
   writeFileSync(
     path.join(fixtureRoot, "package.json"),
     `${JSON.stringify(packageJson, null, 2)}\n`,

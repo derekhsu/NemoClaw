@@ -27,14 +27,16 @@ const finalDockerfiles = [
 ] as const;
 const copyInstruction =
   "COPY scripts/lib/patch-bundled-npm-ip-address.mts /scripts/lib/patch-bundled-npm-ip-address.mts";
-const patchCommand =
-  "node --experimental-strip-types /scripts/lib/patch-bundled-npm-ip-address.mts";
+const baseNodePrefix = "node";
+const finalNodePrefix = "node --experimental-strip-types";
+const patchCommand = `${finalNodePrefix} /scripts/lib/patch-bundled-npm-ip-address.mts`;
+const basePatchCommand = `${baseNodePrefix} /scripts/lib/patch-bundled-npm-ip-address.mts`;
 const npmRootArguments = ["--npm-root", "/usr/local/lib/node_modules/npm"] as const;
 
 describe("bundled npm ip-address image remediation contract", () => {
   it("binds the replacement to the reviewed npm and registry artifact", () => {
     expect(REVIEWED_NPM_VERSION).toBe(UPGRADED_NPM_VERSION);
-    expect(REVIEWED_NPM_VERSION).toBe("11.18.0");
+    expect(REVIEWED_NPM_VERSION).toBe("12.0.2");
     expect(FIXED_IP_ADDRESS_VERSION).toBe("10.3.1");
     expect(FIXED_IP_ADDRESS_INTEGRITY).toBe(
       "sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==",
@@ -49,10 +51,14 @@ describe("bundled npm ip-address image remediation contract", () => {
     const copy = source.indexOf(copyInstruction);
     const upgrade = requireSingleReviewedDockerfileRunCommand(
       source,
-      "node --experimental-strip-types /scripts/upgrade-bundled-npm.mts",
+      `${baseNodePrefix} /scripts/upgrade-bundled-npm.mts`,
       npmRootArguments,
     ).commandStart;
-    const patch = requireSingleReviewedDockerfileRunCommand(source, patchCommand, npmRootArguments);
+    const patch = requireSingleReviewedDockerfileRunCommand(
+      source,
+      basePatchCommand,
+      npmRootArguments,
+    );
 
     expect(copy, file).toBeGreaterThanOrEqual(0);
     expect(upgrade, file).toBeGreaterThan(copy);

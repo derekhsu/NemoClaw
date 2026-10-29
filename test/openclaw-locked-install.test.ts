@@ -19,12 +19,11 @@ const PACKAGE_SPEC = "openclaw@2026.9.2";
 const INTEGRITY =
   "sha512-M6C7UsnX815nv26qBJFYGe6aGzv+ftZLRzV6S9oRXUtXg2Yn67eVntpssT94kgkquKVSeUxerUg0j1ONp4WYQg==";
 const TARBALL = "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.2.tgz";
-const LOCK_SHA256 = "31734b077d02076ab3b38fd43ba5d686543d3dccb8f0c4c8f741d905c19ce826";
+const LOCK_SHA256 = "154229a557bdff54be02e8ecd7c06f0355b6c11aa7efab8aa5443dcfb24e928a";
 const MCPORTER_PACKAGE_SPEC = "mcporter@0.7.3";
-const MCPORTER_LOCK_SHA256 = "3c81d752d50113a2781b2aa1e8f1faade088f6fe3ed0bdde6ad0fb67a364f958";
-const MCP_TOOL_DISCOVERY_PACKAGE_SPEC = "@modelcontextprotocol/sdk@1.30.0";
+const MCPORTER_LOCK_SHA256 = "c24649f412f19bebfed29bda9f0b17f714fb4834ff76d06ef97e792952c33ebd";
 const MCP_TOOL_DISCOVERY_LOCK_SHA256 =
-  "bc7e34d9eb1f72cf3016c8b88c72d3b7682a4f234903cb93b9476b10d7e954eb";
+  "a055cc6630c19809d3b359dc464ca5684fe86e0155fde2be3cd89e3f436ae679";
 const roots: string[] = [];
 
 function sha256(file: string): string {
@@ -180,8 +179,69 @@ describe("locked OpenClaw production installation (#5896)", () => {
     expect(verified).toContain("brace-expansion@5.0.12");
     expect(verified).toContain("fast-uri@3.1.7");
     expect(verified).toContain("ip-address@10.7.4");
-    expect(verified).toContain("undici@8.10.2");
+    expect(verified).toContain("undici@8.12.2");
+    expect(verified).toContain("@modelcontextprotocol/sdk@1.32.0");
+    expect(verified).toContain("body-parser@2.4.0");
+    expect(verified).toContain("zod@4.6.6");
     expect(sha256(LOCKFILE)).toBe(LOCK_SHA256);
+  });
+
+  it("verifies the patched mcporter closure against its reviewed root artifact", () => {
+    const verified = verifyReviewedNpmLock(
+      {
+        expectedIntegrity:
+          "sha512-egoPVYqTnWb3NjRIxo+xc8OrAI0dlPrJm9pAiZx0pImuNIV5rKhGtTnIfH/Y1ldGPVu74ibj3KR5c9U/QSdQFA==",
+        expectedLockSha256: MCPORTER_LOCK_SHA256,
+        label: "mcporter patched production graph",
+        lockfilePath: path.join(
+          REPO_ROOT,
+          "agents",
+          "openclaw",
+          "mcporter-runtime",
+          "package-lock.json",
+        ),
+        packageSpec: MCPORTER_PACKAGE_SPEC,
+        registryOrigin: "https://registry.npmjs.org/",
+        tarballUrl: "https://registry.npmjs.org/mcporter/-/mcporter-0.7.3.tgz",
+      },
+      reviewedMetadata,
+    );
+    expect(verified).toContain(MCPORTER_PACKAGE_SPEC);
+    expect(verified).toContain("@modelcontextprotocol/sdk@1.32.0");
+    expect(verified).toContain("body-parser@2.4.0");
+    expect(verified).toContain("zod@4.6.6");
+  });
+
+  // source-shape-contract: security -- The reviewed CI audit inventory must stay bound to the exact shipped runtime lock digests
+  it.each([
+    "openclaw-runtime",
+    "mcporter-runtime",
+    "wechat-runtime",
+  ])("verifies %s through the configured CI audit inventory", (graphId) => {
+    const config = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "ci", "reviewed-npm-audit.json"), "utf8"),
+    );
+    const graph = config.lockedGraphs.find((entry: { id: string }) => entry.id === graphId);
+    const lockfilePath = path.join(REPO_ROOT, graph.directory, "package-lock.json");
+    const reviewedDigests: string[] = [graph.lockSha256, graph.replacementLockSha256].filter(
+      Boolean,
+    );
+    const expectedLockSha256 = sha256(lockfilePath);
+    expect(reviewedDigests).toContain(expectedLockSha256);
+    expect(() =>
+      verifyReviewedNpmLock(
+        {
+          expectedIntegrity: graph.integrity,
+          expectedLockSha256,
+          label: graph.label,
+          lockfilePath,
+          packageSpec: graph.packageSpec,
+          registryOrigin: config.registryOrigin,
+          tarballUrl: graph.tarballUrl,
+        },
+        reviewedMetadata,
+      ),
+    ).not.toThrow();
   });
 
   // source-shape-contract: security -- The committed production lock digest must fail before any registry-controlled metadata is consulted
@@ -312,13 +372,13 @@ describe("locked OpenClaw production installation (#5896)", () => {
 
   // source-shape-contract: compatibility -- Both shipped Dockerfiles must preserve the reviewed lock verification and installation sequence
   it.each([
-    "Dockerfile",
-    "Dockerfile.base",
-  ])("invokes the locked installer before exposing OpenClaw in %s", (dockerfileName) => {
+    ["Dockerfile", "node"],
+    ["Dockerfile.base", "node"],
+  ])("invokes the locked installer before exposing OpenClaw in %s", (dockerfileName, nodePrefix) => {
     const contents = fs.readFileSync(path.join(REPO_ROOT, dockerfileName), "utf-8");
     const flattenedContents = contents.replace(/\\\s*\n/g, " ").replace(/\s+/g, " ");
     const verifyIndex = contents.indexOf(
-      "node --experimental-strip-types /scripts/lib/reviewed-npm-archive.mts --verify-lock",
+      `${nodePrefix} /scripts/lib/reviewed-npm-archive.mts --verify-lock`,
     );
     const installIndex = contents.indexOf(
       "npm --prefix /usr/local/lib/nemoclaw/openclaw-runtime ci",
@@ -356,7 +416,7 @@ describe("locked OpenClaw production installation (#5896)", () => {
     expect(branchEnd).toBeGreaterThan(installIndex);
     expect(currentInstallBranch).toContain(`--lock-sha256 \"$OPENCLAW_LOCK_SHA256\"`);
     expect(currentInstallBranch).not.toContain("npm install -g");
-    expect(contents).toContain("'schema=3'");
+    expect(contents).toContain("'schema=4'");
     expect(contents).toContain('"lock-sha256=${OPENCLAW_LOCK_SHA256}"');
     expect(contents).toContain("locked-ci+reviewed-lifecycle-v2");
   });

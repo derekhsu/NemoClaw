@@ -32,12 +32,13 @@ function writePackage(root: string, location: string, name: string, version: str
   writeJson(path.join(root, "node_modules", location, "package.json"), { name, version });
 }
 
-function affectedNpm(version: "10.9.8" | "11.13.0" | "11.16.0"): string {
+function affectedNpm(version: "10.9.8" | "11.13.0" | "11.16.0" | "11.18.0" | "11.19.1"): string {
   const root = path.join(temporaryDirectory(), "npm");
   writeJson(path.join(root, "package.json"), { name: "npm", version });
   writePackage(root, "brace-expansion", "brace-expansion", "2.0.2");
   writePackage(root, "picomatch", "picomatch", "4.0.3");
   writePackage(root, "sigstore", "sigstore", version === "10.9.8" ? "3.1.0" : "4.0.0");
+  writePackage(root, "ip-address", "ip-address", "10.1.0");
   writePackage(root, "tar", "tar", "7.5.20");
   return root;
 }
@@ -55,6 +56,7 @@ function reviewedNpm(): string {
     "brace-expansion",
     REVIEWED_NPM_PACKAGES["brace-expansion"],
   );
+  writePackage(root, "ip-address", "ip-address", REVIEWED_NPM_PACKAGES["ip-address"]);
   writePackage(
     root,
     path.join("tinyglobby", "node_modules", "picomatch"),
@@ -83,6 +85,7 @@ describe("reviewed bundled npm upgrade", () => {
       npmVersion: REVIEWED_NPM_VERSION,
       packages: {
         "brace-expansion": [REVIEWED_NPM_PACKAGES["brace-expansion"]],
+        "ip-address": [REVIEWED_NPM_PACKAGES["ip-address"]],
         picomatch: [REVIEWED_NPM_PACKAGES.picomatch],
         sigstore: [REVIEWED_NPM_PACKAGES.sigstore],
         tar: [REVIEWED_NPM_PACKAGES.tar],
@@ -94,6 +97,8 @@ describe("reviewed bundled npm upgrade", () => {
     "10.9.8",
     "11.13.0",
     "11.16.0",
+    "11.18.0",
+    "11.19.1",
   ] as const)("replaces npm %s before running npm or npx", (version) => {
     const npmRoot = affectedNpm(version);
     const replacementRoot = reviewedNpm();
@@ -146,7 +151,7 @@ describe("reviewed bundled npm upgrade", () => {
   it("fails closed on reviewed-package drift", () => {
     const drifted = reviewedNpm();
     writePackage(drifted, "sigstore", "sigstore", "4.1.0");
-    expect(() => verifyReviewedNpm(drifted)).toThrow("expected only 4.1.1");
+    expect(() => verifyReviewedNpm(drifted)).toThrow("expected only 5.0.0");
   });
 
   it("fails closed on an unreviewed current npm version", () => {

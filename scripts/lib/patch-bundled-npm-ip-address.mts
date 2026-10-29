@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants,
   cpSync,
@@ -30,7 +31,7 @@ export const FIXED_IP_ADDRESS_INTEGRITY =
   "sha512-1e9d3kb97NHJTIJDZW9rKqW2h6+dFa50Dy0fpPSMQp2ADje5gvKsXmdiK6dwY5t76TaTt5+P5N1Y/LoToIxP6g==";
 export const FIXED_IP_ADDRESS_TARBALL =
   "https://registry.npmjs.org/ip-address/-/ip-address-10.3.1.tgz";
-export const REVIEWED_NPM_VERSION = "11.18.0";
+export const REVIEWED_NPM_VERSION = "12.0.2";
 
 const REVIEWED_IP_ADDRESS_VERSIONS = new Set([
   AFFECTED_IP_ADDRESS_VERSION,
@@ -235,9 +236,11 @@ export function patchBundledNpmIpAddress(options: {
   }
 
   const current = inspectBundledNpmIpAddress(npmRoot);
-  if (current.state === "fixed") return current;
-
   const livePath = join(npmRoot, "node_modules", "ip-address");
+  if (current.state === "fixed") {
+    chmodSync(realDirectory(livePath, "npm bundled ip-address root"), 0o755);
+    return current;
+  }
   const transactionId = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const stagingRoot = mkdtempSync(join(dirname(livePath), ".ip-address.nemoclaw-stage-"));
   const stagedPath = join(stagingRoot, "replacement");
@@ -245,6 +248,8 @@ export function patchBundledNpmIpAddress(options: {
   let rollbackRequired = false;
   try {
     cpSync(replacementRoot, stagedPath, { dereference: false, recursive: true });
+    // The transaction stays private; its installed package must be readable by the sandbox.
+    chmodSync(stagedPath, 0o755);
     cpSync(livePath, backupPath, {
       dereference: false,
       errorOnExist: true,
@@ -365,6 +370,10 @@ export function patchBundledNpmIpAddressFromRegistry(
   const commandRunner = dependencies.commandRunner ?? run;
   const current = inspectBundledNpmIpAddress(npmRoot);
   if (current.state === "fixed") {
+    chmodSync(
+      realDirectory(join(npmRoot, "node_modules", "ip-address"), "npm bundled ip-address root"),
+      0o755,
+    );
     commandRunner("npm", ["--version"]);
     commandRunner("npx", ["--version"]);
     return current;

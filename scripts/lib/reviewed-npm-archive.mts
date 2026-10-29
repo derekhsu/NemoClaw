@@ -68,6 +68,53 @@ export type ReviewedNpmArchive = Readonly<{
 
 type NpmRunner = (args: readonly string[], request: ReviewedNpmArchiveRequest) => string;
 
+export function singleNpmPackResult(value: unknown): Record<string, unknown> | undefined {
+  const entries = Array.isArray(value)
+    ? value
+    : typeof value === "object" && value !== null
+      ? Object.values(value)
+      : [];
+  const entry = entries.length === 1 ? entries[0] : undefined;
+  return typeof entry === "object" && entry !== null
+    ? (entry as Record<string, unknown>)
+    : undefined;
+}
+
+const KNOWN_NPM_ERROR_CODES = new Set(
+  "ENOTCACHED EALLOWREMOTE EALLOWGIT ERESOLVE ETARGET E404 E403 E401 EINTEGRITY EBADPLATFORM EACCES EPERM ENOENT ENOSPC ETIMEDOUT".split(
+    " ",
+  ),
+);
+
+function emitReviewedNpmDiagnostic(
+  args: readonly string[],
+  result: ReturnType<typeof spawnSync>,
+): void {
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const npmCodes = [...output.matchAll(/\bnpm (?:ERR!|error) code (E[A-Z0-9_]+)\b/g)]
+    .map((match) => match[1]!)
+    .filter((code) => KNOWN_NPM_ERROR_CODES.has(code));
+  const registryPaths = [
+    ...output.matchAll(/https:\/\/registry\.npmjs\.org(\/[@a-zA-Z0-9%._/-]+)/g),
+  ]
+    .map((match) => match[1]!)
+    .filter((value) => value.length <= 250);
+  // Emit only fixed status fields and public registry paths. Child output can
+  // contain credentials or configuration and must never be printed verbatim.
+  console.error(
+    `Reviewed npm command diagnostic: ${JSON.stringify({
+      command: "npm",
+      args: [args[0], args[1]],
+      exitCode: result.status,
+      signal: result.signal,
+      errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code ?? null,
+      npmCodes: [...new Set(npmCodes)],
+      timedOut: /\b(?:timed out|ETIMEDOUT|termination (?:no-output-)?timeout)\b/i.test(output),
+      registryPaths: [...new Set(registryPaths)].slice(0, 8),
+    })}`,
+  );
+}
+
 function runNpm(args: readonly string[], request: ReviewedNpmArchiveRequest): string {
   const result = spawnSync(request.npmExecutable ?? "npm", args, {
     encoding: "utf-8",
@@ -75,6 +122,7 @@ function runNpm(args: readonly string[], request: ReviewedNpmArchiveRequest): st
     maxBuffer: NPM_OUTPUT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (result.error || result.status !== 0) emitReviewedNpmDiagnostic(args, result);
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const detail = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
@@ -161,7 +209,7 @@ export function packReviewedNpmArchive(
   );
   try {
     const packJson = npmRunner(
-      ["pack", request.tarballUrl, "--pack-destination", rootDirectory, "--json"],
+      ["pack", request.packageSpec, "--pack-destination", rootDirectory, "--json"],
       request,
     );
     let parsed: unknown;
@@ -170,7 +218,7 @@ export function packReviewedNpmArchive(
     } catch (error) {
       throw new Error(`npm pack ${request.packageSpec} did not return JSON: ${String(error)}`);
     }
-    const entry = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : undefined;
+    const entry = singleNpmPackResult(parsed);
     const filename =
       typeof entry === "object" && entry !== null && "filename" in entry
         ? String(entry.filename ?? "")
@@ -435,6 +483,31 @@ function readReviewedLockPackages(
     const record = value as Record<string, unknown>;
     assertNotProductionDev(productionLocations, location, record);
     if (omitDev && record.dev === true) continue;
+    if (record.inBundle === true) {
+      // Hoisted bundled dependencies belong to the enclosing verified tarball,
+      // not to separately fetched registry archives.
+      let ownerLocation = location;
+      let owner: Record<string, unknown> | undefined;
+      while (ownerLocation.includes("/node_modules/")) {
+        ownerLocation = ownerLocation.slice(0, ownerLocation.lastIndexOf("/node_modules/"));
+        const candidate = packages[ownerLocation];
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) break;
+        if (candidate.inBundle === true) continue;
+        if (Array.isArray(candidate.bundleDependencies) && candidate.bundleDependencies.length > 0
+            && (!omitDev || candidate.dev !== true)) owner = candidate;
+        break;
+      }
+      if (!owner) {
+        // Root-level bundleDependencies hoist entries to the top of
+        // node_modules. They keep their own resolved/integrity identity in
+        // npm's lockfile, so validate them like independently pinned packages.
+        if (typeof record.resolved !== "string" || typeof record.integrity !== "string") {
+          throw new Error(`bundled package has no reviewed archive owner: ${location}`);
+        }
+      } else {
+        continue;
+      }
+    }
     if (!allowNestedShrinkwrap && Object.prototype.hasOwnProperty.call(record, "hasShrinkwrap")) {
       throw new Error(
         `reviewed npm lock package must not delegate to nested shrinkwrap: ${location}`,

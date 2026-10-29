@@ -57,6 +57,7 @@ function writeMSTeamsPackage(
   root: string,
   options: {
     moduleType?: "commonjs" | "esm";
+    extension?: ".js" | ".cjs";
     includeMentionHint?: boolean;
     freezePlugin?: boolean;
   } = {},
@@ -73,7 +74,7 @@ function writeMSTeamsPackage(
       ...(moduleType === "esm" ? { type: "module" } : {}),
     }),
   );
-  const channelFile = path.join(distDir, "channel-plugin-api.js");
+  const channelFile = path.join(distDir, `channel-plugin-api${options.extension ?? ".js"}`);
   fs.writeFileSync(
     channelFile,
     pluginFixtureSource(
@@ -85,18 +86,24 @@ function writeMSTeamsPackage(
   return channelFile;
 }
 
-function writeMSTeamsEntryFlow(root: string): { channelFile: string; indexFile: string } {
-  const channelFile = writeMSTeamsPackage(root);
-  const indexFile = path.join(path.dirname(channelFile), "index.js");
-  fs.writeFileSync(indexFile, 'module.exports = require("./channel-plugin-api.js");\n');
+function writeMSTeamsEntryFlow(
+  root: string,
+  extension: ".js" | ".cjs",
+): { channelFile: string; indexFile: string } {
+  const channelFile = writeMSTeamsPackage(root, { extension });
+  const indexFile = path.join(path.dirname(channelFile), `index${extension}`);
+  fs.writeFileSync(indexFile, `module.exports = require("./channel-plugin-api${extension}");\n`);
   return { channelFile, indexFile };
 }
 
-function writeMSTeamsPackageWithPluginShapedChild(root: string): {
+function writeMSTeamsPackageWithPluginShapedChild(
+  root: string,
+  extension: ".js" | ".cjs",
+): {
   channelFile: string;
   childFile: string;
 } {
-  const channelFile = writeMSTeamsPackage(root);
+  const channelFile = writeMSTeamsPackage(root, { extension });
   const childFile = path.join(path.dirname(channelFile), "plugin-shaped-child.js");
   fs.writeFileSync(childFile, pluginFixtureSource("commonjs"));
   fs.writeFileSync(
@@ -122,6 +129,7 @@ function runHintsProbe(
   options: {
     processFlavor?: "gateway-title" | "none" | "openclaw-launcher" | "unrelated-launcher";
     requirePreloadTwice?: boolean;
+    cwd?: string;
   } = {},
 ) {
   const processSetup = {
@@ -142,6 +150,7 @@ console.log(JSON.stringify(plugin.agentPrompt.messageToolHints({ cfg: {} })));
 `;
   const result = spawnSync(process.execPath, ["-e", script], {
     encoding: "utf-8",
+    cwd: options.cwd,
     env: {
       ...process.env,
       MSTEAMS_FILE: fixtureFile,
@@ -156,14 +165,52 @@ console.log(JSON.stringify(plugin.agentPrompt.messageToolHints({ cfg: {} })));
 }
 
 describe("OpenClaw Microsoft Teams message hint patch", () => {
-  it("injects native mention syntax into CommonJS @openclaw/msteams hints", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("injects native mention syntax into CommonJS @openclaw/msteams hints (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-cjs-"));
-    const fixtureFile = writeMSTeamsPackage(tmp);
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension });
     try {
       const { result, hints } = runHintsProbe(fixtureFile, { requirePreloadTwice: true });
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
       expect(hints).toEqual([ADAPTIVE_CARD_HINT, MSTEAMS_MENTION_HINT, TARGETING_HINT]);
       expect(fs.readFileSync(fixtureFile, "utf-8")).not.toContain(MSTEAMS_MENTION_HINT);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([".js", ".cjs"] as const)("patches the exact package specifier (%s)", (extension) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-specifier-"));
+    writeMSTeamsPackage(tmp, { extension });
+    try {
+      const { result, hints } = runHintsProbe(
+        `@openclaw/msteams/dist/channel-plugin-api${extension}`,
+        { cwd: tmp },
+      );
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(hints).toEqual([ADAPTIVE_CARD_HINT, MSTEAMS_MENTION_HINT, TARGETING_HINT]);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "vendor/msteams/channel-plugin-api.cjs",
+    "node_modules/@openclaw/msteams-other/dist/channel-plugin-api.cjs",
+    "node_modules/@other/msteams/dist/channel-plugin-api.cjs",
+    "node_modules/@openclaw/msteams/dist/channel-plugin-api.cjs.js",
+    "node_modules/@openclaw/msteams/dist/another.cjs",
+  ])("does not patch a plugin-shaped module at %s", (relativeFile) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-other-path-"));
+    const fixtureFile = path.join(tmp, relativeFile);
+    fs.mkdirSync(path.dirname(fixtureFile), { recursive: true });
+    fs.writeFileSync(fixtureFile, pluginFixtureSource("commonjs"));
+    try {
+      const { result, hints } = runHintsProbe(fixtureFile);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(hints).toEqual([ADAPTIVE_CARD_HINT, TARGETING_HINT]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -182,9 +229,12 @@ describe("OpenClaw Microsoft Teams message hint patch", () => {
     }
   });
 
-  it("patches the exact dist/index.js to channel-plugin-api.js load flow", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("patches the exact dist/index to channel-plugin-api load flow (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-entry-flow-"));
-    const { indexFile } = writeMSTeamsEntryFlow(tmp);
+    const { indexFile } = writeMSTeamsEntryFlow(tmp, extension);
     try {
       const { result, hints } = runHintsProbe(indexFile);
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -194,9 +244,12 @@ describe("OpenClaw Microsoft Teams message hint patch", () => {
     }
   });
 
-  it("leaves upstream mention hints idempotent when OpenClaw already includes them", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("leaves upstream mention hints idempotent when OpenClaw already includes them (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-present-"));
-    const fixtureFile = writeMSTeamsPackage(tmp, { includeMentionHint: true });
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension, includeMentionHint: true });
     try {
       const { result, hints } = runHintsProbe(fixtureFile, { requirePreloadTwice: true });
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -218,9 +271,12 @@ describe("OpenClaw Microsoft Teams message hint patch", () => {
     }
   });
 
-  it("does not patch a plugin-shaped child dependency before the exact entry returns", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("does not patch a plugin-shaped child dependency before the exact entry returns (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-child-"));
-    const { channelFile } = writeMSTeamsPackageWithPluginShapedChild(tmp);
+    const { channelFile } = writeMSTeamsPackageWithPluginShapedChild(tmp, extension);
     try {
       const script = `
 process.title = 'openclaw-gateway';
@@ -252,9 +308,12 @@ console.log(JSON.stringify({
     }
   });
 
-  it("stays inert in non-gateway Node children that inherit NODE_OPTIONS", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("stays inert in non-gateway Node children that inherit NODE_OPTIONS (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-nongateway-"));
-    const fixtureFile = writeMSTeamsPackage(tmp);
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension });
     try {
       const { result, hints } = runHintsProbe(fixtureFile, { processFlavor: "none" });
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
@@ -264,9 +323,12 @@ console.log(JSON.stringify({
     }
   });
 
-  it("ignores an unrelated launcher whose third argument is gateway", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("ignores an unrelated launcher whose third argument is gateway (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-false-launcher-"));
-    const fixtureFile = writeMSTeamsPackage(tmp);
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension });
     try {
       const { result, hints } = runHintsProbe(fixtureFile, {
         processFlavor: "unrelated-launcher",
@@ -278,9 +340,12 @@ console.log(JSON.stringify({
     }
   });
 
-  it("recognizes the pinned openclaw.mjs gateway launcher shape", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("recognizes the pinned openclaw.mjs gateway launcher shape (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-launcher-"));
-    const fixtureFile = writeMSTeamsPackage(tmp);
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension });
     try {
       const { result, hints } = runHintsProbe(fixtureFile, {
         processFlavor: "openclaw-launcher",
@@ -292,9 +357,12 @@ console.log(JSON.stringify({
     }
   });
 
-  it("restores the CommonJS load hook after patching @openclaw/msteams", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("restores the CommonJS load hook after patching @openclaw/msteams (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-restore-"));
-    const fixtureFile = writeMSTeamsPackage(tmp);
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension });
     try {
       const script = `
 process.title = 'openclaw-gateway';
@@ -330,9 +398,12 @@ console.log(JSON.stringify({
     }
   });
 
-  it("warns, fails open, and restores the hook when the plugin is immutable", () => {
+  it.each([
+    ".js",
+    ".cjs",
+  ] as const)("warns, fails open, and restores the hook when the plugin is immutable (%s)", (extension) => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-msteams-hints-frozen-"));
-    const fixtureFile = writeMSTeamsPackage(tmp, { freezePlugin: true });
+    const fixtureFile = writeMSTeamsPackage(tmp, { extension, freezePlugin: true });
     try {
       const script = `
 process.title = 'openclaw-gateway';

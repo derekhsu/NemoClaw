@@ -177,9 +177,7 @@ describe("OpenClaw npm 12 pack JSON compatibility", () => {
       dockerfile.slice(dockerfile.indexOf(invocation), dockerfile.indexOf(invocation) + 250),
     ).toContain('"$OPENCLAW_VERSION"');
     expect(baseDockerfile).toContain(`COPY scripts/lib/${script} /scripts/lib/${script}`);
-    const baseInvocationIndex = baseDockerfile.indexOf(
-      `node --experimental-strip-types /scripts/lib/${script}`,
-    );
+    const baseInvocationIndex = baseDockerfile.indexOf(`node /scripts/lib/${script}`);
     expect(baseInvocationIndex).toBeGreaterThanOrEqual(0);
     expect(baseDockerfile.slice(baseInvocationIndex, baseInvocationIndex + 300)).toContain(
       "/usr/local/lib/node_modules/openclaw/dist",

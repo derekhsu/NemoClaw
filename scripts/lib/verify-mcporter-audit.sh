@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+secrets_dir="${NEMOCLAW_MCPORTER_AUDIT_SECRETS_DIR:-/run/secrets}"
+receipt="$secrets_dir/nemoclaw-mcporter-audit-receipt"
+raw_report="$secrets_dir/nemoclaw-mcporter-audit-raw-report"
+policy_result="$secrets_dir/nemoclaw-mcporter-audit-policy-result"
+exceptions_file="${NEMOCLAW_MCPORTER_AUDIT_EXCEPTIONS_FILE:-/scripts/npm-audit-exceptions.json}"
+lockfile="${NEMOCLAW_MCPORTER_AUDIT_LOCKFILE:-/usr/local/lib/nemoclaw/mcporter-runtime/package-lock.json}"
+receipt_sha256="${NEMOCLAW_MCPORTER_AUDIT_RECEIPT_SHA256:-}"
+policy_result_sha256="${NEMOCLAW_MCPORTER_AUDIT_POLICY_RESULT_SHA256:-}"
+seed="${NEMOCLAW_MCPORTER_AUDIT_SEED_PATH:-/run/nemoclaw-mcporter-audit-cache/reviewed-npm-audit}"
+report_path="${NEMOCLAW_MCPORTER_AUDIT_REPORT_PATH:-}"
+result_path="${NEMOCLAW_MCPORTER_AUDIT_RESULT_PATH:-}"
+audit_output_args=()
+[[ -z "$report_path" ]] || audit_output_args+=(--report "$report_path")
+[[ -z "$result_path" ]] || audit_output_args+=(--result "$result_path")
+
+if [[ -e "$receipt" || -L "$receipt" || -e "$raw_report" || -L "$raw_report" || -e "$policy_result" || -L "$policy_result" || -n "$receipt_sha256" || -n "$policy_result_sha256" ]]; then
+  [[ -f "$receipt" && ! -L "$receipt" && -f "$raw_report" && ! -L "$raw_report" && -f "$policy_result" && ! -L "$policy_result" && -n "$receipt_sha256" && -n "$policy_result_sha256" ]] || {
+    echo "ERROR: cached mcporter audit requires paired receipt, raw report, trusted policy result, and transport SHA-256 values" >&2
+    exit 1
+  }
+elif [[ -e "$seed" || -L "$seed" ]]; then
+  echo "ERROR: build-context mcporter audit evidence is not trusted" >&2
+  exit 1
+else
+  node /scripts/lib/reviewed-npm-audit.mts \
+    --directory /usr/local/lib/nemoclaw/mcporter-runtime \
+    --exceptions /scripts/npm-audit-exceptions.json --graph mcporter-runtime --threshold high \
+    "${audit_output_args[@]}"
+  exit
+fi
+
+printf '%s' "$receipt_sha256" | grep -qxE '[0-9a-f]{64}' || {
+  echo "ERROR: cached mcporter audit receipt SHA-256 is invalid" >&2
+  exit 1
+}
+printf '%s  %s\n' "$receipt_sha256" "$receipt" | sha256sum --check --status - || {
+  echo "ERROR: cached mcporter audit receipt hash does not match" >&2
+  exit 1
+}
+printf '%s' "$policy_result_sha256" | grep -qxE '[0-9a-f]{64}' || {
+  echo "ERROR: cached mcporter audit policy result SHA-256 is invalid" >&2
+  exit 1
+}
+printf '%s  %s\n' "$policy_result_sha256" "$policy_result" | sha256sum --check --status - || {
+  echo "ERROR: cached mcporter audit policy result hash does not match" >&2
+  exit 1
+}
+raw_report_sha256="$(jq -er '
+  .rawResponseSha256 | select(type == "string" and test("^[0-9a-f]{64}$"))
+' "$receipt")" || {
+  echo "ERROR: verified mcporter audit receipt does not declare a raw response SHA-256" >&2
+  exit 1
+}
+printf '%s  %s\n' "$raw_report_sha256" "$raw_report" | sha256sum --check --status - || {
+  echo "ERROR: cached mcporter audit raw report does not match the verified receipt" >&2
+  exit 1
+}
+jq -e '
+  .schemaVersion == 1 and .graph == "mcporter-runtime" and .blockingThreshold == "high" and
+  (.status == "clean" or .status == "accepted-exceptions")
+' "$policy_result" >/dev/null || {
+  echo "ERROR: cached mcporter audit policy result is not a passing mcporter-runtime policy result" >&2
+  exit 1
+}
+policy_exceptions_sha256="$(jq -er '
+  .exceptionPolicySha256 | select(type == "string" and test("^[0-9a-f]{64}$"))
+' "$policy_result")" || {
+  echo "ERROR: cached mcporter audit policy result does not declare an exceptions policy SHA-256" >&2
+  exit 1
+}
+printf '%s  %s\n' "$policy_exceptions_sha256" "$exceptions_file" | sha256sum --check --status - || {
+  echo "ERROR: cached mcporter audit policy result does not match the installed exceptions policy" >&2
+  exit 1
+}
+receipt_lockfile_sha256="$(jq -r '.lockfileSha256 // empty' "$receipt")"
+if [[ -n "$receipt_lockfile_sha256" ]]; then
+  printf '%s  %s\n' "$receipt_lockfile_sha256" "$lockfile" | sha256sum --check --status - || {
+    echo "ERROR: cached mcporter audit receipt does not match the installed lockfile" >&2
+    exit 1
+  }
+fi
+[[ -z "$report_path" ]] || cp -- "$raw_report" "$report_path"
+[[ -z "$result_path" ]] || cp -- "$policy_result" "$result_path"

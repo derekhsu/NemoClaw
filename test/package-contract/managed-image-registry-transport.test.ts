@@ -35,11 +35,15 @@ describe("managed image registry transport package contract", () => {
     const productionDependencies = JSON.parse(productionTree.stdout) as {
       dependencies?: { undici?: { version?: string } };
     };
-    expect(productionDependencies.dependencies?.undici?.version).toBe("8.10.0");
+    expect(productionDependencies.dependencies?.undici?.version).toBe("8.12.2");
 
     const fixtureRoot = createPackageFixture({
       prefix: "nemoclaw-managed-registry-pack-",
       entries: ["dist"],
+      // npm 10.9.x crashes in Arborist's peer-set walk when `--omit=dev`
+      // leaves devDependency peer edges unresolved. The packed CLI's
+      // omit-dev install contract only depends on production deps.
+      omitDevDependencies: true,
     });
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-managed-registry-package-"));
     try {
@@ -86,7 +90,7 @@ describe("managed image registry transport package contract", () => {
       const installedProductionDependencies = JSON.parse(installedProductionTree.stdout) as {
         dependencies?: { undici?: { version?: string } };
       };
-      expect(installedProductionDependencies.dependencies?.undici?.version).toBe("8.10.0");
+      expect(installedProductionDependencies.dependencies?.undici?.version).toBe("8.12.2");
 
       const probe = spawnSync(
         process.execPath,

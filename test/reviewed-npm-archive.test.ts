@@ -11,6 +11,7 @@ import {
   type ReviewedNpmCacheRequest,
   removeReviewedNpmArchive,
   resolveReviewedNpmArchivePath,
+  singleNpmPackResult,
   verifyReviewedNpmCache,
   verifyReviewedNpmLockPackages,
   verifyReviewedNpmMetadata,
@@ -94,6 +95,20 @@ afterEach(() => {
 });
 
 describe("reviewed npm archive", () => {
+  it.each([
+    ["legacy array", [{ filename: "reviewed.tgz" }], { filename: "reviewed.tgz" }],
+    [
+      "npm 12 package-keyed object",
+      { reviewed: { filename: "reviewed.tgz" } },
+      { filename: "reviewed.tgz" },
+    ],
+    ["multiple results", { first: {}, second: {} }, undefined],
+    ["non-object result", "reviewed.tgz", undefined],
+    ["single non-object entry", ["reviewed.tgz"], undefined],
+  ])("normalizes %s pack JSON", (_label, value, expected) => {
+    expect(singleNpmPackResult(value)).toEqual(expected);
+  });
+
   it("verifies exact registry metadata and returns only a contained local archive", () => {
     const calls: string[][] = [];
     const archive = packReviewedNpmArchive(request(), (args, reviewed) => {
@@ -117,7 +132,7 @@ describe("reviewed npm archive", () => {
     expect(calls).toEqual([
       ["view", PACKAGE_SPEC, "dist.integrity"],
       ["view", PACKAGE_SPEC, "dist.tarball"],
-      ["pack", TARBALL_URL, "--pack-destination", archive.rootDirectory, "--json"],
+      ["pack", PACKAGE_SPEC, "--pack-destination", archive.rootDirectory, "--json"],
     ]);
     expect(archive.archivePath).toBe(path.join(archive.rootDirectory, "reviewed-1.2.3.tgz"));
     expect(fs.existsSync(archive.archivePath)).toBe(true);
@@ -188,7 +203,7 @@ describe("reviewed npm archive", () => {
     expect(verifyReviewedNpmCache(reviewed, cachedArchiveRunner(calls))).toEqual([
       "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
-      "zod@4.4.3",
+      "zod@4.6.6",
     ]);
 
     expect(calls.filter(({ args }) => args[0] === "pack")).toHaveLength(3);
@@ -250,7 +265,7 @@ describe("reviewed npm archive", () => {
     expect(verifyReviewedNpmLockPackages({ ...request, allowNestedShrinkwrap: true })).toEqual([
       "@tencent-weixin/openclaw-weixin@2.4.9",
       "qrcode-terminal@0.12.0",
-      "zod@4.4.3",
+      "zod@4.6.6",
     ]);
   });
 

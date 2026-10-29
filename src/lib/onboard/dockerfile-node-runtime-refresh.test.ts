@@ -94,7 +94,7 @@ describe("managed OpenClaw Node runtime refresh", () => {
     const builderImage = dockerfile.match(/^FROM (node:[^\s]+) AS builder$/m)?.[1];
     const baseImage = baseDockerfile.match(/^FROM (node:[^\s]+)$/m)?.[1];
 
-    expect(builderImage).toMatch(/^node:22-trixie-slim@sha256:[0-9a-f]{64}$/);
+    expect(builderImage).toMatch(/^node:24\.22\.1-trixie-slim@sha256:[0-9a-f]{64}$/);
     expect(baseImage).toBe(builderImage);
   });
 });

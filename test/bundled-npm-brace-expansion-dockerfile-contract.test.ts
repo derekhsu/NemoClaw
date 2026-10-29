@@ -27,14 +27,16 @@ const finalDockerfiles = [
 ] as const;
 const copyInstruction =
   "COPY scripts/patch-bundled-npm-brace-expansion.mts /scripts/patch-bundled-npm-brace-expansion.mts";
+const baseNodePrefix = "node";
 const patchInstruction =
   "node --experimental-strip-types /scripts/patch-bundled-npm-brace-expansion.mts";
+const basePatchInstruction = `${baseNodePrefix} /scripts/patch-bundled-npm-brace-expansion.mts`;
 const npmRootArguments = ["--npm-root", "/usr/local/lib/node_modules/npm"] as const;
 
 describe("bundled npm brace-expansion image remediation contract", () => {
   it("binds the replacement to the reviewed npm and registry artifact", () => {
     expect(REVIEWED_NPM_VERSION).toBe(UPGRADED_NPM_VERSION);
-    expect(REVIEWED_NPM_VERSION).toBe("11.18.0");
+    expect(REVIEWED_NPM_VERSION).toBe("12.0.2");
     expect(FIXED_BRACE_EXPANSION_VERSION).toBe("5.0.9");
     expect(FIXED_BRACE_EXPANSION_INTEGRITY).toMatch(/^sha512-[A-Za-z0-9+/]+=*$/u);
     expect(FIXED_BRACE_EXPANSION_TARBALL).toBe(
@@ -47,12 +49,12 @@ describe("bundled npm brace-expansion image remediation contract", () => {
     const copy = source.indexOf(copyInstruction);
     const upgrade = requireSingleReviewedDockerfileRunCommand(
       source,
-      "node --experimental-strip-types /scripts/upgrade-bundled-npm.mts",
+      `${baseNodePrefix} /scripts/upgrade-bundled-npm.mts`,
       npmRootArguments,
     ).commandStart;
     const patch = requireSingleReviewedDockerfileRunCommand(
       source,
-      patchInstruction,
+      basePatchInstruction,
       npmRootArguments,
     );
 

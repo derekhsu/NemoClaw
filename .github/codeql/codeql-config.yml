@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# CodeQL scan scope: vendored third-party fixture trees are scanned verbatim
+# upstream content kept pinned for test replay, so their findings cannot be
+# remediated here.
+paths-ignore:
+  - test/fixtures

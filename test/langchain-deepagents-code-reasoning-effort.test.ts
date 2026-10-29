@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   cleanupPackageFixtures,
   createPackageFixture,
   linkManagedReasoningEffort,
+  managedPatchRegion,
+  MANAGED_STUB_PREAMBLE,
   patchFixture,
+  REAL_HELPER_PREAMBLE,
+  runPython,
   writeManagedReasoningEffort,
 } from "./helpers/langchain-deepagents-code-patch-fixture";
 
@@ -22,21 +25,33 @@ const BASE_OPENROUTER_KWARGS = `{
     "api_key": "nemoclaw-managed-inference",
     "base_url": "https://inference.local/v1",
 }`;
-const REJECTED_VALIDATION = `
-from deepagents_code import config
-from deepagents_code._nemoclaw_managed import managed_reasoning_effort
 
-assert managed_reasoning_effort() is None
+function execConfig(root: string, script: string) {
+  const region = managedPatchRegion(root, "config.py");
+  return runPython(
+    root,
+    `${MANAGED_STUB_PREAMBLE}
+${REAL_HELPER_PREAMBLE}
+import os
+import types
+from typing import Any
+
+config = types.ModuleType("deepagents_code.config")
+config.__dict__.update({
+    "os": os,
+    "Any": Any,
+    "_dotenv_loaded_values": {},
+})
+exec(${JSON.stringify(region)}, config.__dict__)
+${script}`,
+  );
+}
+
+const REJECTED_ASSERTIONS = `
+assert _managed.managed_reasoning_effort() is None
 assert "extra_body" not in config._get_provider_kwargs("openai")
 print("managed-reasoning-effort-rejected-ok")
 `;
-
-function runValidation(tempDir: string, validation: string): string {
-  return execFileSync("python3", ["-c", validation], {
-    env: { PATH: process.env.PATH, PYTHONPATH: tempDir },
-    encoding: "utf8",
-  });
-}
 
 describe("LangChain Deep Agents Code managed reasoning effort", () => {
   it.each([
@@ -48,13 +63,10 @@ describe("LangChain Deep Agents Code managed reasoning effort", () => {
     patchFixture(tempDir);
     writeManagedReasoningEffort(tempDir, `${effort}\n`);
 
-    const output = runValidation(
+    const result = execConfig(
       tempDir,
       `
-from deepagents_code import config
-from deepagents_code._nemoclaw_managed import managed_reasoning_effort
-
-assert managed_reasoning_effort() == "${effort}"
+assert _managed.managed_reasoning_effort() == "${effort}"
 assert config._get_provider_kwargs("openai") == {
     **${BASE_OPENAI_KWARGS},
     "extra_body": {"reasoning_effort": "${effort}"},
@@ -64,7 +76,8 @@ print("managed-reasoning-effort-ok")
 `,
     );
 
-    expect(output).toContain("managed-reasoning-effort-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-ok");
   });
 
   it("keeps the endpoint default when onboarding recorded no reasoning effort (#7938)", () => {
@@ -72,19 +85,17 @@ print("managed-reasoning-effort-ok")
     patchFixture(tempDir);
     writeManagedReasoningEffort(tempDir, "\n");
 
-    const output = runValidation(
+    const result = execConfig(
       tempDir,
       `
-from deepagents_code import config
-from deepagents_code._nemoclaw_managed import managed_reasoning_effort
-
-assert managed_reasoning_effort() is None
+assert _managed.managed_reasoning_effort() is None
 assert config._get_provider_kwargs("openai") == ${BASE_OPENAI_KWARGS}
 print("managed-reasoning-effort-unset-ok")
 `,
     );
 
-    expect(output).toContain("managed-reasoning-effort-unset-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-unset-ok");
   });
 
   it("composes the Ultra template argument with managed reasoning effort (#7441)", () => {
@@ -92,11 +103,9 @@ print("managed-reasoning-effort-unset-ok")
     patchFixture(tempDir);
     writeManagedReasoningEffort(tempDir, "high\n");
 
-    const output = runValidation(
+    const result = execConfig(
       tempDir,
       `
-from deepagents_code import config
-
 assert config._get_provider_kwargs(
     "openai",
     model_name="nvidia/nemotron-3-ultra-550b-a55b",
@@ -115,16 +124,18 @@ print("managed-ultra-reasoning-effort-ok")
 `,
     );
 
-    expect(output).toContain("managed-ultra-reasoning-effort-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-ultra-reasoning-effort-ok");
   });
 
   it("falls back to the endpoint default for a missing capability file (#7938)", () => {
     const tempDir = createPackageFixture();
     patchFixture(tempDir);
 
-    const output = runValidation(tempDir, REJECTED_VALIDATION);
+    const result = execConfig(tempDir, REJECTED_ASSERTIONS);
 
-    expect(output).toContain("managed-reasoning-effort-rejected-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-rejected-ok");
   });
 
   it.each([
@@ -136,9 +147,10 @@ print("managed-ultra-reasoning-effort-ok")
     patchFixture(tempDir);
     writeManagedReasoningEffort(tempDir, contents, mode);
 
-    const output = runValidation(tempDir, REJECTED_VALIDATION);
+    const result = execConfig(tempDir, REJECTED_ASSERTIONS);
 
-    expect(output).toContain("managed-reasoning-effort-rejected-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-rejected-ok");
   });
 
   it("rejects a symbolic-link capability path (#7938)", () => {
@@ -146,9 +158,10 @@ print("managed-ultra-reasoning-effort-ok")
     patchFixture(tempDir);
     linkManagedReasoningEffort(tempDir, "high\n");
 
-    const output = runValidation(tempDir, REJECTED_VALIDATION);
+    const result = execConfig(tempDir, REJECTED_ASSERTIONS);
 
-    expect(output).toContain("managed-reasoning-effort-rejected-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-rejected-ok");
   });
 
   it("returns a fresh contract per call so one caller cannot poison the next (#7938)", () => {
@@ -156,11 +169,9 @@ print("managed-ultra-reasoning-effort-ok")
     patchFixture(tempDir);
     writeManagedReasoningEffort(tempDir, "high\n");
 
-    const output = runValidation(
+    const result = execConfig(
       tempDir,
       `
-from deepagents_code import config
-
 tampered = config._get_provider_kwargs("openai")
 tampered["api_key"] = "tampered"
 tampered["extra_body"]["reasoning_effort"] = "low"
@@ -172,6 +183,7 @@ print("managed-reasoning-effort-isolated-ok")
 `,
     );
 
-    expect(output).toContain("managed-reasoning-effort-isolated-ok");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("managed-reasoning-effort-isolated-ok");
   });
 });

@@ -2202,7 +2202,11 @@ function fatalMessagingBuildDiagnostic(error: unknown): string {
   if (error instanceof MessagingBuildApplierError) {
     return "Messaging build applier rejected invalid or unsafe input.";
   }
-  return "Messaging build applier failed.";
+  // Untyped errors carry no structured detail. Print only the constructor
+  // name; embedded messages can echo untrusted registry output, file paths,
+  // or configuration and must never be printed verbatim.
+  const errorName = error instanceof Error ? error.constructor.name : typeof error;
+  return `Messaging build applier failed (${errorName}).`;
 }
 
 function isMainModule(): boolean {

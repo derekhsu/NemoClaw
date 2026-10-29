@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   constants,
   cpSync,
@@ -24,11 +25,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FIXED_TAR_VERSION = "7.5.20";
+export const FIXED_TAR_VERSION = "7.5.21";
 export const FIXED_TAR_INTEGRITY =
-  "sha512-9FcyK4PA6+WbzlTM9WhQm6vB5W7cP7dUiPsv1g7YDwEQnQ1CGpK3MGlKk/ITVWMk05kHZuBhmVhiv8LZoy/PFQ==";
-export const FIXED_TAR_TARBALL = "https://registry.npmjs.org/tar/-/tar-7.5.20.tgz";
-export const MINIMUM_SAFE_TAR_VERSION = "7.5.19";
+  "sha512-XdhtCvlMywwxpCW8YEq3lOXBJpUPTR2OHHcwLPO3HwsJqOHa2Ok/oJ7ruGzp+JrKoRPVCzJwAdEjqLW/vNRPHA==";
+export const FIXED_TAR_TARBALL = "https://registry.npmjs.org/tar/-/tar-7.5.21.tgz";
+export const MINIMUM_SAFE_TAR_VERSION = "7.5.21";
 
 /**
  * Source boundary for this private npm-tree remediation. The pinned upstream
@@ -40,7 +41,7 @@ export const MINIMUM_SAFE_TAR_VERSION = "7.5.19";
  */
 export const NODE_BASES_REQUIRING_BUNDLED_NPM_TAR_PATCH = [
   "node:22-trixie-slim@sha256:e6d9a389d34ff9678438af985c9913fbd1eb6ed36e80fea56644f4b4f6dd70ba",
-  "node:24-trixie-slim@sha256:05c08ce4291e9a58f59456a7985176defb12cdd42271f35ff81a3e167ea61d4c",
+  "node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea",
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -115,7 +116,7 @@ export function inspectBundledNpmTar(npmRoot: string): BundledNpmTarState {
   const bundleDependencies = manifest.bundleDependencies;
   if (
     manifest.name !== "npm" ||
-    (npmMajor !== 10 && npmMajor !== 11) ||
+    (npmMajor !== 10 && npmMajor !== 11 && npmMajor !== 12) ||
     typeof tarRange !== "string" ||
     !/^\^7\.5\.(0|[1-9]\d*)$/u.test(tarRange) ||
     !Array.isArray(bundleDependencies) ||
@@ -165,9 +166,11 @@ export function patchBundledNpmTar(options: {
   }
 
   const current = inspectBundledNpmTar(npmRoot);
-  if (current.state === "fixed") return current;
-
   const livePath = join(npmRoot, "node_modules", "tar");
+  if (current.state === "fixed") {
+    chmodSync(realDirectory(livePath, "npm bundled tar root"), 0o755);
+    return current;
+  }
   const transactionId = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const stagingRoot = mkdtempSync(join(dirname(livePath), ".tar.nemoclaw-stage-"));
   const stagedPath = join(stagingRoot, "replacement");
@@ -175,6 +178,8 @@ export function patchBundledNpmTar(options: {
   let mutationStarted = false;
   try {
     cpSync(replacementRoot, stagedPath, { dereference: false, recursive: true });
+    // The transaction stays private; its installed package must be readable by the sandbox.
+    chmodSync(stagedPath, 0o755);
     cpSync(livePath, backupPath, {
       dereference: false,
       errorOnExist: true,
@@ -290,6 +295,7 @@ export function patchBundledNpmTarFromRegistry(
   const commandRunner = dependencies.commandRunner ?? run;
   const current = inspectBundledNpmTar(npmRoot);
   if (current.state === "fixed") {
+    chmodSync(realDirectory(join(npmRoot, "node_modules", "tar"), "npm bundled tar root"), 0o755);
     commandRunner("npm", ["--version"]);
     commandRunner("npx", ["--version"]);
     return current;

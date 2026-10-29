@@ -738,6 +738,8 @@ export const MANAGED_STARTUP_PROFILE_EXCLUDED_DOCKER_INPUTS = {
     { input: "MCPORTER_VERSION", reason: "release-composition" },
     { input: "MCPORTER_0_7_3_INTEGRITY", reason: "integrity-pin" },
     { input: "MCPORTER_0_7_3_TARBALL", reason: "release-composition" },
+    { input: "NEMOCLAW_MCPORTER_AUDIT_RECEIPT_SHA256", reason: "integrity-pin" },
+    { input: "NEMOCLAW_MCPORTER_AUDIT_POLICY_RESULT_SHA256", reason: "integrity-pin" },
     { input: "NEMOCLAW_DISABLE_DEVICE_AUTH", reason: "fixed-image-contract" },
     { input: "NEMOCLAW_DEVICE_AUTH_OPT_OUT_SOURCE", reason: "fixed-image-contract" },
     { input: "NEMOCLAW_BUILD_ID", reason: "build-provenance" },

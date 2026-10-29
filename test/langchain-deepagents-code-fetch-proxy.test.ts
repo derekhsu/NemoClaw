@@ -18,12 +18,39 @@ import {
 import {
   cleanupPackageFixtures,
   createPackageFixture,
+  managedPatchRegion,
+  MANAGED_STUB_PREAMBLE,
   patchFixture,
+  REAL_HELPER_PREAMBLE,
 } from "./helpers/langchain-deepagents-code-patch-fixture.ts";
 import { dcodeStateDir, makeStartScriptFixture } from "./support/dcode-start-script-fixture.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const agentDir = path.join(repoRoot, "agents", "langchain-deepagents-code");
+
+function managedToolsPreamble(root: string): string {
+  const region = managedPatchRegion(root, "tools.py");
+  return `${MANAGED_STUB_PREAMBLE}
+${REAL_HELPER_PREAMBLE}
+
+tools = types.ModuleType("deepagents_code.tools")
+
+def _original_fetch_with_redirects(url, *, timeout):
+    return {"transport": "direct", "url": url, "timeout": timeout}
+
+class _UrlValidationError(ValueError):
+    pass
+
+tools.__dict__.update({
+    "_fetch_with_redirects": _original_fetch_with_redirects,
+    "_MAX_FETCH_REDIRECTS": 5,
+    "_UrlValidationError": _UrlValidationError,
+})
+exec(${JSON.stringify(region)}, tools.__dict__)
+_nemoclaw_managed = _managed
+managed_fetch_proxy_url = _managed.managed_fetch_proxy_url
+`;
+}
 
 afterEach(cleanupPackageFixtures);
 
@@ -202,7 +229,7 @@ print("root-owned-proxy-verification-ok")
       "python3",
       [
         "-c",
-        `
+        `${managedToolsPreamble(tempDir)}
 import os
 import sys
 import types
@@ -257,8 +284,6 @@ requests = types.ModuleType("requests")
 requests.Session = Session
 requests.exceptions = types.SimpleNamespace(TooManyRedirects=RuntimeError)
 sys.modules["requests"] = requests
-
-from deepagents_code import _nemoclaw_managed, tools
 
 root = Path(${JSON.stringify(tempDir)})
 proxy_host_file = root / "managed-proxy-host"
@@ -369,7 +394,7 @@ print("concurrent-ca-bundle-mutation-ok")
       "python3",
       [
         "-c",
-        `
+        `${managedToolsPreamble(tempDir)}
 import builtins
 import os
 import socket
@@ -430,9 +455,6 @@ requests = types.ModuleType("requests")
 requests.Session = Session
 requests.exceptions = types.SimpleNamespace(HTTPError=ProxyPolicyDenied, TooManyRedirects=RuntimeError)
 sys.modules["requests"] = requests
-
-from deepagents_code import _nemoclaw_managed, tools
-from deepagents_code._nemoclaw_managed import managed_fetch_proxy_url
 
 proxy_host_file = Path(${JSON.stringify(tempDir)}) / "managed-proxy-host"
 proxy_port_file = Path(${JSON.stringify(tempDir)}) / "managed-proxy-port"
@@ -819,7 +841,7 @@ print("managed-fetch-proxy-ok")
       [
         "-c",
         [
-          "from deepagents_code import tools",
+          managedToolsPreamble(tempDir).trimEnd(),
           'result = tools._fetch_with_redirects("https://example.com", timeout=3)',
           'assert result == {"transport": "direct", "url": "https://example.com", "timeout": 3}',
         ].join("; "),

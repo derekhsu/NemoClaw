@@ -958,6 +958,27 @@ $$nemoclaw list [--json]
 $$nemoclaw list --json
 ```
 
+### `$$nemoclaw image stage`
+
+Resolve an agent's runtime image inputs and write a deterministic Docker build context directory with stable JSON metadata, without running onboarding or sandbox lifecycle logic.
+Use `--output` to choose the context directory, `--json` for machine-readable staging metadata, and `--quiet` to suppress non-error output.
+
+```bash
+$$nemoclaw image stage --agent <openclaw|hermes> [--output <dir>] [--json] [--quiet]
+$$nemoclaw image stage --agent openclaw --output ./dist/openclaw-image
+```
+
+### `$$nemoclaw image build`
+
+Stage an agent's runtime image build context, apply minimal image-only Dockerfile patching, run a local Docker build, and emit stable JSON metadata for downstream consumers.
+`--tag` is required; `--platform` selects the target architecture, `--base-image` overrides the agent runtime base image, and `--build-arg` (repeatable) forwards Docker build arguments such as `OPENCLAW_VERSION` or `HERMES_VERSION`.
+Pass `--push` to push the built image tag to its registry after a successful build, `--json` for a machine-readable result, and `--quiet` to suppress non-error output.
+
+```bash
+$$nemoclaw image build --agent <openclaw|hermes> --tag <image-tag> [--platform <platform>] [--push] [--json] [--quiet]
+$$nemoclaw image build --agent openclaw --tag ghcr.io/example/openclaw-runtime:latest
+```
+
 ### `$$nemoclaw use <name>`
 
 Promote a registered sandbox to the default.

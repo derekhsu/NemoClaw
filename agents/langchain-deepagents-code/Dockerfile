@@ -69,6 +69,7 @@ FROM ${BASE_IMAGE}
 
 # The supplied base may end as a non-root runtime user. Reset the build user
 # explicitly before installing the root-owned managed-startup handoff.
+# hadolint ignore=DL3066
 USER root
 
 ARG NEMOCLAW_CORPORATE_CA_B64
@@ -190,7 +191,7 @@ RUN test -f /usr/local/bin/nemoclaw-managed-bootstrap \
     && cmp -s /usr/local/lib/nemoclaw/dcode-launcher.sh /usr/local/lib/nemoclaw/dcode-managed-exec \
     && chmod -R a+rX /opt/nemoclaw-blueprint \
     && test "$(find /opt/nemoclaw-deepagents-profile-plugin -type f -print | LC_ALL=C sort)" = "$(printf '%s\n' '/opt/nemoclaw-deepagents-profile-plugin/pyproject.toml' '/opt/nemoclaw-deepagents-profile-plugin/src/nemoclaw_deepagents_profile/__init__.py')" \
-    && printf '%s  %s\n' '8fe85c62293c74147848732dc56c33e8ab60133fa41c071da4328ac60f2bf44f' '/opt/nemoclaw-deepagents-profile-plugin/src/nemoclaw_deepagents_profile/__init__.py' '7ba7b77bd6f889cc861eddbe3e38fc1f4433a85b7bc2a9b516e19a19a37a7686' '/opt/nemoclaw-deepagents-profile-plugin/pyproject.toml' | sha256sum -c - \
+    && printf '%s  %s\n' 'd7bd880d47d423f27dee2997a96271f5f1c67b88fdafaf771e29b82c0ac8b947' '/opt/nemoclaw-deepagents-profile-plugin/src/nemoclaw_deepagents_profile/__init__.py' '6d1ac1371076821f13728008bfd47c5aaad25af5268a0c2e7c784b193642650e' '/opt/nemoclaw-deepagents-profile-plugin/pyproject.toml' | sha256sum -c - \
     && /opt/venv/bin/pip3 install --no-index --no-cache-dir --no-deps --no-build-isolation /opt/nemoclaw-deepagents-profile-plugin \
     && /opt/venv/bin/python3 -I -c 'import nemoclaw_deepagents_profile; print("NEMOCLAW_DCODE_PROFILE_" + "IMPORT_GATE", flush=True); import deepagents; import deepagents_code' \
     && /opt/venv/bin/pip3 check \
@@ -251,10 +252,11 @@ RUN install -d -m 0755 /usr/local/share/nemoclaw \
     && printf '%s\n' "$NEMOCLAW_PROXY_HOST" > /usr/local/share/nemoclaw/dcode-proxy-host \
     && printf '%s\n' "$NEMOCLAW_PROXY_PORT" > /usr/local/share/nemoclaw/dcode-proxy-port \
     && printf '%s\n' "$NEMOCLAW_INFERENCE_BASE_URL" > /usr/local/share/nemoclaw/dcode-inference-base-url \
+    && printf '%s\n' "$NEMOCLAW_UPSTREAM_PROVIDER" > /usr/local/share/nemoclaw/dcode-upstream-provider \
     && printf '%s\n' "$NEMOCLAW_DCODE_AUTO_APPROVAL" > /usr/local/share/nemoclaw/dcode-auto-approval \
     && printf '%s\n' "$NEMOCLAW_REASONING_EFFORT" > /usr/local/share/nemoclaw/dcode-reasoning-effort \
-    && chown root:root /usr/local/share/nemoclaw/dcode-proxy-host /usr/local/share/nemoclaw/dcode-proxy-port /usr/local/share/nemoclaw/dcode-inference-base-url /usr/local/share/nemoclaw/dcode-auto-approval /usr/local/share/nemoclaw/dcode-reasoning-effort \
-    && chmod 0444 /usr/local/share/nemoclaw/dcode-proxy-host /usr/local/share/nemoclaw/dcode-proxy-port /usr/local/share/nemoclaw/dcode-inference-base-url /usr/local/share/nemoclaw/dcode-auto-approval /usr/local/share/nemoclaw/dcode-reasoning-effort \
+    && chown root:root /usr/local/share/nemoclaw/dcode-proxy-host /usr/local/share/nemoclaw/dcode-proxy-port /usr/local/share/nemoclaw/dcode-inference-base-url /usr/local/share/nemoclaw/dcode-upstream-provider /usr/local/share/nemoclaw/dcode-auto-approval /usr/local/share/nemoclaw/dcode-reasoning-effort \
+    && chmod 0444 /usr/local/share/nemoclaw/dcode-proxy-host /usr/local/share/nemoclaw/dcode-proxy-port /usr/local/share/nemoclaw/dcode-inference-base-url /usr/local/share/nemoclaw/dcode-upstream-provider /usr/local/share/nemoclaw/dcode-auto-approval /usr/local/share/nemoclaw/dcode-reasoning-effort \
     && unset OTEL_EXPORTER_OTLP_TRACES_ENDPOINT \
     && empty_prompt_log="$(mktemp)" \
     && if timeout 10 env -i /usr/local/lib/nemoclaw/dcode-wrapper.sh -n "" >"$empty_prompt_log" 2>&1; then empty_prompt_status=0; else empty_prompt_status=$?; fi \
@@ -272,6 +274,7 @@ RUN install -d -m 0755 /usr/local/share/nemoclaw \
     && env -i /usr/local/bin/dcode.real --version \
     && env -i /usr/local/bin/deepagents-code --version
 
+# hadolint ignore=DL3064
 ENV HOME=/sandbox \
     VIRTUAL_ENV=/opt/venv \
     PATH="/usr/local/bin:/opt/venv/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin" \
@@ -305,6 +308,7 @@ ENV HOME=/sandbox \
 
 WORKDIR /sandbox
 RUN test "$(id -u sandbox):$(id -g sandbox):$(pwd)" = "999:999:/sandbox"
+# hadolint ignore=DL3066
 USER sandbox
 
 RUN mkdir -p /sandbox/.nemoclaw/blueprints/0.1.0 \
@@ -312,6 +316,7 @@ RUN mkdir -p /sandbox/.nemoclaw/blueprints/0.1.0 \
     && node --experimental-strip-types /opt/nemoclaw-deepagents-code/generate-config.ts \
     && chmod 660 /sandbox/.deepagents/config.toml
 
+# hadolint ignore=DL3066
 USER root
 RUN chown root:root /sandbox/.nemoclaw \
     && chmod 1755 /sandbox/.nemoclaw \
@@ -343,47 +348,24 @@ RUN test -f /usr/local/bin/nemoclaw-managed-bootstrap \
 
 # Verify the immutable security package inventory in the completed image.
 # hadolint ignore=DL4006
-RUN set -eu; \
-    security_inventory=/usr/local/share/nemoclaw/security-packages.txt; \
-    arch="$(dpkg --print-architecture)"; \
-    test -f "$security_inventory"; \
-    test ! -L "$security_inventory"; \
-    test "$(stat -c '%u:%g:%a' "$security_inventory")" = "0:0:444"; \
-    printf '%s\n' \
-        "architecture=$arch" \
-        "libexpat1=2.8.2-1" \
-        "libonig5=6.9.9-1+b1" \
-        "libjq1=1.8.2-1" \
-        "jq=1.8.2-1" \
-        "vim-common=2:9.2.0782-1" \
-        "vim-tiny=2:9.2.0782-1" \
-        "libssh2-1t64=1.11.1-1+deb13u1+nemoclaw1" \
-        "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u5+nemoclaw1" \
-        "perl-base=5.44.0-1nemoclaw1" \
-        "perl=5.44.0-1nemoclaw1" \
-        | cmp -s - "$security_inventory"; \
-    test "$(dpkg-query -W -f='${Version}' libexpat1)" = "2.8.2-1"; \
-    test "$(dpkg-query -W -f='${Version}' libonig5)" = "6.9.9-1+b1"; \
-    test "$(dpkg-query -W -f='${Version}' libjq1)" = "1.8.2-1"; \
-    test "$(dpkg-query -W -f='${Version}' jq)" = "1.8.2-1"; \
-    test "$(dpkg-query -W -f='${Version}' vim-common)" = "2:9.2.0782-1"; \
-    test "$(dpkg-query -W -f='${Version}' vim-tiny)" = "2:9.2.0782-1"; \
-    test "$(dpkg-query -W -f='${Version}' libssh2-1t64)" = "1.11.1-1+deb13u1+nemoclaw1"; \
-    test "$(dpkg-query -W -f='${Version}' nemoclaw-python3.13-htmlparser-fix)" = "3.13.5-2+deb13u5+nemoclaw1"; \
-    test "$(dpkg-query -W -f='${Version}' perl-base)" = "5.44.0-1nemoclaw1"; \
-    test "$(dpkg-query -W -f='${Version}' perl)" = "5.44.0-1nemoclaw1"; \
+RUN --mount=type=bind,source=scripts/security/security-package-inventory.mts,target=/tmp/nemoclaw-security/scripts/security/security-package-inventory.mts \
+    --mount=type=bind,source=src/lib/sandbox-base-image/security-package-specs.ts,target=/tmp/nemoclaw-security/src/lib/sandbox-base-image/security-package-specs.ts \
+    set -eu; \
+    security_probe="$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON /tmp/nemoclaw-security/scripts/security/security-package-inventory.mts probe shared)"; \
+    sh -ec "$security_probe"; \
     test "$(perl -e 'print $^V')" = "v5.44.0"; \
     ldd /usr/bin/jq | grep -Eq 'libonig[.]so[.]5'; \
     test "$(jq --version)" = "jq-1.8.2"; \
     printf '%s\n' '{"sandbox":"healthy"}' | jq -e '.sandbox == "healthy"' >/dev/null; \
-    /usr/bin/python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.2', pyexpat.EXPAT_VERSION"; \
+    python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"; \
     printf '%s  %s\n' \
         "4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7" \
         /usr/lib/python3.13/html/parser.py \
         | sha256sum -c -; \
-    /usr/bin/python3 -c "import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('/usr/lib/python3.13/html/parser.py').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')"; \
-    /usr/bin/python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')"; \
+    python3 -c "import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('/usr/lib/python3.13/html/parser.py').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')"; \
+    python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')"; \
     vim.tiny --version | head -n 1 | grep -Eq '^VIM - Vi IMproved 9[.]2 '; \
+    vim.tiny --version | grep -Fx 'Included patches: 1-858'; \
     test -z "$(dpkg --audit)"
 # End completed-image security package verification.
 

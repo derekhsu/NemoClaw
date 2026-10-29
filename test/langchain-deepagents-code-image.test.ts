@@ -160,6 +160,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "",
       "# The supplied base may end as a non-root runtime user. Reset the build user",
       "# explicitly before installing the root-owned managed-startup handoff.",
+      "# hadolint ignore=DL3066",
       "USER root",
     ].join("\n");
     const managedRuntimeDirectory = "&& install -d -o root -g root -m 0755 /run/nemoclaw";
@@ -385,7 +386,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
       'reject_managed_override "managed tool set posture"',
       'reject_managed_override "sandbox isolation"',
       'reject_managed_override "MCP posture"',
-      'reject_managed_override "shell allow-list posture"',
+      'reject_managed_override "headless shell posture"',
     ]) {
       expect(wrapper).toContain(s);
     }
@@ -476,7 +477,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
       });
 
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("NEMOCLAW_DEEPAGENTS_MCP_CAPABILITY=2\n");
+      expect(result.stdout).toBe("NEMOCLAW_DEEPAGENTS_MCP_CAPABILITY=3\n");
       expect(fs.existsSync(ranMarker)).toBe(false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -499,7 +500,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(patcher).toContain("_nemoclaw_skip_launch_model");
     expect(managedRuntime).toContain("if not servers:\n        return None");
     expect(managedRuntime).toContain("or descriptor != _MANAGED_MCP_FD");
-    expect(patcher).toContain("def discover_mcp_configs(");
+    expect(patcher).toContain("def discover_mcp_config_sources(");
     expect(patcher).toContain("return []");
     expect(agent.userManagedFiles).toContain(".deepagents/.mcp.json");
     expect(agent.userManagedFiles).not.toContain(".deepagents/.nemoclaw-mcp.json");
@@ -1077,28 +1078,26 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "uv tool run --python 3.13 pip-audit -r agents/langchain-deepagents-code/requirements.lock --progress-spinner off --disable-pip",
     );
     expect(review).toContain(
-      "Targeted audit result: `aiohttp 3.14.3, cryptography 50.0.0, uv 0.11.33, MCP 1.28.1, Pillow 12.3.0, and pyasn1 0.6.4 have no known vulnerabilities`",
+      "Targeted audit result: `aiohttp 3.14.3, cryptography 50.0.0, uv 0.11.33, langgraph-checkpoint-sqlite 3.1.1, MCP 2.0.0, Pillow 12.3.0, and pyasn1 0.6.4 have no known vulnerabilities`",
     );
-    expect(review).toContain(
-      "Complete-lock audit result: `2 duplicate records in 1 unrelated package`",
-    );
+    expect(review).toContain("Complete-lock audit result: `No known vulnerabilities found`");
     expect(review).toContain("`GHSA-cq5v-8q36-5273`");
     expect(review).toContain("`GHSA-g6cj-pr64-35w5`");
-    expect(review).toContain("Deep Agents Code `0.1.45` and later");
-    expect(review).toContain("semantic migration to `>=0.1.45`");
+    expect(review).toContain("Deep Agents Code `0.1.71`");
+    expect(review).toContain("This semantic migration from `0.1.55` through `0.1.71`");
     expect(requirementsLock).toContain("uv==0.11.33");
     expect(requirementsLock).toContain("aiohttp==3.14.3");
     expect(requirementsLock).toContain("cryptography==50.0.0");
     expect(requirementsLock).not.toContain("aiohttp==3.14.1");
     expect(requirementsLock).not.toContain("cryptography==49.0.0");
-    expect(requirementsLock).toContain("mcp==1.28.1");
+    expect(requirementsLock).toContain("mcp==2.0.0");
     expect(requirementsLock).toContain("pillow==12.3.0");
     expect(requirementsLock).toContain("pyasn1==0.6.4");
     const dockerfileBase = readAgentFile("Dockerfile.base");
     for (const [name, expectedVersion] of [
       ["aiohttp", "3.14.3"],
       ["cryptography", "50.0.0"],
-      ["deepagents-code", "0.1.34"],
+      ["deepagents-code", "0.1.71"],
     ] as const) {
       expect(dockerfileBase).toContain(`'${name}': '${expectedVersion}'`);
     }

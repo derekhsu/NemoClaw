@@ -10,7 +10,7 @@ import { main } from "../scripts/generate-openclaw-config.mts";
 import { dockerSpawnSync } from "../src/lib/adapters/docker/exec";
 
 const OPENCLAW_RUNTIME_IMAGE =
-  "ghcr.io/nvidia/nemoclaw/sandbox-base@sha256:f3f0184b96c208c7d50e5a46171a59a6e371f726b06d41972412c36b427a78d4";
+  "derekhsu/openshell-openclaw@sha256:5b43dfc663f61d0047545f627197894b27efbac00729c7a1e4841eb35c2fbab2";
 const PLUGIN_INSTALL_PATH = "/usr/local/share/nemoclaw/openclaw-plugins/gemini-inference-compat";
 const ROUTING_PROBE = String.raw`
 import fs from "node:fs";
@@ -34,6 +34,9 @@ function parseJsonOutput(output) {
   return JSON.parse(output.slice(jsonStart));
 }
 
+if (!/\b2026\.9\.2\b/.test(runOpenClaw(["--version"]))) {
+  throw new Error("The runtime fixture must use reviewed OpenClaw 2026.9.2");
+}
 runOpenClaw(["plugins", "registry", "--refresh"]);
 const inspected = parseJsonOutput(
   runOpenClaw(["plugins", "inspect", "nemoclaw-gemini-inference-compat", "--json", "--runtime"]),
@@ -63,13 +66,31 @@ if (!transportFile) {
 }
 const transport = await import(pathToFileURL(path.join(distDir, transportFile)).href);
 const buildCompletionsParams = Object.values(transport).find(
-  (value) => typeof value === "function" && value.name === "buildOpenAICompletionsParams",
+  (value) =>
+    typeof value === "function" && /^buildOpenAICompletionsParams/.test(value.name),
 );
 if (typeof buildCompletionsParams !== "function") {
   throw new Error("OpenClaw Chat Completions request builder was not found");
 }
 
 const config = JSON.parse(fs.readFileSync("/fixture/openclaw.json", "utf8"));
+
+const metadataFile = fs
+  .readdirSync(distDir)
+  .find((entry) => entry.startsWith("plugin-metadata-snapshot-") && entry.endsWith(".js"));
+if (!metadataFile) {
+  throw new Error("OpenClaw plugin metadata snapshot module was not found");
+}
+const metadataModule = await import(pathToFileURL(path.join(distDir, metadataFile)).href);
+const resolveMetadataSnapshot = Object.values(metadataModule).find(
+  (value) => typeof value === "function" && /^resolvePluginMetadataSnapshot/.test(value.name),
+);
+if (typeof resolveMetadataSnapshot !== "function") {
+  throw new Error("OpenClaw plugin metadata snapshot resolver was not found");
+}
+const metadataSnapshot = resolveMetadataSnapshot({ config, env: process.env });
+const providerMetadataOwners = metadataSnapshot?.owners;
+
 const provider = config.models.providers.inference;
 const model = {
   ...provider.models[0],
@@ -129,6 +150,7 @@ process.stdout.write(
       provider: "inference",
       api: "openai-completions",
       baseUrl: "https://inference.local/v1",
+      providerMetadataOwners,
     }),
     toolRoundTrip: {
       thoughtSignature:
@@ -215,7 +237,7 @@ suite("OpenClaw Gemini managed-route runtime compatibility", () => {
       [
         `FROM ${OPENCLAW_RUNTIME_IMAGE}`,
         `COPY plugin ${PLUGIN_INSTALL_PATH}`,
-        "COPY openclaw.json /fixture/openclaw.json",
+        "COPY --chown=998 openclaw.json /fixture/openclaw.json",
         "",
       ].join("\n"),
     );

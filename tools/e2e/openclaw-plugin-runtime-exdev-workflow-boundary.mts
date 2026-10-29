@@ -36,7 +36,7 @@ const JOB_CONTRACTS = [
     runName: "Run OpenClaw custom-plugin lifecycle and runtime-deps EXDEV live test",
     uploadName: "Upload OpenClaw plugin runtime-deps EXDEV artifacts",
     builderImage:
-      "node:22-trixie-slim@sha256:e6d9a389d34ff9678438af985c9913fbd1eb6ed36e80fea56644f4b4f6dd70ba",
+      "node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea",
   },
 ] as const;
 

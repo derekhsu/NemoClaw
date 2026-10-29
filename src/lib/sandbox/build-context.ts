@@ -466,6 +466,10 @@ function stageOptimizedSandboxBuildContext(
     path.join(stagedScriptsDir, "lib", "reviewed-npm-audit.mts"),
   );
   fs.copyFileSync(
+    path.join(rootDir, "scripts", "lib", "verify-mcporter-audit.sh"),
+    path.join(stagedScriptsDir, "lib", "verify-mcporter-audit.sh"),
+  );
+  fs.copyFileSync(
     path.join(rootDir, "scripts", "lib", "openclaw-npm-remediation.mts"),
     path.join(stagedScriptsDir, "lib", "openclaw-npm-remediation.mts"),
   );

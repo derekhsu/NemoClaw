@@ -319,6 +319,9 @@ export function buildLlamaCppRequestGuardDockerArgv(
   const { limits } = contract.serve;
   return [
     ...buildLlamaCppHostLocalDockerRunArgv(contract, bindings),
+    ...(bindings.hostPort === undefined
+      ? ["--publish", `127.0.0.1::${String(contract.serve.port)}`]
+      : []),
     "--entrypoint",
     LLAMA_CPP_HOST_LOCAL_REQUEST_GUARD_PATH,
     bindings.imageReference,

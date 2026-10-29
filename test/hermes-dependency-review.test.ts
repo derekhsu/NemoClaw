@@ -148,7 +148,10 @@ describe("Hermes 0.20.6 dependency review", () => {
       "git -C /opt/hermes apply --check /tmp/hermes-security-dependencies.patch",
     );
     expect(dockerfileBase).toContain("uv pip check --python /opt/hermes/.venv/bin/python");
-    expect(arg("NODE_VERSION")).toBe("24.18.1");
+    expect(dockerfileBase).toContain(
+      "FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea",
+    );
+    expect(dockerfileBase).toContain('test "$(node --version)" = "v24.22.1"');
     expect(arg("UV_VERSION")).toBe("0.11.33");
     // Hermes 0.20.6 natively selects aiohttp, cryptography, mcp, Pillow,
     // starlette, tornado, and python-multipart; the patch only needs to floor
@@ -211,7 +214,7 @@ describe("Hermes 0.20.6 dependency review", () => {
     expect(review).toContain("`httpx2==2.12.0`");
     expect(review).toContain("`httpcore2==2.12.0`");
     expect(review).toContain("`tornado==6.5.7`");
-    expect(review).toContain("checksum-pinned Node.js `24.18.1`");
+    expect(review).toContain("digest-pinned Node.js `24.22.1`");
     expect(review).toContain("exact uv `0.11.33`");
   });
 });

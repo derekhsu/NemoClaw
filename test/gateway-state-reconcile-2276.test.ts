@@ -16,10 +16,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "vitest";
+import { getBlueprintMinOpenshellVersion } from "../src/lib/onboard/openshell-version";
 import { testTimeout } from "./helpers/timeouts";
 
 const TIMEOUT_MS = testTimeout(60_000);
 const SANDBOX_NAME = "my-assistant";
+// The stub must satisfy the blueprint floor or the flow under test triggers a
+// real openshell upgrade and the stub stops answering subsequent calls.
+const STUB_OPENSHELL_VERSION = getBlueprintMinOpenshellVersion() ?? "0.0.101";
 
 // Output fixtures that mirror real OpenShell CLI output.
 const GATEWAY_INFO_NEMOCLAW =
@@ -124,7 +128,7 @@ function emit(r) {
 }
 
 if (args[0] === "-V" || args[0] === "--version") {
-  process.stdout.write("openshell 0.0.99\\n");
+  process.stdout.write("openshell ${STUB_OPENSHELL_VERSION}\\n");
   process.exit(0);
 }
 
@@ -180,7 +184,7 @@ process.exit(0);
       path.join(homeLocalBin, component),
       `#!${process.execPath}
 const requiredFeatures = "request-body-credential-rewrite websocket-credential-rewrite allow_all_known_mcp_methods";
-if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} 0.0.99\\n");
+if (process.argv[2] === "-V" || process.argv[2] === "--version") process.stdout.write("${component} ${STUB_OPENSHELL_VERSION}\\n");
 process.exit(0);
 `,
       { mode: 0o755 },

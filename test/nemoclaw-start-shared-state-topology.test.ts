@@ -63,6 +63,10 @@ describe("nemoclaw-start shared-state topology (#7280)", () => {
     const result = runBash([markerCommand, block]);
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      expected,
+      "unset NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_DIR",
+      "unset NEMOCLAW_OPENCLAW_PAIRING_OBSERVER_UID",
+    ]);
   });
 });

@@ -6,7 +6,7 @@
     "src/lib/onboard/preflight.test.ts": 1904,
     "test/generate-openclaw-config.test.ts": 1802,
     "test/install-preflight.test.ts": 3908,
-    "test/messaging-build-applier.test.ts": 1530,
+    "test/messaging-build-applier.test.ts": 1524,
     "test/nemoclaw-start.test.ts": 4752,
     "test/onboard-messaging.test.ts": 2036,
     "test/onboard-selection.test.ts": 4767

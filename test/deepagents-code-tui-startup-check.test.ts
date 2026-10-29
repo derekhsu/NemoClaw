@@ -116,7 +116,7 @@ proc expect {branches} {
     switch -- $event {
       composer {
         set branch_index [lsearch -exact $branches {$composer_pattern}]
-        set ::expect_out(0,string) "> dcode  v0.1.34"
+        set ::expect_out(0,string) "> dcode  v0.1.71"
       }
       namePrompt {
         set branch_index [lsearch -exact $branches {$name_prompt_pattern}]

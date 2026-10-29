@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -212,6 +213,29 @@ describe("Vitest temp root", () => {
         restoreEnvValue("NEMOCLAW_TEST_KEEP_TEMP", previousKeep);
       }
     }
+  });
+
+  it("keeps ordinary child-process warnings while suppressing experimental feature notices", () => {
+    const projects = (rootVitestConfig.test?.projects ?? []) as Array<{
+      test?: { name?: string; env?: Record<string, string> };
+    }>;
+    const env = projects.find((project) => project.test?.name === "integration")?.test?.env;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        [
+          `process.emitWarning("fixture experimental notice", { type: "ExperimentalWarning" });`,
+          `process.emitWarning("fixture ordinary warning", { type: "Warning" });`,
+          "console.log(JSON.stringify({ ok: true }));",
+        ].join(" "),
+      ],
+      { encoding: "utf8", env: { ...process.env, ...env } },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ ok: true });
+    expect(result.stderr).not.toContain("fixture experimental notice");
+    expect(result.stderr).toContain("fixture ordinary warning");
   });
 
   // source-shape-contract: compatibility -- Root and standalone runners must install the shared temporary-root cleanup boundary

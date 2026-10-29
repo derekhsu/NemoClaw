@@ -39,6 +39,8 @@ function runParentPreflight(configOwner: "root" | "sandbox", parentProtected: bo
       `openclaw_config_dir_owner() { printf '%s\\n' ${JSON.stringify(configOwner)}; }`,
       `stat() { case "\${2:-}" in '%U:%G') printf '%s\\n' ${JSON.stringify(parentOwner)} ;; '%a') printf '%s\\n' ${JSON.stringify(parentMode)} ;; *) return 1 ;; esac; }`,
       extractShellFunction(source, "openclaw_locked_parent_is_protected"),
+      // This fixture isolates the parent guard from SQLite directory preparation.
+      "prepare_openshell_sqlite_tmpdir() { :; }",
       source.slice(blockStart, blockEnd),
       'printf "startup-continued\\n"',
     ].join("\n"),

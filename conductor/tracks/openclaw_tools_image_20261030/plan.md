@@ -24,7 +24,7 @@ that a package installs or a release is qualified.
 ## Phase 1: Establish reproducible inputs and acceptance owners
 
 - [x] Task 1.1: Inspect the chosen full published base by digest on both architectures; record the runtime version, image configuration, controlled package inventory, and source revision. `204877e`
-- [~] Task 1.2: Inventory every required tool against the base and fixed skill revision; prepare exact package/artifact pins and sources, resolve dependency compatibility, and record rejected or unavailable artifacts.
+- [x] Task 1.2: Inventory every required tool against the base and fixed skill revision; prepare exact package/artifact pins and sources, resolve dependency compatibility, and record rejected or unavailable artifacts.
 - [ ] Task 1.3: Resolve the six decision groups in spec.md, officecli qualification, actual deployment consumer/policy, vulnerability acceptance, and cold-start budget with named owners before behavior-changing implementation.
 - [ ] Task 1.4: Map the complete accepted inventory to fixtures and error cases; reconcile the old Claude Code review with the expanded issue and selected implementation boundaries.
 - [ ] Task: Conductor - User Manual Verification 'Reproducible inputs and acceptance owners' (Protocol in workflow.md)

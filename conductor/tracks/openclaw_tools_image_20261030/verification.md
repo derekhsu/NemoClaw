@@ -111,3 +111,9 @@ Limits of this result:
   image keeps no compiler.
 - This is a dependency-resolution and module-load result. It does not qualify
   LibreOffice conversion or any other tool.
+
+## Task 1.2: Pinned inputs
+
+See [inputs.md](inputs.md). Python, Node.js document, frontend, and officecli
+probes passed on both architectures under non-root, offline conditions. These
+are dependency and library results, not tools-image qualification.

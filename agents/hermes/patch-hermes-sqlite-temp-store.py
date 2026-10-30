@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Patch SessionDB.__init__ to use in-memory temp store for SQLite FK processing.
+"""Patch SessionDB writer setup to use in-memory temp store for SQLite FK processing.
 
 Source-of-truth note for this localized Hermes runtime patch:
-  - Invalid state: Hermes v0.20.6 SessionDB does not set PRAGMA temp_store=MEMORY,
+  - Invalid state: Hermes v0.21.3 SessionDB does not set PRAGMA temp_store=MEMORY,
     so SQLite falls back to file-based temp storage when processing FK constraints
     (for example, the ON DELETE CASCADE on session_model_usage -> sessions). When
     `hermes sessions delete` is invoked through OpenShell sandbox execution —
@@ -16,12 +16,13 @@ Source-of-truth note for this localized Hermes runtime patch:
     (#8301). The same command succeeds through Docker execution because that
     context allows the file-based temp store.
   - Value being patched: pinned/prebuilt `/opt/hermes/hermes_state.py`
-    `SessionDB.__init__` writer-connection setup block; specifically, the
+    `SessionDB._open_writer_conn` writer-connection setup block (v0.21.3 moved
+    it out of `SessionDB.__init__`); specifically, the
     statement immediately following `apply_database_pragmas()` that enables FK
     enforcement. `PRAGMA temp_store=MEMORY` is inserted before
     `PRAGMA foreign_keys=ON` so the in-memory store is active before any
     FK-constrained write.
-  - v0.20.6 note: upstream added ``apply_database_pragmas()``, which honors a
+  - v0.20.6+ note: upstream added ``apply_database_pragmas()``, which honors a
     config-driven ``database.temp_store`` setting. This patch intentionally
     stays a source pin rather than relying on config: the inserted statement
     runs after the config pass, so a profile home whose config.yaml omits (or
@@ -47,14 +48,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+# v0.21.3 moved writer-connection setup into a helper that configures a local
+# ``conn`` before publishing it, so anchor on that shape.
+TEMP_STORE_STATEMENT = 'conn.execute("PRAGMA temp_store=MEMORY")'
 OLD = (
-    'apply_database_pragmas(self._conn, db_label="state.db")\n'
-    '                self._conn.execute("PRAGMA foreign_keys=ON")'
+    'apply_database_pragmas(conn, db_label="state.db")\n'
+    '            conn.execute("PRAGMA foreign_keys=ON")'
 )
 NEW = (
-    'apply_database_pragmas(self._conn, db_label="state.db")\n'
-    '                self._conn.execute("PRAGMA temp_store=MEMORY")\n'
-    '                self._conn.execute("PRAGMA foreign_keys=ON")'
+    'apply_database_pragmas(conn, db_label="state.db")\n'
+    f'            {TEMP_STORE_STATEMENT}\n'
+    '            conn.execute("PRAGMA foreign_keys=ON")'
 )
 EXPECTED_OCCURRENCES = 1
 
@@ -62,7 +66,7 @@ EXPECTED_OCCURRENCES = 1
 def patch_file(path: Path) -> None:
     source = path.read_text(encoding="utf-8")
     old_count = source.count(OLD)
-    new_count = source.count('self._conn.execute("PRAGMA temp_store=MEMORY")')
+    new_count = source.count(TEMP_STORE_STATEMENT)
     patched_count = source.count(NEW)
     if (
         old_count == 0

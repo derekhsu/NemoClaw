@@ -15,6 +15,7 @@ const patcherPath = fileURLToPath(
   new URL("../../../agents/hermes/patch-langfuse-credentials.mts", import.meta.url),
 );
 
+// Mirrors the Hermes v0.21.3 validator shape in plugins/observability/langfuse.
 const pinnedValidatorFixture = `\
 import re
 from typing import Dict, Optional
@@ -24,19 +25,12 @@ _LANGFUSE_KEY_PREFIXES: Dict[str, str] = {
     "HERMES_LANGFUSE_SECRET_KEY": "sk-lf-",
 }
 
-def _redact_key_preview(value: str) -> str:
-    return repr(value[:6] + "...")
-
 def _validate_langfuse_key(env_name: str, value: str) -> Optional[str]:
     expected = _LANGFUSE_KEY_PREFIXES.get(env_name, "")
-    if not expected:
+    if not expected or value.startswith(expected):
         return None
-    if value.startswith(expected):
-        return None
-    return (
-        f"{env_name}={_redact_key_preview(value)} "
-        f"(expected {expected!r} prefix)"
-    )
+    preview = "<empty>" if not value else repr(value) if len(value) <= 12 else repr(value[:6] + "...")
+    return f"{env_name}={preview} (expected {expected!r} prefix)"
 `;
 
 const validatorAssertions = `\

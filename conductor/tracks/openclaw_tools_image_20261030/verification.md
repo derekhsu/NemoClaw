@@ -72,3 +72,42 @@ The track's planning validation passed Markdown lint, metadata, task counts,
 local links, and independent documentation writer review. After local dependency
 installation, `npm run docs` passed with zero errors and two warnings.
 Those earlier results are not tools-image build or deployment qualification.
+
+## Perl ABI conflict resolution probe
+
+`Text-CharWidth-0.04.tar.gz` was downloaded from CPAN and checked against
+SHA-256 `abded5f4fdd9338e89fd2f1d8271c44989dae5bf50aece41b6179d8e230704f8`.
+[perl-rebuild-probe.sh](perl-rebuild-probe.sh) ran inside a disposable root
+container from the r2 digest on each architecture. The script holds every
+controlled package, builds the module against the controlled Perl 5.44
+(`perl Makefile.PL INSTALLDIRS=vendor`, `make test`), packages it as
+`libtext-charwidth-perl=0.04-11+nemoclaw1`, installs it, and repeats the
+complete system-package simulation.
+
+| Check | linux/amd64 | linux/arm64 |
+| --- | --- | --- |
+| `make test` | `Result: PASS` | `Result: PASS` |
+| Module loads under Perl 5.44 | Pass | Pass |
+| Tools apt simulation | 382 packages, no unmet dependency | 379 packages, no unmet dependency |
+| 27 controlled package versions | Unchanged | Unchanged |
+| Probe `.deb` SHA-256 | `49c5c3ea640796273483a2ab1a6bbb791394052dcf6ccb21e20735c0bb9722b6` | `941bc499773a5c7499a78435f73402f7b595f182dfbbc32e2f85e6afe912cc19` |
+
+Simulation output after the rebuild is in
+[amd64](apt-simulation-rebuilt-perl-amd64.log) and
+[arm64](apt-simulation-rebuilt-perl-arm64.log). `libtext-wrapi18n-perl` and
+`ucf` are architecture-independent and resolved from Debian without further
+Perl ABI requirements.
+
+An earlier run of the same probe with `--cap-drop ALL` failed before the
+build because root could not write the apt archive cache. The passing runs kept
+`no-new-privileges` and used default container capabilities.
+
+Limits of this result:
+
+- The rebuild uses upstream CPAN 0.04 and does not apply Debian's
+  `0.04-11` patches. Task 1.2 must review those patches before pinning.
+- The probe installed `gcc`, `make`, and `libc6-dev`. `Dockerfile.tools` must
+  build the module in a separate stage and copy only the package, so the final
+  image keeps no compiler.
+- This is a dependency-resolution and module-load result. It does not qualify
+  LibreOffice conversion or any other tool.

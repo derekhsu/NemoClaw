@@ -4,10 +4,10 @@
 # Track: OpenClaw Tools Image
 
 - ID: `openclaw_tools_image_20261030`
-- Status: In progress; Phase 1 input inspection
+- Status: In progress; Phase 1 dependency inspection
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
 - Branch: `codex/issue-16-tools-image`
-- Progress: 0/5 phases; 0/25 phase tasks
+- Progress: 0/5 phases; 1/25 phase tasks
 
 ## Documents
 

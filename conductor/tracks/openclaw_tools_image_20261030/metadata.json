@@ -1,0 +1,28 @@
+{
+  "track_id": "openclaw_tools_image_20261030",
+  "type": "feature",
+  "status": "in_progress",
+  "created_at": "2026-10-30T09:26:49Z",
+  "updated_at": "2026-10-30T09:54:31Z",
+  "description": "Fork issue #16: build a digest-pinned OpenClaw tools image with document, media, browser, workspace, and selected skill dependencies, separate publication tags, and offline non-root validation.",
+  "issue_url": "https://github.com/derekhsu/NemoClaw/issues/16",
+  "branch": "codex/issue-16-tools-image",
+  "base_branch": "feat/image-only-cli",
+  "base_commit": "70ff5c849b369c0cf467df3b2431dd4f00b795c9",
+  "current_phase": 1,
+  "current_task": "1.1",
+  "phases": {
+    "total": 5,
+    "completed": 0
+  },
+  "tasks": {
+    "total": 25,
+    "completed": 0
+  },
+  "commits": [],
+  "selected_base": {
+    "tag": "2026.9.2-r2",
+    "index_digest": "sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02",
+    "source_revision": "70ff5c849b369c0cf467df3b2431dd4f00b795c9"
+  }
+}

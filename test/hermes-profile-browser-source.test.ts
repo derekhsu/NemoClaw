@@ -50,37 +50,40 @@ module.patch_file(pathlib.Path(sys.argv[2]), sys.argv[3], {"browser.restrict_eva
 }
 
 describe("Hermes reviewed browser source identities", () => {
-  it.each([
-    [
-      "local",
-      "66008422f53a218dd7be5b1f5f3573a92254b75abba6f99f84e111e03a3e1b36",
-      "agent-browser@^0.26.0",
-    ],
-    [
-      "public",
-      "b43608826bb10f9bf919ca97757bf36fc95247bd8b14fa8626a113c639cfd73e",
-      "agent-browser@0.26.0",
-    ],
-  ])("patches the complete %s source while preserving its browser version pin", (name, digest, version) => {
-    const original = fixture(name);
-    expect(createHash("sha256").update(original).digest("hex")).toBe(digest);
+  it("patches the complete browser source while preserving its exact NPX pin", () => {
+    const original = fixture("browser_tool");
+    expect(createHash("sha256").update(original).digest("hex")).toBe(
+      "29598fc950902eff9b503fa1fcfd02a8e4b15673acb6e8131fdc0bde65518f51",
+    );
     const result = patchBrowser(original);
     expect(result.status, result.stderr).toBe(0);
-    expect(result.source).toContain(`AGENT_BROWSER_NPX_SPEC = "${version}"`);
-    expect(result.source).toContain('cfg_get(cfg, "browser", "restrict_evaluate"), default=True');
-    expect(result.source).toContain("config errors fail restricted.");
+    expect(result.source).toContain('AGENT_BROWSER_NPX_SPEC = "agent-browser@0.26.0"');
+    expect(result.source).toContain('env["npm_config_offline"] = "true"');
   });
 
-  it.each(["local", "public"])("rejects changes to the %s source without modifying it", (name) => {
+  it("keeps browser evaluation restricted when raw configuration is missing", () => {
+    const original = fixture("browser_tool_eval_policy");
+    expect(createHash("sha256").update(original).digest("hex")).toBe(
+      "80d617bf062ff9e0e87fd592e8bbaadc3c6aaef7b96d2fe3ceb49fcfecaf368a",
+    );
+    const result = patchBrowser(original, "browser_policy");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.source).toContain('return _browser_eval_flag("restrict_evaluate", default=True)');
+  });
+
+  it.each([
+    ["browser_tool", "browser"],
+    ["browser_tool_eval_policy", "browser_policy"],
+  ])("rejects changes to the %s source without modifying it", (name, kind) => {
     const altered = `${fixture(name)}\n`;
-    const result = patchBrowser(altered);
+    const result = patchBrowser(altered, kind);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("not the reviewed Hermes");
     expect(result.source).toBe(altered);
   });
 
   it("rejects the reviewed browser identity for a different source kind", () => {
-    const original = fixture("public");
+    const original = fixture("browser_tool");
     const result = patchBrowser(original, "config");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("config source");

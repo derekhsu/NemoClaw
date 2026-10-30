@@ -33,12 +33,12 @@ def verify_profile_policy() -> None:
     from types import SimpleNamespace
 
     from cli import CLI_CONFIG
-    from gateway.config import SessionResetPolicy, load_gateway_config
+    from gateway.config import SessionResetPolicy
     from hermes_cli import config as hermes_config
     from hermes_cli.config import load_config_readonly
-    from hermes_cli.update_cmd import _resolve_pre_update_backup_mode
+    from hermes_cli.update_cmd_maint import _resolve_pre_update_backup_mode
     from managed_policy import load_managed_policy, profile_default_values
-    from tools.browser_tool import (
+    from tools.browser_tool_eval_policy import (
         _allow_unsafe_browser_evaluate,
         _restrict_browser_evaluate,
     )
@@ -54,8 +54,8 @@ def verify_profile_policy() -> None:
     assert _load_show_reasoning() == expected["display.show_reasoning"]
     _verify_session_reset_policy(SessionResetPolicy(), expected)
     _verify_session_reset_policy(SessionResetPolicy.from_dict({}), expected)
-    gateway = load_gateway_config()
-    _verify_session_reset_policy(gateway.default_reset_policy, expected)
+    # Hermes v0.21.3 no longer exposes GatewayConfig.default_reset_policy; the
+    # class defaults above are the remaining fallback surface.
     original_load_config = hermes_config.load_config
     try:
 
@@ -176,7 +176,7 @@ def verify_cron_runtime_source() -> None:
     from hermes_constants import get_hermes_home
 
     expected = get_hermes_home().resolve() / "runtime" / "cron-executions.db"
-    # Hermes v2026.8.27 keeps EXECUTIONS_FILE as an optional override and
+    # Hermes v2026.9.14 keeps EXECUTIONS_FILE as an optional override and
     # resolves the production path lazily so a dashboard-entered profile cannot
     # leak executions into the import-time home. Prove the lazy resolution —
     # in executions._connect and the shared incidents._db_path — lands under
@@ -210,6 +210,9 @@ def verify_session_delete() -> None:
     from hermes_state import SessionDB
 
     db = SessionDB()
+    # The source patch and the managed policy both select SQLite memory mode.
+    temp_store = db._conn.execute("PRAGMA temp_store").fetchone()
+    assert temp_store is not None and tuple(temp_store)[0] == 2, temp_store
     session_id = "nemoclaw-session-delete-smoke"
     db.create_session(session_id, "cli")
     db.append_message(session_id, "user", "probe message 1")

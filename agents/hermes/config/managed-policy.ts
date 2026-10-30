@@ -110,6 +110,7 @@ const MANAGED_POLICY_PATHS = [
   "approvals.mode",
   "browser.allow_unsafe_evaluate",
   "browser.restrict_evaluate",
+  "database.temp_store",
   "session_reset.mode",
   "session_reset.at_hour",
   "session_reset.idle_minutes",
@@ -126,6 +127,7 @@ type HermesManagedConfigBase = Record<string, unknown> & {
   _config_version: number;
   approvals: { mode: "manual" | "smart" | "off" };
   browser: { allow_unsafe_evaluate: boolean; restrict_evaluate: boolean };
+  database: { temp_store: 2 };
   display: {
     compact: boolean;
     tool_progress: string;
@@ -184,12 +186,14 @@ export function buildHermesManagedPolicy(
   }
 
   const config: HermesManagedConfigBase = {
-    // Hermes 0.20.6's current schema version. Stamping it here matters: the
+    // Hermes 0.21.3's current schema version. Stamping it here matters: the
     // managed config hash covers config.yaml byte-for-byte, so a stale stamp
     // would let startup migration rewrite the file and trip the drift guard.
-    // Migrations v34–v39 are all conditional scrubs that are no-ops on this
-    // generated shape.
-    _config_version: 39,
+    // Migrations v34–v43 are conditional scrubs that are no-ops on this
+    // generated shape. v44 would rewrite the explicit curator retention below
+    // (30/90 days) to the new upstream defaults (14/30); the current stamp keeps
+    // NemoClaw's managed retention authoritative.
+    _config_version: 44,
     approvals: {
       // Hermes 0.19 defaults an omitted mode to smart authorization.
       // Automated command authorization needs a separate product decision.
@@ -199,6 +203,10 @@ export function buildHermesManagedPolicy(
       // Keep unsafe and sensitive browser evaluation restricted for hostile pages.
       allow_unsafe_evaluate: false,
       restrict_evaluate: true,
+    },
+    database: {
+      // OpenShell blocks SQLite temp-file creation on the managed CLI path.
+      temp_store: 2,
     },
     session_reset: {
       // Preserve the prior daily and idle expiry instead of inheriting an

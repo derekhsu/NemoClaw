@@ -1,37 +1,137 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Applies reviewed dependency fixes to the checksum-pinned Hermes v2026.8.27
-# source metadata and frozen lock before installation.
+# Applies reviewed dependency and source compatibility fixes to the
+# checksum-pinned Hermes v2026.9.14 (0.21.3) source before installation.
 #
-# Hermes 0.20.6 already carries the reviewed aiohttp, cryptography, Pillow,
-# Starlette, Tornado, and python-multipart selections natively. The remaining
-# delta floors two stacks. First, mcp's unpinned HTTP stack: upstream pins
-# httpx2==2.7.0 in the dev, mcp, and computer-use extras, and httpx2 2.7.0 plus
-# its exact httpcore2==2.7.0 transitive carry GHSA-7mj9-2mp8-4m2p (SOCKS TLS
-# downgrade), GHSA-8xx6-hgc6-gc2m (unbounded decompression),
-# GHSA-f2fp-rgf2-35cp (quadratic SSE buffering), GHSA-h4x7-gw46-3wm6
-# (multipart header injection), and GHSA-pf96-p4fj-6566 (CL/TE smuggling).
-# httpx2 2.12.0 is the lowest release that clears all five advisories and
-# requires httpcore2==2.12.0, which clears the same SOCKS-TLS flaw in the
-# transport layer. Second, the dingtalk extra still pins
-# alibabacloud-dingtalk==2.2.42; floor it at the reviewed 2.2.54 release (the
-# selection recorded in the Hermes 0.19.0 dependency review) so the frozen lock
-# cannot resolve the older build.
+# Dependency floors. Hermes 0.21.3 still pins httpx2==2.7.0 in the dev, mcp,
+# and computer-use extras, and httpx2 2.7.0 plus its exact httpcore2==2.7.0
+# transitive carry GHSA-7mj9-2mp8-4m2p (SOCKS TLS downgrade),
+# GHSA-8xx6-hgc6-gc2m (unbounded decompression), GHSA-f2fp-rgf2-35cp
+# (quadratic SSE buffering), GHSA-h4x7-gw46-3wm6 (multipart header injection),
+# and GHSA-pf96-p4fj-6566 (CL/TE smuggling). httpx2 2.12.0 is the lowest
+# release that clears all five advisories and requires httpcore2==2.12.0,
+# which clears the same SOCKS-TLS flaw in the transport layer. The dingtalk
+# extra still pins alibabacloud-dingtalk==2.2.42; floor it at the reviewed
+# 2.2.54 release (the selection recorded in the Hermes 0.19.0 dependency
+# review) so the frozen lock cannot resolve the older build.
+#
+# Source compatibility (aligned with upstream NemoClaw's 0.21.3 patch). Keep
+# the upstream agent-browser fallback exact so runtime resolution cannot drift
+# beyond the separately verified build-time probe, and keep the Hindsight
+# lazy-install dependency exact. Scope one-shot completion waits to the exact
+# turn so unrelated managed-runtime processes cannot hold a completed query
+# open. Keep the cron tick lock in writable runtime state while job
+# definitions remain sealed read-only.
+diff --git a/cron/scheduler.py b/cron/scheduler.py
+index 3d745e1..6517701 100644
+--- a/cron/scheduler.py
++++ b/cron/scheduler.py
+@@ -1045,7 +1045,7 @@ def _get_hermes_home() -> Path:
+ def _get_lock_paths() -> tuple[Path, Path]:
+     """Resolve cron lock paths at call time so profile/env changes are honored."""
+     hermes_home = _get_hermes_home()
+-    lock_dir = hermes_home / "cron"
++    lock_dir = hermes_home / "runtime"
+     return lock_dir, lock_dir / ".tick.lock"
+ 
+ 
+diff --git a/hermes_cli/oneshot.py b/hermes_cli/oneshot.py
+index 5c3603f..bd61c11 100644
+--- a/hermes_cli/oneshot.py
++++ b/hermes_cli/oneshot.py
+@@ -12,6 +12,7 @@ import json
+ import logging
+ import os
+ import sys
++import uuid
+ from contextlib import redirect_stderr, redirect_stdout
+ from dataclasses import dataclass
+ from pathlib import Path
+@@ -473,6 +474,7 @@ def _run_agent(
+     # The try spans agent construction (not just ``chat``) so the store is always closed, even when
+     # ``AIAgent(...)`` raises — the one-shot exit path hard-exits via os._exit and skips finalizers.
+     agent = None
++    oneshot_task_id = str(uuid.uuid4())
+     try:
+         agent = AIAgent(
+             api_key=runtime.get("api_key"),
+@@ -500,10 +502,14 @@ def _run_agent(
+         agent.stream_delta_callback = None
+         agent.tool_gen_callback = None
+ 
+-        result = agent.run_conversation(prompt, conversation_history=conversation_history or None)
++        result = agent.run_conversation(
++            prompt,
++            conversation_history=conversation_history or None,
++            task_id=oneshot_task_id,
++        )
+         return (result.get("final_response") or "", result)
+     finally:
+-        _close_agent(agent, session_db)
++        _close_agent(agent, session_db, oneshot_task_id)
+ 
+ 
+ def _quietly(what: str, fn) -> None:
+@@ -514,24 +520,27 @@ def _quietly(what: str, fn) -> None:
+         logging.debug("oneshot %s failed", what, exc_info=True)
+ 
+ 
+-def _linger_for_background_completions() -> None:
++def _linger_for_background_completions(oneshot_task_id: str) -> None:
+     # Linger (bounded) for background processes this turn spawned with notify_on_complete=true BEFORE
+     # agent.close(): close() calls process_registry.kill_all(task_id) and the dying parent owns the
+     # children's stdout pipes, so exiting now destroys in-flight deliveries — including Bot Mode handoff
+     # replies dispatched from a short-lived recipient (#90879).
+     from tools.process_registry import process_registry
+ 
+-    process_registry.wait_for_pending_completions(None)
++    process_registry.wait_for_pending_completions(oneshot_task_id)
+ 
+ 
+-def _close_agent(agent, session_db) -> None:
++def _close_agent(agent, session_db, oneshot_task_id: str) -> None:
+     """Teardown mirroring gateway/run.py:_cleanup_agent_resources (NOT cli.py:_run_cleanup):
+     oneshot has no _active_agent_ref and the hard-exit path skips finalizers."""
+     if agent is not None:
+         # Linger (bounded) for notify_on_complete background processes BEFORE agent.close():
+         # close() kill_all()s the task and the dying parent owns the children's stdout pipes, so
+         # exiting now destroys in-flight deliveries (e.g. Bot Mode handoff replies).
+-        _quietly("background completion wait", _linger_for_background_completions)
++        _quietly(
++            "background completion wait",
++            lambda: _linger_for_background_completions(oneshot_task_id),
++        )
+         session_messages = getattr(agent, "_session_messages", None)
+         memory_args = (session_messages,) if isinstance(session_messages, list) else ()
+         _quietly("memory/context cleanup", lambda: agent.shutdown_memory_provider(*memory_args))
+diff --git a/plugins/memory/hindsight/plugin.yaml b/plugins/memory/hindsight/plugin.yaml
+index 9dfa763..86ce60d 100644
+--- a/plugins/memory/hindsight/plugin.yaml
++++ b/plugins/memory/hindsight/plugin.yaml
+@@ -2,7 +2,7 @@ name: hindsight
+ version: 1.0.0
+ description: "Hindsight — long-term memory with knowledge graph, entity resolution, and multi-strategy retrieval."
+ pip_dependencies:
+-  - "hindsight-client>=0.6.1"
++  - "hindsight-client==0.6.1"
+ requires_env: []
+ hooks:
+   - on_session_end
 diff --git a/pyproject.toml b/pyproject.toml
-index 94ab59f..aa941d5 100644
+index 4ddeea1..0f8e1ec 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
-@@ -186,7 +186,7 @@ modal = ["modal==1.3.4"]
+@@ -204,7 +204,7 @@ modal = ["modal==1.3.4"]
  daytona = ["daytona==0.155.0"]
  vercel = ["vercel==0.7.2"]
  hindsight = ["hindsight-client==0.6.1"]
 -dev = ["debugpy==1.8.20", "pytest==9.1.1", "pytest-asyncio==1.3.0", "mcp==2.0.0", "httpx2==2.7.0", "starlette==1.3.1", "ty==0.0.21", "ruff==0.15.10", "setuptools==83.0.0"]  # starlette: CVE-2026-48710; setuptools: 83 (torch >=2.13 requires setuptools 83)
 +dev = ["debugpy==1.8.20", "pytest==9.1.1", "pytest-asyncio==1.3.0", "mcp==2.0.0", "httpx2==2.12.0", "starlette==1.3.1", "ty==0.0.21", "ruff==0.15.10", "setuptools==83.0.0"]  # starlette: CVE-2026-48710; setuptools: 83 (torch >=2.13 requires setuptools 83)
- messaging = ["python-telegram-bot[webhooks]==22.8", "discord.py[voice]==2.7.1", "aiohttp==3.14.3", "brotlicffi==1.2.0.1", "slack-bolt==1.30.0", "slack-sdk==3.43.0", "qrcode==7.4.2"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
+ messaging = ["python-telegram-bot[webhooks]==22.8", "discord.py[voice]==2.7.1", "aiohttp==3.14.3", "brotlicffi==1.2.0.2", "slack-bolt==1.30.0", "slack-sdk==3.44.1", "qrcode==7.4.2"]  # aiohttp 3.14.3: prior CVEs + GHSA-cq5v-8q36-5273/GHSA-mfx4-hv73-q22v/GHSA-mq44-7p77-q5h7
  cron = []  # croniter is now a core dependency; this extra kept for back-compat
- slack = ["slack-bolt==1.30.0", "slack-sdk==3.43.0", "aiohttp==3.14.3"]
-@@ -258,7 +258,7 @@ pty = []
+ slack = ["slack-bolt==1.30.0", "slack-sdk==3.44.1", "aiohttp==3.14.3"]
+@@ -276,7 +276,7 @@ pty = []
  # resolution. Hermes' own `httpx[socks]==0.28.1` in [dependencies] is
  # unaffected — the two distributions install side by side under different
  # module names.
@@ -40,7 +140,7 @@ index 94ab59f..aa941d5 100644
  # Backwards-compatible no-op alias. Relay is a core dependency on supported
  # wheel targets and intentionally unavailable on other platforms.
  nemo-relay = []
-@@ -269,7 +269,7 @@ teams = ["microsoft-teams-apps==2.0.13.4", "aiohttp==3.14.3"]  # aiohttp 3.14.3:
+@@ -287,7 +287,7 @@ teams = ["microsoft-teams-apps==2.0.13.4", "aiohttp==3.14.3"]  # aiohttp 3.14.3:
  # The cua-driver binary itself is installed via `hermes tools` post-setup
  # (curl install script); this extra just pins the MCP client used to talk
  # to it, which is already provided by the `mcp` extra.
@@ -49,7 +149,7 @@ index 94ab59f..aa941d5 100644
  acp = ["agent-client-protocol==0.9.0"]
  # mistral: Voxtral STT + TTS. Pinned to an exact verified-clean version.
  # The `mistralai` PyPI project was quarantined 2026-05-12 after the malicious
-@@ -308,7 +308,7 @@ termux-all = [
+@@ -326,7 +326,7 @@ termux-all = [
    "hermes-agent[web]",
    "hermes-agent[pty]",
  ]
@@ -58,12 +158,30 @@ index 94ab59f..aa941d5 100644
  feishu = ["lark-oapi==1.6.8", "qrcode==7.4.2"]
  google = [
    # Required by the google-workspace skill (Gmail, Calendar, Drive, Contacts,
+diff --git a/tools/browser_tool.py b/tools/browser_tool.py
+index 104bc76..e1b011d 100644
+--- a/tools/browser_tool.py
++++ b/tools/browser_tool.py
+@@ -119,9 +119,10 @@ _EMPTY_OK_COMMANDS: frozenset = frozenset({"close", "record"})  # legitimately e
+ # Sentinel _find_agent_browser returns/caches to mean "resolve via npx" rather
+ # than a concrete path (also compared in hermes_cli/tools_config.py and doctor.py).
+ NPX_AGENT_BROWSER_SENTINEL = "npx agent-browser"
+-# Pinned to match scripts/install.sh / install.ps1's managed install so a bare-npx
+-# resolution gets the same version instead of floating latest. Update together.
+-AGENT_BROWSER_NPX_SPEC = "agent-browser@^0.26.0"
++# NemoClaw pins the npx fallback to the reviewed 0.26.0 release so managed
++# image execution cannot float to a later registry version. Update the image
++# warm-cache and offline probes with this source authority.
++AGENT_BROWSER_NPX_SPEC = "agent-browser@0.26.0"
+ 
+ # Process caches (``_cached_X`` + ``_X_resolved`` pairs) for config-derived lookups;
+ # reset by ``cleanup_all_browsers``. Written/read by the sibling modules via ``browser_tool_origin``.
 diff --git a/uv.lock b/uv.lock
-index 248f1f9..2a49d7a 100644
+index 1e8d934..ea978bb 100644
 --- a/uv.lock
 +++ b/uv.lock
-@@ -226,7 +226,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/a0/87/1d7019d23891897cb
-
+@@ -312,7 +312,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/a0/87/1d7019d23891897cb
+ 
  [[package]]
  name = "alibabacloud-dingtalk"
 -version = "2.2.42"
@@ -71,7 +189,7 @@ index 248f1f9..2a49d7a 100644
  source = { registry = "https://pypi.org/simple" }
  dependencies = [
      { name = "alibabacloud-endpoint-util" },
-@@ -236,9 +236,9 @@ dependencies = [
+@@ -322,9 +322,9 @@ dependencies = [
      { name = "alibabacloud-tea-openapi" },
      { name = "alibabacloud-tea-util" },
  ]
@@ -81,9 +199,9 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/9d/80/7d1c1438e17c1fc90d037f1b73debe3fc2dfa348eb91e12818c2584d1865/alibabacloud_dingtalk-2.2.42-py3-none-any.whl", hash = "sha256:5f5c2ef3351b7926eb870af11089e14f802e4caa51d5f72920ad79a67f03d3e4", size = 2142688, upload-time = "2026-04-10T03:58:26.33Z" },
 +    { url = "https://files.pythonhosted.org/packages/3b/6f/ae53e468af95aacd68f8251f2d567fa16d520eac349e9952419b531dfbda/alibabacloud_dingtalk-2.2.54-py3-none-any.whl", hash = "sha256:67b4f1c70ad17fb7f1611d3594130c5318a047b1ddbb1506c21249fffaac4a9b", size = 2235207, upload-time = "2026-07-23T07:07:06.918Z" },
  ]
-
+ 
  [[package]]
-@@ -1821,7 +1821,7 @@ requires-dist = [
+@@ -1992,7 +1992,7 @@ requires-dist = [
      { name = "aiohttp", marker = "extra == 'teams'", specifier = "==3.14.3" },
      { name = "aiohttp-socks", marker = "extra == 'matrix'", specifier = "==0.11.0" },
      { name = "aiosqlite", marker = "extra == 'matrix'", specifier = "==0.22.1" },
@@ -92,9 +210,9 @@ index 248f1f9..2a49d7a 100644
      { name = "anthropic", marker = "extra == 'anthropic'", specifier = "==0.87.0" },
      { name = "asyncpg", marker = "extra == 'matrix'", specifier = "==0.31.0" },
      { name = "azure-identity", marker = "extra == 'azure-identity'", specifier = "==1.25.3" },
-@@ -1873,9 +1873,9 @@ requires-dist = [
-     { name = "honcho-ai", marker = "extra == 'honcho'", specifier = "==2.2.0" },
+@@ -2051,9 +2051,9 @@ requires-dist = [
      { name = "httplib2", marker = "extra == 'google'", specifier = "==0.32.0" },
+     { name = "httplib2", marker = "extra == 'google-chat'", specifier = "==0.32.0" },
      { name = "httpx", extras = ["socks"], specifier = "==0.28.1" },
 -    { name = "httpx2", marker = "extra == 'computer-use'", specifier = "==2.7.0" },
 -    { name = "httpx2", marker = "extra == 'dev'", specifier = "==2.7.0" },
@@ -105,8 +223,8 @@ index 248f1f9..2a49d7a 100644
      { name = "jinja2", specifier = "==3.1.6" },
      { name = "lark-oapi", marker = "extra == 'feishu'", specifier = "==1.6.8" },
      { name = "markdown", specifier = "==3.10.2" },
-@@ -2021,15 +2021,15 @@ wheels = [
-
+@@ -2201,15 +2201,15 @@ wheels = [
+ 
  [[package]]
  name = "httpcore2"
 -version = "2.7.0"
@@ -122,10 +240,10 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/6f/6c/62e2e279e63fc4f7a5ee841ef13175a8bbc613f258e9dcc186e9de803a42/httpcore2-2.7.0-py3-none-any.whl", hash = "sha256:1452f589fe23f55b44546cd884294c41a29330af902bc0b71a761fd52d18f92b", size = 81506, upload-time = "2026-07-14T20:39:58.053Z" },
 +    { url = "https://files.pythonhosted.org/packages/d2/74/d370e55600d9bcfa0d9794b0166126d49291a3d2b20c268fc98c453a4948/httpcore2-2.12.0-py3-none-any.whl", hash = "sha256:7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb", size = 83074, upload-time = "2026-08-18T13:22:05.854488Z" },
  ]
-
+ 
  [[package]]
-@@ -2107,7 +2107,7 @@ wheels = [
-
+@@ -2287,7 +2287,7 @@ wheels = [
+ 
  [[package]]
  name = "httpx2"
 -version = "2.7.0"
@@ -133,7 +251,7 @@ index 248f1f9..2a49d7a 100644
  source = { registry = "https://pypi.org/simple" }
  dependencies = [
      { name = "anyio" },
-@@ -2116,9 +2116,9 @@ dependencies = [
+@@ -2296,9 +2296,9 @@ dependencies = [
      { name = "truststore" },
      { name = "typing-extensions", marker = "python_full_version < '3.13'" },
  ]
@@ -143,5 +261,5 @@ index 248f1f9..2a49d7a 100644
 -    { url = "https://files.pythonhosted.org/packages/1d/b8/c341bba6411bdfda786020343c47a75ef472f6085caf82391b142b1a3ad9/httpx2-2.7.0-py3-none-any.whl", hash = "sha256:ed2a2719c696789e09493bd8e2bec3d8bd925cc6e26b68389ec25ade132f7bf4", size = 90234, upload-time = "2026-07-14T20:39:59.531Z" },
 +    { url = "https://files.pythonhosted.org/packages/c8/95/411ba65569158e862368917aaf56597f3e5fa3b91b0502919638465a08f3/httpx2-2.12.0-py3-none-any.whl", hash = "sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36", size = 95427, upload-time = "2026-08-18T13:22:06.834669Z" },
  ]
-
+ 
  [[package]]

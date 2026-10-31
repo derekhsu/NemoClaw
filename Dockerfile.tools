@@ -10,30 +10,18 @@
 # healthcheck, and controlled package versions. It ships no compiler.
 
 ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
-ARG TARGETARCH
-
-# Downloaded single-file tools, verified by checksum.
-FROM scratch AS officecli-amd64
+# Downloaded single-file tools, verified by checksum. The final stage
+# installs the file for its own architecture through a bind mount, so the
+# other architecture's file never enters an image layer.
+FROM scratch AS downloads
 ADD --checksum=sha256:baa084b64ec634bd9d41a0592db3ed85f11658b358bab898679537ea7f3e73a9 \
-    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli
-
-FROM scratch AS officecli-arm64
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli-amd64
 ADD --checksum=sha256:e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53 \
-    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli
-
-FROM scratch AS yq-amd64
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli-arm64
 ADD --checksum=sha256:8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f \
-    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64 /yq
-
-FROM scratch AS yq-arm64
+    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64 /yq-amd64
 ADD --checksum=sha256:189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b \
-    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64 /yq
-
-# Stage names, not registry images.
-# hadolint ignore=DL3006
-FROM officecli-${TARGETARCH} AS officecli
-# hadolint ignore=DL3006
-FROM yq-${TARGETARCH} AS yq
+    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64 /yq-arm64
 
 # LibreOffice Calc reaches libtext-charwidth-perl through ucf. Debian builds
 # it for Perl 5.40, but the base carries the controlled Perl 5.44. Rebuild
@@ -114,8 +102,11 @@ RUN set -eu; \
     fc-cache -f; \
     ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null
 
-COPY --from=officecli --chmod=0755 /officecli /usr/local/bin/officecli
-COPY --from=yq --chmod=0755 /yq /usr/local/bin/yq
+RUN --mount=type=bind,from=downloads,target=/downloads \
+    set -eu; \
+    arch=$(dpkg --print-architecture); \
+    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli; \
+    install -m 0755 "/downloads/yq-$arch" /usr/local/bin/yq
 
 # Python packages go into the system interpreter, as the base does for
 # PyYAML, so plain python3 imports them.

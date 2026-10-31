@@ -10,6 +10,7 @@
 #     -v "$PWD/tools/openclaw-tools-image/fixtures:/fixtures:ro" \
 #     -v "$OUT:/out" IMAGE /fixtures/run-phase2.sh
 # Writes one log per check to /out/logs and a summary to /out/summary.tsv.
+# Run before run-phase3.sh, which appends to the same summary.
 # Exits non-zero when any check fails.
 
 # Checks are called indirectly through check().
@@ -17,31 +18,8 @@
 
 set -uo pipefail
 
-OUT=${OUT:-/out}
-WORK=$(mktemp -d /tmp/fixtures.XXXXXX)
-export HOME=$WORK/home MPLCONFIGDIR=$WORK/mpl SAL_USE_VCLPLUGIN=svp
-mkdir -p "$HOME" "$MPLCONFIGDIR" "$OUT/logs" "$OUT/files"
-: >"$OUT/summary.tsv"
-failures=0
-
-check() {
-  local name=$1
-  shift
-  local rc
-  # A standalone subshell keeps errexit active inside the check.
-  (
-    set -euo pipefail
-    cd "$WORK"
-    "$@"
-  ) >"$OUT/logs/$name.log" 2>&1
-  rc=$?
-  if [ "$rc" -eq 0 ]; then
-    printf 'PASS\t%s\n' "$name" | tee -a "$OUT/summary.tsv"
-  else
-    printf 'FAIL\t%s\n' "$name" | tee -a "$OUT/summary.tsv"
-    failures=$((failures + 1))
-  fi
-}
+# shellcheck source=tools/openclaw-tools-image/fixtures/lib.sh
+source "$(dirname "$0")/lib.sh"
 
 soffice_pdf() {
   local input=$1 profile
@@ -397,5 +375,4 @@ check workspace workspace
 check python_libraries python_libraries
 check node_resolution node_resolution
 
-printf '%s checks failed\n' "$failures"
-exit $((failures > 0))
+finish

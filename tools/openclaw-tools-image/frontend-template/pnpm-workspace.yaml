@@ -1,3 +1,8 @@
+# Offline installs read the package store and metadata cache baked into the
+# OpenClaw tools image. Lockfile packages need no network.
+storeDir: /usr/local/share/nemoclaw-tools/pnpm-store
+cacheDir: /usr/local/share/nemoclaw-tools/pnpm-cache
+
 # Prebuilt platform packages supply these native bindings. Deny install
 # scripts so offline installs never compile or download.
 allowBuilds:

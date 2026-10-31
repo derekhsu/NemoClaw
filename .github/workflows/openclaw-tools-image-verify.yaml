@@ -76,12 +76,16 @@ jobs:
           set -euo pipefail
           mkdir -p "$OUT/fixtures"
           chmod 0777 "$OUT/fixtures"
-          docker run --rm --user sandbox --network none --read-only \
-            --tmpfs /tmp:rw,exec,size=2g --cap-drop ALL --security-opt no-new-privileges \
-            --entrypoint /bin/bash \
-            -v "$PWD/tools/openclaw-tools-image/fixtures:/fixtures:ro" \
-            -v "$OUT/fixtures:/out" \
-            "$TOOLS_IMAGE" /fixtures/run-phase2.sh
+          rc=0
+          for phase in run-phase2.sh run-phase3.sh; do
+            docker run --rm --user sandbox --network none --read-only \
+              --tmpfs /tmp:rw,exec,size=2g --cap-drop ALL --security-opt no-new-privileges \
+              --entrypoint /bin/bash \
+              -v "$PWD/tools/openclaw-tools-image/fixtures:/fixtures:ro" \
+              -v "$OUT/fixtures:/out" \
+              "$TOOLS_IMAGE" "/fixtures/$phase" || rc=1
+          done
+          exit "$rc"
 
       - name: Scan with Trivy
         if: always()

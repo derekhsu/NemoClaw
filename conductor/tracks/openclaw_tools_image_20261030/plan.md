@@ -6,7 +6,7 @@
 - Track ID: `openclaw_tools_image_20261030`
 - Specification: [spec.md](spec.md)
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
-- Status: [~] Phase 2 in progress
+- Status: [~] Phase 3 in progress
 
 ## Working rules
 
@@ -45,7 +45,7 @@ Task 5.3 move to [#18](https://github.com/derekhsu/NemoClaw/issues/18).
 - [x] Task 2.2: Add Dockerfile.tools using the accepted full base digest; install the required system, Python, Node.js document, workspace, and font dependencies with controlled-package drift prevention. `eee3036`
 - [x] Task 2.3: Configure workspace module resolution, Python environment, writable caches, LibreOffice profiles, and selected helper preparation without changing base runtime ownership or retaining an unapproved compiler. `f2449cf`
 - [x] Task 2.4: Run the document/media/workspace fixture set non-root and offline on amd64 and arm64; rerun base-revision security checks, compare image configuration, and record image size. `7a040dd`
-- [ ] Task: Conductor - User Manual Verification 'Document and media tools image' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Document and media tools image' (Protocol in workflow.md) (confirmed by maintainer 2026-11-01)
 
 Phase evidence: actual outputs and package/configuration comparisons. Version
 commands and Dockerfile text assertions alone do not qualify installed tools.
@@ -53,7 +53,7 @@ No failed required tool may be dropped without a maintainer scope decision.
 
 ## Phase 3: Run browser and frontend tasks without installation downloads
 
-- [ ] Task 3.1: Add failing fixtures for OpenClaw/Python Playwright browser actions, plugin/tool/launch/policy error diagnosis, frontend creation/build/HTML packaging, and forbidden runtime downloads.
+- [~] Task 3.1: Add failing fixtures for OpenClaw/Python Playwright browser actions, plugin/tool/launch/policy error diagnosis, frontend creation/build/HTML packaging, and forbidden runtime downloads.
 - [ ] Task 3.2: Install the accepted Chromium artifacts and libraries; configure non-root writable paths and prove compatibility with OpenClaw and Python Playwright on both architectures.
 - [ ] Task 3.3: Prepare fixed frontend templates, dependency locks/offline store, Node.js module resolution, and p5.js assets; complete frontend tasks from the agent workspace without external package downloads.
 - [ ] Task 3.4: Run the controlled browser and frontend journeys under the selected deployment policy; verify undeclared destinations remain denied and inspect screenshot/HTML outputs.

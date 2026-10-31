@@ -134,7 +134,7 @@ officecli_journey() {
   out=$(officecli view doc.docx text)
   echo "$out"
   grep -q "officecli 新增段落" <<<"$out"
-  out=$(officecli get sheet.xlsx /Sheet1/A2 --json)
+  out=$(officecli get sheet.xlsx /Sheet/A2 --json)
   echo "$out"
   grep -q 'A1\*2' <<<"$out"
   # pptxgenjs output fails strict schema validation (element order), so
@@ -233,25 +233,27 @@ def face(family):
     raise SystemExit(f"{family} not found in {font_path}")
 
 cases = {
-    "eng": ("Hello OCR 2026", "Noto Sans CJK TC"),
-    "chi_tra": ("繁體中文測試", "Noto Sans CJK TC"),
-    "chi_sim": ("简体中文测试", "Noto Sans CJK SC"),
+    "eng": (["Hello OCR 2026"], "Noto Sans CJK TC"),
+    "chi_tra": (["這是中文測試文件", "臺北市政府公告"], "Noto Sans CJK TC"),
+    "chi_sim": (["这是中文测试文件", "北京市政府公告"], "Noto Sans CJK SC"),
 }
-for lang, (text, family) in cases.items():
-    img = Image.new("RGB", (1100, 220), "white")
-    ImageDraw.Draw(img).text((40, 50), text, fill="black", font=face(family))
+for lang, (lines, family) in cases.items():
+    img = Image.new("RGB", (1100, 120 + 140 * len(lines)), "white")
+    draw = ImageDraw.Draw(img)
+    for row, text in enumerate(lines):
+        draw.text((40, 50 + 140 * row), text, fill="black", font=face(family))
     img.save(f"ocr-{lang}.png")
 PY
   local lang
   for lang in eng chi_tra chi_sim; do
-    tesseract "ocr-$lang.png" "ocr-$lang" -l "$lang" --psm 7
+    tesseract "ocr-$lang.png" "ocr-$lang" -l "$lang" --psm 6
     echo "$lang: $(cat "ocr-$lang.txt")"
   done
   grep -q 'Hello OCR 2026' ocr-eng.txt
-  # Tesseract 4.1 CJK data can misread one glyph; require 80% similarity.
+  # Tesseract 4.1 CJK data can misread a glyph; require 80% similarity.
   python3 - <<'PY'
 import difflib
-for lang, expected in {"chi_tra": "繁體中文測試", "chi_sim": "简体中文测试"}.items():
+for lang, expected in {"chi_tra": "這是中文測試文件臺北市政府公告", "chi_sim": "这是中文测试文件北京市政府公告"}.items():
     got = "".join(open(f"ocr-{lang}.txt", encoding="utf-8").read().split())
     ratio = difflib.SequenceMatcher(None, expected, got).ratio()
     print(lang, got, round(ratio, 2))

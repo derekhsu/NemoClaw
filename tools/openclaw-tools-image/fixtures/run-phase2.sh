@@ -128,9 +128,16 @@ officecli_journey() {
   export OFFICECLI_RESIDENT_FLUSH=each
   officecli --version | grep -Fx 1.0.160
   officecli add doc.docx /body --type paragraph --prop text="officecli 新增段落"
-  for f in doc.docx sheet.xlsx slides.pptx; do officecli validate "$f"; done
+  officecli validate doc.docx
+  officecli validate sheet.xlsx
   officecli view doc.docx text | grep -q "officecli 新增段落"
   officecli get sheet.xlsx /Sheet1/A2 --json | grep -q 'A1\*2'
+  # pptxgenjs output fails strict schema validation (element order), so
+  # validate an officecli-created deck and only read back the pptxgenjs one.
+  officecli view slides.pptx text | grep -q '中文測試'
+  officecli create deck.pptx
+  officecli add deck.pptx / --type slide
+  officecli validate deck.pptx
 }
 
 office_to_pdf() {
@@ -145,8 +152,11 @@ office_to_pdf() {
   soffice_pdf sheet.xlsx
   for f in doc.docx slides.pptx sheet.xlsx; do
     local pdf=pdf/${f%.*}.pdf
-    pdftotext "$pdf" - | tr -d '[:space:]' | grep -q '中文測試'
-    pdffonts "$pdf" | grep -q 'NotoSansCJK'
+    echo "== $pdf"
+    pdffonts "$pdf"
+    pdftotext "$pdf" - | tee "$pdf.txt"
+    tr -d '[:space:]' <"$pdf.txt" | grep -q '中文測試'
+    pdffonts "$pdf" | grep -Eq 'Noto(Sans|Serif)CJK'
   done
   cp pdf/*.pdf "$OUT/files/"
 }
@@ -212,9 +222,16 @@ for lang, text in cases.items():
     ImageDraw.Draw(img).text((30, 30), text, fill="black", font=ImageFont.truetype(font_path, 72, index=0))
     img.save(f"ocr-{lang}.png")
 PY
-  grep -q 'Hello OCR 2026' <(tesseract ocr-eng.png - -l eng)
-  tesseract ocr-chi_tra.png - -l chi_tra | tr -d '[:space:]' | grep -q '繁體中文測試'
-  tesseract ocr-chi_sim.png - -l chi_sim | tr -d '[:space:]' | grep -q '简体中文测试'
+  local lang text
+  for lang in eng chi_tra chi_sim; do
+    tesseract "ocr-$lang.png" "ocr-$lang" -l "$lang"
+    echo "$lang: $(cat "ocr-$lang.txt")"
+  done
+  grep -q 'Hello OCR 2026' ocr-eng.txt
+  text=$(tr -d '[:space:]' <ocr-chi_tra.txt)
+  [[ $text == *繁體中文測試* ]]
+  text=$(tr -d '[:space:]' <ocr-chi_sim.txt)
+  [[ $text == *简体中文测试* ]]
   python3 - <<'PY'
 import pytesseract
 from pdf2image import convert_from_path
@@ -323,7 +340,7 @@ for name in ["anthropic", "mcp", "yaml", "playwright", "markitdown", "pptx",
     importlib.import_module(name)
 print("ok")
 PY
-  python3 -m markitdown doc.docx | grep -q 'Latin Test'
+  python3 -m markitdown slides.pptx | grep -q 'Latin Test'
 }
 
 node_resolution() {

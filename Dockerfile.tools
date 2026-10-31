@@ -4,7 +4,144 @@
 
 # OpenClaw tools image (issue #16): extends a published standard image with
 # document, PDF/OCR, media, and workspace tools. Fork-only.
+#
+# Pinned inputs live in tools/openclaw-tools-image/. The final image keeps
+# the base image's user, entrypoint, command, working directory, environment,
+# healthcheck, and controlled package versions. It ships no compiler.
 
 ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
+ARG TARGETARCH
+
+# Downloaded single-file tools, verified by checksum.
+FROM scratch AS officecli-amd64
+ADD --checksum=sha256:baa084b64ec634bd9d41a0592db3ed85f11658b358bab898679537ea7f3e73a9 \
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli
+
+FROM scratch AS officecli-arm64
+ADD --checksum=sha256:e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53 \
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli
+
+FROM scratch AS yq-amd64
+ADD --checksum=sha256:8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f \
+    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64 /yq
+
+FROM scratch AS yq-arm64
+ADD --checksum=sha256:189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b \
+    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64 /yq
+
+# Stage names, not registry images.
+# hadolint ignore=DL3006
+FROM officecli-${TARGETARCH} AS officecli
+# hadolint ignore=DL3006
+FROM yq-${TARGETARCH} AS yq
+
+# LibreOffice Calc reaches libtext-charwidth-perl through ucf. Debian builds
+# it for Perl 5.40, but the base carries the controlled Perl 5.44. Rebuild
+# the module for Perl 5.44 here so the compiler stays out of the final image.
+# Debian 0.04-11 has no source patches; match its hardening flags.
+FROM ${BASE_IMAGE} AS perl-modules
+# hadolint ignore=DL3002,DL3066
+USER root
+ADD --checksum=sha256:abded5f4fdd9338e89fd2f1d8271c44989dae5bf50aece41b6179d8e230704f8 \
+    https://cpan.metacpan.org/authors/id/K/KU/KUBOTA/Text-CharWidth-0.04.tar.gz /tmp/Text-CharWidth-0.04.tar.gz
+# hadolint ignore=DL3003,DL3008
+RUN set -eu; \
+    while IFS='=' read -r pkg _; do \
+        [ "$pkg" = architecture ] || apt-mark hold "$pkg" >/dev/null; \
+    done </usr/local/share/nemoclaw/security-packages.txt; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc make libc6-dev dpkg-dev; \
+    mkdir -p /tmp/charwidth /tmp/stage/DEBIAN /out; \
+    tar -xzf /tmp/Text-CharWidth-0.04.tar.gz --strip-components=1 -C /tmp/charwidth; \
+    cd /tmp/charwidth; \
+    eval "$(DEB_BUILD_MAINT_OPTIONS=hardening=+all dpkg-buildflags --export=sh)"; \
+    perl Makefile.PL INSTALLDIRS=vendor OPTIMIZE="$CFLAGS $CPPFLAGS" LDDLFLAGS="-shared $LDFLAGS"; \
+    make; \
+    make test; \
+    make pure_install DESTDIR=/tmp/stage; \
+    find /tmp/stage -name .packlist -delete; \
+    printf '%s\n' \
+        'Package: libtext-charwidth-perl' \
+        'Version: 0.04-11+nemoclaw1' \
+        "Architecture: $(dpkg --print-architecture)" \
+        'Multi-Arch: same' \
+        'Depends: libc6, perl-base (= 5.44.0-1nemoclaw1)' \
+        'Maintainer: derekhsu/NemoClaw fork' \
+        'Description: Text::CharWidth rebuilt for the controlled Perl 5.44' \
+        >/tmp/stage/DEBIAN/control; \
+    dpkg-deb --build --root-owner-group /tmp/stage /out/libtext-charwidth-perl.deb
 
 FROM ${BASE_IMAGE}
+# hadolint ignore=DL3066
+USER root
+
+# System packages. Hold every controlled package so apt fails instead of
+# changing one, then confirm the versions after installation.
+COPY --from=perl-modules /out/libtext-charwidth-perl.deb /tmp/nemoclaw-tools/
+COPY tools/openclaw-tools-image/apt-packages.txt /tmp/nemoclaw-tools/
+# hadolint ignore=SC2046
+RUN set -eu; \
+    inventory=/usr/local/share/nemoclaw/security-packages.txt; \
+    while IFS='=' read -r pkg version; do \
+        [ "$pkg" = architecture ] && continue; \
+        test "$(dpkg-query -W -f='${Version}' "$pkg")" = "$version"; \
+        apt-mark hold "$pkg" >/dev/null; \
+    done <"$inventory"; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        /tmp/nemoclaw-tools/libtext-charwidth-perl.deb \
+        $(grep -Ev '^(#|$)' /tmp/nemoclaw-tools/apt-packages.txt); \
+    while IFS='=' read -r pkg version; do \
+        [ "$pkg" = architecture ] && continue; \
+        test "$(dpkg-query -W -f='${Version}' "$pkg")" = "$version" \
+            || { echo "controlled package changed: $pkg" >&2; exit 1; }; \
+    done <"$inventory"; \
+    apt-mark unhold $(apt-mark showhold) >/dev/null; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# The sandbox policy allows reads under /usr but not /var/cache. Build the
+# fontconfig cache under /usr so processes do not rebuild it.
+RUN set -eu; \
+    install -d -m 0755 /usr/local/share/nemoclaw-tools/fontconfig-cache; \
+    printf '%s\n' \
+        '<?xml version="1.0"?>' \
+        '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">' \
+        '<fontconfig>' \
+        '  <cachedir>/usr/local/share/nemoclaw-tools/fontconfig-cache</cachedir>' \
+        '</fontconfig>' \
+        >/etc/fonts/conf.d/00-nemoclaw-tools-cachedir.conf; \
+    fc-cache -f; \
+    ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null
+
+COPY --from=officecli --chmod=0755 /officecli /usr/local/bin/officecli
+COPY --from=yq --chmod=0755 /yq /usr/local/bin/yq
+
+# Python packages go into the system interpreter, as the base does for
+# PyYAML, so plain python3 imports them.
+COPY tools/openclaw-tools-image/python/requirements.lock /tmp/nemoclaw-tools/
+RUN set -eu; \
+    PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install \
+        --break-system-packages --require-hashes --only-binary :all: \
+        --no-warn-script-location -r /tmp/nemoclaw-tools/requirements.lock; \
+    python3 -m pip check
+
+# Node.js document libraries. /usr/local/lib/node is a Node.js global
+# folder, so require() resolves from any directory. The /sandbox link lets
+# ESM imports resolve from the agent workspace.
+COPY tools/openclaw-tools-image/node/package.json tools/openclaw-tools-image/node/package-lock.json \
+    /usr/local/lib/nemoclaw-tools-node/
+# hadolint ignore=DL3003
+RUN set -eu; \
+    cd /usr/local/lib/nemoclaw-tools-node; \
+    NPM_CONFIG_OFFLINE=false npm ci --omit=dev --no-audit --no-fund; \
+    npm cache clean --force; \
+    ln -s /usr/local/lib/nemoclaw-tools-node/node_modules /usr/local/lib/node; \
+    ln -s /usr/local/lib/nemoclaw-tools-node/node_modules /sandbox/node_modules; \
+    chown -h sandbox:sandbox /sandbox/node_modules
+
+RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache
+
+# Same user name as the base image configuration.
+# hadolint ignore=DL3066
+USER sandbox

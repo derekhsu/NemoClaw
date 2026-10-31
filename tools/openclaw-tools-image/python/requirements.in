@@ -10,6 +10,8 @@ matplotlib==3.11.2
 mcp==2.3.0
 numpy==2.5.4
 openpyxl==3.1.5
+# Match Debian python3-packaging in the base; pip cannot replace it.
+packaging==25.0
 pandas==3.1.0
 pdf2image==1.17.0
 pdfplumber==0.11.10

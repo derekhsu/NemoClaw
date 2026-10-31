@@ -26,13 +26,18 @@ that a package installs or a release is qualified.
 - [x] Task 1.1: Inspect the chosen full published base by digest on both architectures; record the runtime version, image configuration, controlled package inventory, and source revision. `204877e`
 - [x] Task 1.2: Inventory every required tool against the base and fixed skill revision; prepare exact package/artifact pins and sources, resolve dependency compatibility, and record rejected or unavailable artifacts. `f8c6e17`
 - [x] Task 1.3: Resolve the six decision groups in spec.md, officecli qualification, actual deployment consumer/policy, vulnerability acceptance, and cold-start budget with named owners before behavior-changing implementation. `69a4baf2d`
-- [ ] Task 1.4: Map the complete accepted inventory to fixtures and error cases; reconcile the old Claude Code review with the expanded issue and selected implementation boundaries.
+- [x] Task 1.4: Map the complete accepted inventory to fixtures and error cases; reconcile the old Claude Code review with the expanded issue and selected implementation boundaries.
 - [ ] Task: Conductor - User Manual Verification 'Reproducible inputs and acceptance owners' (Protocol in workflow.md)
 
 Phase evidence: real image identities, dependency-resolution evidence, and
 recorded decisions. If a required tool conflicts with a controlled package,
 report the conflict before proceeding. A tools release is not an implicit
 upgrade of the base runtime or its security inventory.
+
+Verification venue: from Phase 2 onward, image builds and fixtures run in a
+fork GitHub Actions workflow on native amd64 and arm64 runners, not on the
+maintainer's machine (decision 2026-10-31). Task 3.4's policy run and
+Task 5.3 move to [#18](https://github.com/derekhsu/NemoClaw/issues/18).
 
 ## Phase 2: Build a usable document and media tools image
 

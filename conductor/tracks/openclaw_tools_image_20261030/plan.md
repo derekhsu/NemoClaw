@@ -42,9 +42,9 @@ Task 5.3 move to [#18](https://github.com/derekhsu/NemoClaw/issues/18).
 ## Phase 2: Build a usable document and media tools image
 
 - [x] Task 2.1: Start a documentation authoring subagent alongside the first user-visible implementation; add focused failing behavior tests/fixtures for the selected input validation and document, PDF/OCR, media, chart, metadata, ZIP/YAML/search/SQLite journeys before implementation. `6ff70eb`
-- [~] Task 2.2: Add Dockerfile.tools using the accepted full base digest; install the required system, Python, Node.js document, workspace, and font dependencies with controlled-package drift prevention.
-- [~] Task 2.3: Configure workspace module resolution, Python environment, writable caches, LibreOffice profiles, and selected helper preparation without changing base runtime ownership or retaining an unapproved compiler.
-- [ ] Task 2.4: Run the document/media/workspace fixture set non-root and offline on amd64 and arm64; rerun base-revision security checks, compare image configuration, and record image size.
+- [x] Task 2.2: Add Dockerfile.tools using the accepted full base digest; install the required system, Python, Node.js document, workspace, and font dependencies with controlled-package drift prevention. `eee3036`
+- [x] Task 2.3: Configure workspace module resolution, Python environment, writable caches, LibreOffice profiles, and selected helper preparation without changing base runtime ownership or retaining an unapproved compiler. `f2449cf`
+- [~] Task 2.4: Run the document/media/workspace fixture set non-root and offline on amd64 and arm64; rerun base-revision security checks, compare image configuration, and record image size.
 - [ ] Task: Conductor - User Manual Verification 'Document and media tools image' (Protocol in workflow.md)
 
 Phase evidence: actual outputs and package/configuration comparisons. Version

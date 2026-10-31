@@ -25,10 +25,22 @@ The fork maintainer (`derekhsu`) owns these decisions. They were recorded on
 - Tools release identity comes from the base image's OpenClaw version, not the
   checkout's pin. Issue #14 stays independent.
 
-## Still open
+## Publication and security
 
-| Topic | Proposed default | Status |
-| --- | --- | --- |
-| Publication (group 5) | Tag `<openclaw-version>-tools.<n>` plus `-amd64`/`-arm64`; reject an existing tag; publish only from `derekhsu/NemoClaw`; report digests already written on partial failure | Awaiting maintainer confirmation |
-| Security acceptance (group 6) | Trivy image scan stored as JSON; no fixable CRITICAL or HIGH finding; the maintainer signs off each unfixed finding | Awaiting maintainer confirmation |
-| AF_UNIX sandbox test | Create one disposable sandbox on a local OpenShell gateway | Needs approval to create a local sandbox; Docker is currently down |
+| Topic | Decision |
+| --- | --- |
+| Publication (group 5) | Publish one multi-architecture tag, `<openclaw-version>-tools.<n>` (for example `2026.9.2-tools.1`). Push the amd64 and arm64 images by digest only; add no architecture tags. Reject a tag that already exists. Publish only from `derekhsu/NemoClaw`. On partial failure, report the digests already written. |
+| Security acceptance (group 6) | Scan the image with Trivy and store the JSON report. A release has no fixable CRITICAL or HIGH finding. The maintainer signs off each unfixed CRITICAL or HIGH finding by name. |
+
+## AF_UNIX sandbox result
+
+[afunix-probe.py](afunix-probe.py) ran on 2026-10-31 in a disposable
+OpenShell sandbox created from the r2 digest with
+`nemoclaw-blueprint/policies/openclaw-sandbox.yaml`. The local gateway was
+OpenShell 0.0.101 with the Docker compute driver. As uid 998, `AF_UNIX`
+stream and datagram sockets, `socketpair`, and bind/listen under `/tmp`
+all succeeded ([output](afunix-probe-output.txt)). The sandbox was deleted.
+
+Result: `soffice.py` does not need its shim in this environment. The image
+ships no shim and no compiler. #18 repeats the check in the deployment
+environment; if it fails there, reopen this decision.

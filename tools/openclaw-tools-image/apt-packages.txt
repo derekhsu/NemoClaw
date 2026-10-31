@@ -3,7 +3,6 @@
 # docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
 # with every controlled package held. Same versions on amd64 and arm64.
 # Install with --no-install-recommends. jq and libsqlite3-0 come from the base.
-chromium=156.0.8078.73-1~deb13u1
 ffmpeg=7:7.1.5-0+deb13u1
 fontconfig=2.15.0-2.3
 fonts-dejavu-core=2.37-8

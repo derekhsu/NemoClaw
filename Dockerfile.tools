@@ -1,0 +1,10 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# OpenClaw tools image (issue #16): extends a published standard image with
+# document, PDF/OCR, media, and workspace tools. Fork-only.
+
+ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
+
+FROM ${BASE_IMAGE}

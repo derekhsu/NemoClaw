@@ -6,7 +6,7 @@
 - Track ID: `openclaw_tools_image_20261030`
 - Specification: [spec.md](spec.md)
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
-- Status: [~] Phase 1 in progress
+- Status: [~] Phase 2 in progress
 
 ## Working rules
 
@@ -27,7 +27,7 @@ that a package installs or a release is qualified.
 - [x] Task 1.2: Inventory every required tool against the base and fixed skill revision; prepare exact package/artifact pins and sources, resolve dependency compatibility, and record rejected or unavailable artifacts. `f8c6e17`
 - [x] Task 1.3: Resolve the six decision groups in spec.md, officecli qualification, actual deployment consumer/policy, vulnerability acceptance, and cold-start budget with named owners before behavior-changing implementation. `69a4baf2d`
 - [x] Task 1.4: Map the complete accepted inventory to fixtures and error cases; reconcile the old Claude Code review with the expanded issue and selected implementation boundaries. `61101394f`
-- [ ] Task: Conductor - User Manual Verification 'Reproducible inputs and acceptance owners' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Reproducible inputs and acceptance owners' (Protocol in workflow.md) (confirmed by maintainer 2026-10-31)
 
 Phase evidence: real image identities, dependency-resolution evidence, and
 recorded decisions. If a required tool conflicts with a controlled package,
@@ -41,7 +41,7 @@ Task 5.3 move to [#18](https://github.com/derekhsu/NemoClaw/issues/18).
 
 ## Phase 2: Build a usable document and media tools image
 
-- [ ] Task 2.1: Start a documentation authoring subagent alongside the first user-visible implementation; add focused failing behavior tests/fixtures for the selected input validation and document, PDF/OCR, media, chart, metadata, ZIP/YAML/search/SQLite journeys before implementation.
+- [~] Task 2.1: Start a documentation authoring subagent alongside the first user-visible implementation; add focused failing behavior tests/fixtures for the selected input validation and document, PDF/OCR, media, chart, metadata, ZIP/YAML/search/SQLite journeys before implementation.
 - [ ] Task 2.2: Add Dockerfile.tools using the accepted full base digest; install the required system, Python, Node.js document, workspace, and font dependencies with controlled-package drift prevention.
 - [ ] Task 2.3: Configure workspace module resolution, Python environment, writable caches, LibreOffice profiles, and selected helper preparation without changing base runtime ownership or retaining an unapproved compiler.
 - [ ] Task 2.4: Run the document/media/workspace fixture set non-root and offline on amd64 and arm64; rerun base-revision security checks, compare image configuration, and record image size.

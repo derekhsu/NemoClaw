@@ -1,0 +1,4 @@
+# Browser packages for the OpenClaw tools image (issue #16, Phase 3).
+# Resolved together with apt-packages.txt on 2026-10-30; same version on
+# amd64 and arm64.
+chromium=156.0.8078.73-1~deb13u1

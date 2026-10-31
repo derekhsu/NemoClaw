@@ -19,10 +19,18 @@ ADD --checksum=sha256:baa084b64ec634bd9d41a0592db3ed85f11658b358bab898679537ea7f
     https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli-amd64
 ADD --checksum=sha256:e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53 \
     https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli-arm64
-ADD --checksum=sha256:8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f \
-    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_amd64 /yq-amd64
-ADD --checksum=sha256:189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b \
-    https://github.com/mikefarah/yq/releases/download/v4.54.1/yq_linux_arm64 /yq-arm64
+
+# The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
+# which have fixed HIGH vulnerabilities. Build the same yq version with a
+# patched Go toolchain and x/net. Go verifies module hashes with sumdb.
+FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS yq-build
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
+WORKDIR /src
+RUN set -eu; \
+    go mod init nemoclaw-tools/yq; \
+    go get github.com/mikefarah/yq/v4@v4.54.1 golang.org/x/net@v0.60.0; \
+    go build -ldflags='-s -w' -o /out/yq github.com/mikefarah/yq/v4; \
+    /out/yq --version
 
 # LibreOffice Calc reaches libtext-charwidth-perl through ucf. Debian builds
 # it for Perl 5.40, but the base carries the controlled Perl 5.44. Rebuild
@@ -108,8 +116,8 @@ RUN set -eu; \
 RUN --mount=type=bind,from=downloads,target=/downloads \
     set -eu; \
     arch=$(dpkg --print-architecture); \
-    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli; \
-    install -m 0755 "/downloads/yq-$arch" /usr/local/bin/yq
+    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli
+COPY --from=yq-build --chmod=0755 /out/yq /usr/local/bin/yq
 
 # Python packages go into the system interpreter, as the base does for
 # PyYAML, so plain python3 imports them.

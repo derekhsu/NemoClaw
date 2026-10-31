@@ -38,7 +38,7 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | 階段 | 內容 | 狀態 |
 |------|------|------|
 | Phase 1 | 檢查 base、固定版本、相依性解析、決策 | 完成 |
-| Phase 2 | 文件與影音工具、`Dockerfile.tools` | CI 測試通過,待弱點決策與人工確認 |
+| Phase 2 | 文件與影音工具、`Dockerfile.tools` | CI 測試通過,待人工確認 |
 | Phase 3 | Chromium、Python Playwright、離線前端建置 | 未開始 |
 | Phase 4 | 發布 workflow | 未開始 |
 | Phase 5 | 文件定稿與審查 | 未開始 |
@@ -75,7 +75,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | 名稱 | 版本 | 架構 |
 |------|------|------|
 | officecli | 1.0.160 | amd64、arm64 |
-| yq(Mike Farah) | 4.54.1 | amd64、arm64 |
+| yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.60.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
 | pnpm | 12.16.1 | 從 npm 安裝,以 integrity 校驗 |
@@ -226,7 +226,8 @@ Debian `0.04-11` 沒有原始碼修補,只多了 hardening 旗標、`dh_perl -d`
 ## 8. 弱點掃描
 
 - 以 Trivy 掃描映像,保存 JSON 報告。
-- 發布條件:沒有可修補的 CRITICAL 或 HIGH 弱點。
+- 同時掃描 base 映像。tools 層不得新增可修補的 CRITICAL 或 HIGH 弱點,否則 CI 失敗。
+- base 映像原有的可修補弱點,以重建標準映像處理,不在 tools 映像中修補。
 - 每個無法修補的 CRITICAL 或 HIGH 弱點,由維護者逐一具名簽核。
 - base 的受控套件版本必須維持不變,並重跑該 base 版本的安全檢查。
 

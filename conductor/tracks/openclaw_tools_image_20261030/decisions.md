@@ -30,7 +30,7 @@ The fork maintainer (`derekhsu`) owns these decisions. They were recorded on
 | Topic | Decision |
 | --- | --- |
 | Publication (group 5) | Publish one multi-architecture tag, `<openclaw-version>-tools.<n>` (for example `2026.9.2-tools.1`). Push the amd64 and arm64 images by digest only; add no architecture tags. Reject a tag that already exists. Publish only from `derekhsu/NemoClaw`. On partial failure, report the digests already written. |
-| Security acceptance (group 6) | Scan the image with Trivy and store the JSON report. A release has no fixable CRITICAL or HIGH finding. The maintainer signs off each unfixed CRITICAL or HIGH finding by name. |
+| Security acceptance (group 6) | Scan the tools image and its base with Trivy and store both JSON reports. The tools layer adds no fixable CRITICAL or HIGH finding; CI fails otherwise. Fixable findings inherited from the base are fixed by rebuilding the standard image, not in the tools image (refined 2026-11-01). The maintainer signs off each unfixed CRITICAL or HIGH finding by name. |
 
 ## AF_UNIX sandbox result
 
@@ -44,3 +44,11 @@ all succeeded ([output](afunix-probe-output.txt)). The sandbox was deleted.
 Result: `soffice.py` does not need its shim in this environment. The image
 ships no shim and no compiler. #18 repeats the check in the deployment
 environment; if it fails there, reopen this decision.
+
+## yq build (2026-11-01)
+
+The yq 4.54.1 release binaries carry Go 1.27.1 `stdlib` and
+`golang.org/x/net` 0.59.0 findings. The maintainer chose to build yq 4.54.1
+from source in a `golang:1.27.3-trixie` stage pinned by digest, with
+`golang.org/x/net` 0.60.0. Go verifies module hashes through sumdb. The
+compiler stays in that stage.

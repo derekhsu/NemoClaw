@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | [41213301963](https://github.com/derekhsu/NemoClaw/actions/runs/41213301963) | `6ff70eb`: fixtures with a `FROM`-only `Dockerfile.tools` | Expected failure: 3 boundary checks pass, 16 tool checks fail on both architectures |
 | [41217505425](https://github.com/derekhsu/NemoClaw/actions/runs/41217505425) | `4a31ffc`: complete Phase 2 image | All 19 fixtures pass on amd64 and arm64; image checks pass |
+| [41219379848](https://github.com/derekhsu/NemoClaw/actions/runs/41219379848) | `7a040dd`: yq built with Go 1.27.3; Trivy gate | All 19 fixtures pass; tools layer adds 0 fixable CRITICAL/HIGH findings |
 
 Each run builds natively on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm`
 (arm64) and uploads `tools-image-evidence-<arch>` artifacts (30-day
@@ -38,10 +39,13 @@ fontconfig cache staying empty.
 | Added by the tools layer | 5 | `/usr/local/bin/yq` 4.54.1 built with Go 1.27.1 `stdlib` (4) and `golang.org/x/net` 0.59.0 (1) |
 
 `image-size` 1.2.1 (2 HIGH) was removed by an npm override to 2.0.3;
-`pptxgenjs` lists it but its Node.js build does not load it. yq 4.54.1 is the
-latest release. The base findings need a standard image rebuild; the tools
-image must not change the controlled `libexpat1`. Both groups await a
-maintainer decision before release (Task 5.4).
+`pptxgenjs` lists it but its Node.js build does not load it. The yq findings
+were removed by building yq 4.54.1 with Go 1.27.3 and `golang.org/x/net`
+0.60.0. Run 41219379848 reports 0 added and 11 inherited findings on both
+architectures. The workflow now scans the base too and fails when the tools
+layer adds a fixable CRITICAL or HIGH finding. The 11 inherited findings need a
+standard image rebuild; the tools image must not change the controlled
+`libexpat1`.
 
 ## Fixes found during Phase 2
 

@@ -10,6 +10,7 @@
 # healthcheck, and controlled package versions. It ships no compiler.
 
 ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
+
 # Downloaded single-file tools, verified by checksum. The final stage
 # installs the file for its own architecture through a bind mount, so the
 # other architecture's file never enters an image layer.
@@ -89,18 +90,20 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/*
 
 # The sandbox policy allows reads under /usr but not /var/cache. Build the
-# fontconfig cache under /usr so processes do not rebuild it.
+# fontconfig cache in its default location, copy it under /usr, and list
+# that copy as a read-only cache directory so processes do not rebuild it.
 RUN set -eu; \
+    fc-cache -f; \
     install -d -m 0755 /usr/local/share/nemoclaw-tools/fontconfig-cache; \
+    cp -a /var/cache/fontconfig/. /usr/local/share/nemoclaw-tools/fontconfig-cache/; \
+    ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null; \
     printf '%s\n' \
         '<?xml version="1.0"?>' \
         '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">' \
         '<fontconfig>' \
         '  <cachedir>/usr/local/share/nemoclaw-tools/fontconfig-cache</cachedir>' \
         '</fontconfig>' \
-        >/etc/fonts/conf.d/00-nemoclaw-tools-cachedir.conf; \
-    fc-cache -f; \
-    ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null
+        >/etc/fonts/conf.d/99-nemoclaw-tools-cachedir.conf
 
 RUN --mount=type=bind,from=downloads,target=/downloads \
     set -eu; \

@@ -20,7 +20,7 @@ unless the row says otherwise.
 
 | Area | Fixture and pass condition | Phase |
 | --- | --- | --- |
-| Office files | python-docx-free path: `docx`, `pptxgenjs`, `openpyxl` create DOCX/PPTX/XLSX; officecli edits, validates, and reads back each file | 2 |
+| Office files | Node.js `docx` and `pptxgenjs` create DOCX and PPTX; Python `openpyxl` creates XLSX; officecli edits, validates, and reads back each file | 2 |
 | Office to PDF | `soffice -env:UserInstallation=file:///tmp/<unique> --headless --convert-to pdf` for DOCX, XLSX, PPTX; `pdftotext` finds the CJK and Latin fixture text; `pdffonts` lists Noto CJK | 2 |
 | Spreadsheet recalculation | LibreOffice recalculates an XLSX formula; openpyxl reads the cached value | 2 |
 | Parallel conversion | Two `soffice` conversions run at once with separate profiles and both succeed | 2 |

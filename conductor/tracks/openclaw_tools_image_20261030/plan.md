@@ -54,9 +54,9 @@ No failed required tool may be dropped without a maintainer scope decision.
 ## Phase 3: Run browser and frontend tasks without installation downloads
 
 - [x] Task 3.1: Add failing fixtures for OpenClaw/Python Playwright browser actions, plugin/tool/launch/policy error diagnosis, frontend creation/build/HTML packaging, and forbidden runtime downloads. `35b4969`
-- [~] Task 3.2: Install the accepted Chromium artifacts and libraries; configure non-root writable paths and prove compatibility with OpenClaw and Python Playwright on both architectures.
-- [~] Task 3.3: Prepare fixed frontend templates, dependency locks/offline store, Node.js module resolution, and p5.js assets; complete frontend tasks from the agent workspace without external package downloads.
-- [ ] Task 3.4: Run the controlled browser and frontend journeys under the selected deployment policy; verify undeclared destinations remain denied and inspect screenshot/HTML outputs.
+- [x] Task 3.2: Install the accepted Chromium artifacts and libraries; configure non-root writable paths and prove compatibility with OpenClaw and Python Playwright on both architectures. `a782f31`
+- [x] Task 3.3: Prepare fixed frontend templates, dependency locks/offline store, Node.js module resolution, and p5.js assets; complete frontend tasks from the agent workspace without external package downloads. `9abc0a9`
+- [-] Task 3.4: Run the controlled browser and frontend journeys under the selected deployment policy; verify undeclared destinations remain denied and inspect screenshot/HTML outputs. Moved to #18.
 - [ ] Task: Conductor - User Manual Verification 'Browser and offline frontend tasks' (Protocol in workflow.md)
 
 Phase evidence: browser actions and outputs through the intended agent tool,

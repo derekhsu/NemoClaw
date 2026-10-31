@@ -6,7 +6,7 @@
 > **日期**: 2026-10-31
 > **Fork**: `derekhsu/NemoClaw`
 > **分支**: `codex/issue-16-tools-image`(基於 `feat/image-only-cli`,commit `70ff5c849`)
-> **狀態**: 實作中 — Phase 2 映像已在 CI 建置並通過測試,尚未發布
+> **狀態**: 實作中 — Phase 3 映像已在 CI 建置並通過測試,尚未發布
 > **Issue**: [#16](https://github.com/derekhsu/NemoClaw/issues/16)(映像與發布)、[#18](https://github.com/derekhsu/NemoClaw/issues/18)(部署驗收)
 > **Track**: `conductor/tracks/openclaw_tools_image_20261030/`
 
@@ -38,14 +38,14 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | 階段 | 內容 | 狀態 |
 |------|------|------|
 | Phase 1 | 檢查 base、固定版本、相依性解析、決策 | 完成 |
-| Phase 2 | 文件與影音工具、`Dockerfile.tools` | CI 測試通過,待人工確認 |
-| Phase 3 | Chromium、Python Playwright、離線前端建置 | 未開始 |
+| Phase 2 | 文件與影音工具、`Dockerfile.tools` | 完成 |
+| Phase 3 | Chromium、Python Playwright、離線前端建置 | CI 測試通過,待人工確認 |
 | Phase 4 | 發布 workflow | 未開始 |
 | Phase 5 | 文件定稿與審查 | 未開始 |
 | #18 | 實際部署環境驗收 | 等 #16 發布第一個 tools 映像 |
 
-第 4 節的安裝位置與使用方式已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
-第 5 節的前端與 Chromium、第 7 節的發布流程仍是設計,尚未驗證。
+第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
+第 7 節的發布流程仍是設計,尚未驗證。OpenClaw 瀏覽器工具與實際 sandbox policy 由 #18 驗證。
 
 ## 3. 工具清單
 
@@ -63,7 +63,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | PDF 與轉檔 | `pandoc 3.1.11.1+ds-2`、`poppler-utils 25.03.0-5+deb13u4`、`qpdf 12.2.0-1`、`ghostscript 10.05.1~dfsg-1+deb13u3` |
 | OCR | `tesseract-ocr 5.5.0-1+b1`;語言資料 `eng`、`chi-tra`、`chi-sim` `1:4.1.0-2` |
 | 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u13`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |
-| 瀏覽器(Phase 3) | `chromium 156.0.8078.73-1~deb13u1`,固定在 `apt-packages-browser.txt` |
+| 瀏覽器 | `chromium 156.0.8078.73-1~deb13u1`,固定在 `apt-packages-browser.txt` |
 | 字型 | `fontconfig 2.15.0-2.3`、`fonts-noto-cjk 1:20240730+repack1-1`、`fonts-liberation 1:2.1.5-3`、`fonts-dejavu-core 2.37-8` |
 | Workspace | `zip 3.0-15+deb13u1`、`unzip 6.0-29+deb13u1`、`ripgrep 14.1.1-1+b4`、`sqlite3 3.46.1-7+deb13u2` |
 | 執行期函式庫 | `libicu76 76.1-4`(officecli 需要) |
@@ -78,7 +78,9 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.60.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
-| pnpm | 12.16.1 | 從 npm 安裝,以 integrity 校驗 |
+| pnpm | 12.16.1 | 不分架構 |
+| Chrome Headless Shell | 156.0.8078.4(Playwright revision 1248) | amd64、arm64 |
+| shadcn 元件 | `anthropics/skills` 固定 revision 的 `web-artifacts-builder` | 不分架構;Apache-2.0,授權檔在模板內 |
 
 ### 3.3 Python 套件(`python/requirements.in`)
 
@@ -97,12 +99,18 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | 用途 | 檔案 | 套件 |
 |------|------|------|
 | 文件 | `node/package.json` | `docx 9.15.0`、`pptxgenjs 4.0.1`、`react 19.3.1`、`react-dom 19.3.1`、`react-icons 5.7.0`、`sharp 0.35.5` |
-| 前端模板 | `frontend-template/package.json`、`pnpm-lock.yaml`(419 個套件) | create-vite 9.3.3 `react-ts` 模板,加上 TypeScript、Vite、Tailwind CSS、Radix UI、Parcel、`html-inline` 等 |
+| 前端模板 | `frontend-template/package.json`、`pnpm-lock.yaml` | create-vite 9.3.3 `react-ts` 模板,套用 `web-artifacts-builder` 的設定與 shadcn 元件,加上 TypeScript 6.0.3、Vite、Tailwind CSS 3.4.1、Radix UI、Parcel、`html-inline` 等 |
 
 `node/package.json` 以 `overrides` 把 `image-size` 升到 2.0.3。
 `pptxgenjs` 宣告依賴 `image-size`,但它的 Node.js 版本並不載入這個套件;1.2.1 有兩個 HIGH 弱點。
 
-前端模板的最終內容由 Phase 3 決定。
+前端模板與 skill 原本的設定有這些差異,原因是 skill 未固定版本,照原樣用目前的最新套件無法建置:
+
+- 不設 `baseUrl`:TypeScript 7 已移除這個選項,`paths` 不需要它。
+- TypeScript 改用 6.0.3:7.0.2 內含的 Go 執行檔有可修補的 HIGH 弱點。
+- `react-day-picker` 用 9.x、`react-resizable-panels` 用 2.x:shadcn 元件是照這兩個主版本寫的。
+- 移除 Vite 範本的 `favicon.svg` 連結:Parcel 打包時找不到這個檔案。
+- `pnpm-workspace.yaml` 以 `overrides` 把 `minimist` 升到 1.2.8(CVE-2021-44906),並設定 `verifyDepsBeforeRun: false`。
 
 ## 4. 安裝位置與使用方式
 
@@ -147,7 +155,32 @@ Phase 1 在 OpenShell sandbox(OpenShell 0.0.101、Docker compute driver)中確�
 officecli 在沒有 ICU 的環境會中止,所以映像額外安裝 `libicu76`。
 Phase 2 在 tools 映像中以 officecli 編輯、驗證並讀回 DOCX、XLSX、PPTX。
 
-### 4.6 已知限制
+### 4.6 瀏覽器與 Playwright
+
+- Debian Chromium 給 CLI 與 OpenClaw 使用,執行時需要可寫入的 `HOME`;`HOME` 唯讀時,它的 crash handler 會中止。
+- Python Playwright 預設使用 Chrome Headless Shell revision 1248,安裝在 `/usr/local/share/nemoclaw-tools/ms-playwright`。
+- `/sandbox/.cache/ms-playwright` 指向這個目錄。sandbox 使用者的 `HOME` 是 `/sandbox`,所以 `p.chromium.launch()` 不需要指定路徑。
+- 也可以用 `executable_path="/usr/lib/chromium/chromium"` 讓 Playwright 使用 Debian Chromium;CI 已在 `HOME` 可寫入時驗證。
+- 在其他 `HOME` 執行時,請設定 `PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/nemoclaw-tools/ms-playwright`。
+
+### 4.7 前端專案
+
+模板在 `/usr/local/share/nemoclaw-tools/frontend-template`,`node_modules` 已安裝好,不含 pnpm store。
+
+```bash
+cp -a /usr/local/share/nemoclaw-tools/frontend-template /sandbox/app
+cd /sandbox/app
+pnpm run build
+pnpm exec parcel build index.html --dist-dir bundle --no-source-maps
+pnpm exec html-inline bundle/index.html > bundle.html
+```
+
+- 必須用 `cp -a` 複製,保留 pnpm 的相對連結。
+- 不要執行 `pnpm install` 或 `pnpm add`:pnpm 12 的 store 使用 SQLite 索引,無法放在唯讀的 `/usr` 下,映像也不含 store。新增套件需要網路。
+- skill 的 `init-artifact.sh` 會執行 `pnpm create vite` 與 `pnpm install`,離線時無法使用;離線專案從這份模板開始。
+- p5.js 1.7.0 在 `/usr/local/share/nemoclaw-tools/p5/p5.min.js`。
+
+### 4.8 已知限制
 
 - `pptxgenjs` 4.0.1 產生的 PPTX 不符合 OpenXML schema 的元素順序,`officecli validate` 會回報錯誤;PowerPoint 與 LibreOffice 仍可開啟。officecli 自己建立的 PPTX 可以通過驗證。
 - `markitdown` 只安裝 `pptx` 支援,不能轉換 DOCX。
@@ -157,12 +190,8 @@ Phase 2 在 tools 映像中以 officecli 編輯、驗證並讀回 DOCX、XLSX、
 
 - 一般文件、PDF/OCR、影音、圖表與 workspace 工作不需要下載。
 - `imageio-ffmpeg` 使用 wheel 內建的 ffmpeg 7.0.2,執行期間不下載。
-- 前端建置使用預先準備的模板、`pnpm-lock.yaml` 與 pnpm store(Phase 3)。
-  pnpm 離線安裝同時需要 package store 與 metadata 快取;只有 store 會出現 `ERR_PNPM_NO_OFFLINE_META`。
-  lock 中沒有的套件無法離線安裝。
-- Chromium 與 Python Playwright 是否共用同一個瀏覽器,待 Phase 3 驗證。
-  Debian 提供 Chromium `156.0.8078.73`;Playwright 1.64.1 預期 revision 1248(`156.0.8078.4`)。
-  如果不能共用,Phase 3 會另外安裝 Playwright 的 Chromium。
+- 前端建置使用預先安裝好的模板,見 4.7 節。模板以外的套件無法離線安裝。
+- Playwright 使用映像內的 Chrome Headless Shell,執行期間不下載瀏覽器。
 - 外部 API 與登入仍需要部署端授權。tools 映像不放寬網路政策。
 
 ## 6. 版本更新與維護

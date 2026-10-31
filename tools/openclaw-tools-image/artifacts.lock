@@ -4,7 +4,11 @@ officecli	1.0.160	amd64	https://github.com/iOfficeAI/OfficeCLI/releases/download
 officecli	1.0.160	arm64	https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64	e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53
 p5.js	1.7.0	all	https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js	bb7f8f14b9ce2e2344ff5cd6c06f2e105eb99541ecbfec77139e2886d9c0b9ba
 Text-CharWidth	0.04	source	https://cpan.metacpan.org/authors/id/K/KU/KUBOTA/Text-CharWidth-0.04.tar.gz	abded5f4fdd9338e89fd2f1d8271c44989dae5bf50aece41b6179d8e230704f8
-# pnpm 12.16.1 is installed from npm with integrity
-# sha512-CR0d7nknV1Zhsl2rPCrjHK/BxU1rce1qZgDPDByxBDSkR+rhQBXxsj4ua+3u1535SpMuIWTSgyKA3OP7MvZW0Q==
+pnpm	12.16.1	all	https://registry.npmjs.org/pnpm/-/pnpm-12.16.1.tgz	ca362a16f2e1c3cfa81d406f3242446179a0e4aea457ba3e9e6c39e6476aba65
+chrome-headless-shell	156.0.8078.4 (Playwright 1248)	amd64	https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip	c3e50596aef52c58f8fda3c6b3411c33d34c88b177b3ed1c2243359fd3b8ba20
+chrome-headless-shell	156.0.8078.4 (Playwright 1248)	arm64	https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-headless-shell-linux-arm64.zip	81ab9d4d3c301dc5fdfb6c541b9e6632b16fc819a6a854460f40a76fe2b2c476
+shadcn-components	skills@ca45fc49	all	https://raw.githubusercontent.com/anthropics/skills/ca45fc496a3436251f191354091d557da31c15b5/skills/web-artifacts-builder/scripts/shadcn-components.tar.gz	1296f069e825de7933de7e8ac63672495cacce3f88f2dc45554dbcddbcbca60f
+# shadcn-components is unpacked into frontend-template/src (Apache-2.0, see
+# frontend-template/LICENSE.web-artifacts-builder.txt).
 # yq 4.54.1 is built from source in Dockerfile.tools with Go 1.27.3 and
 # golang.org/x/net 0.60.0; Go verifies module hashes with sumdb.

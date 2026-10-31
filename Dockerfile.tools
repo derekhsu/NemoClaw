@@ -19,6 +19,15 @@ ADD --checksum=sha256:baa084b64ec634bd9d41a0592db3ed85f11658b358bab898679537ea7f
     https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli-amd64
 ADD --checksum=sha256:e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53 \
     https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli-arm64
+# Chrome Headless Shell revision 1248 is the default browser of Playwright 1.64.1.
+ADD --checksum=sha256:c3e50596aef52c58f8fda3c6b3411c33d34c88b177b3ed1c2243359fd3b8ba20 \
+    https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip /chrome-headless-shell-amd64.zip
+ADD --checksum=sha256:81ab9d4d3c301dc5fdfb6c541b9e6632b16fc819a6a854460f40a76fe2b2c476 \
+    https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-headless-shell-linux-arm64.zip /chrome-headless-shell-arm64.zip
+ADD --checksum=sha256:ca362a16f2e1c3cfa81d406f3242446179a0e4aea457ba3e9e6c39e6476aba65 \
+    https://registry.npmjs.org/pnpm/-/pnpm-12.16.1.tgz /pnpm-12.16.1.tgz
+ADD --checksum=sha256:bb7f8f14b9ce2e2344ff5cd6c06f2e105eb99541ecbfec77139e2886d9c0b9ba \
+    https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js /p5.min.js
 
 # The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
 # which have fixed HIGH vulnerabilities. Build the same yq version with a
@@ -75,7 +84,8 @@ USER root
 # System packages. Hold every controlled package so apt fails instead of
 # changing one, then confirm the versions after installation.
 COPY --from=perl-modules /out/libtext-charwidth-perl.deb /tmp/nemoclaw-tools/
-COPY tools/openclaw-tools-image/apt-packages.txt /tmp/nemoclaw-tools/
+COPY tools/openclaw-tools-image/apt-packages.txt tools/openclaw-tools-image/apt-packages-browser.txt \
+    /tmp/nemoclaw-tools/
 # hadolint ignore=SC2046
 RUN set -eu; \
     inventory=/usr/local/share/nemoclaw/security-packages.txt; \
@@ -87,7 +97,7 @@ RUN set -eu; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         /tmp/nemoclaw-tools/libtext-charwidth-perl.deb \
-        $(grep -Ev '^(#|$)' /tmp/nemoclaw-tools/apt-packages.txt); \
+        $(grep -hEv '^(#|$)' /tmp/nemoclaw-tools/apt-packages.txt /tmp/nemoclaw-tools/apt-packages-browser.txt); \
     while IFS='=' read -r pkg version; do \
         [ "$pkg" = architecture ] && continue; \
         test "$(dpkg-query -W -f='${Version}' "$pkg")" = "$version" \
@@ -142,7 +152,36 @@ RUN set -eu; \
     ln -s /usr/local/lib/nemoclaw-tools-node/node_modules /sandbox/node_modules; \
     chown -h sandbox:sandbox /sandbox/node_modules
 
-RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache
+# Playwright looks for its browsers in $HOME/.cache/ms-playwright, and the
+# sandbox user's home is /sandbox. Install the pinned headless shell under
+# /usr and link it there, like /sandbox/node_modules.
+# hadolint ignore=DL3003
+RUN --mount=type=bind,from=downloads,target=/downloads \
+    set -eu; \
+    arch=$(dpkg --print-architecture); \
+    browsers=/usr/local/share/nemoclaw-tools/ms-playwright; \
+    install -d -m 0755 "$browsers/chromium_headless_shell-1248"; \
+    unzip -q "/downloads/chrome-headless-shell-$arch.zip" -d "$browsers/chromium_headless_shell-1248"; \
+    touch "$browsers/chromium_headless_shell-1248/INSTALLATION_COMPLETE"; \
+    install -d -o sandbox -g sandbox /sandbox/.cache; \
+    ln -s "$browsers" /sandbox/.cache/ms-playwright; \
+    chown -h sandbox:sandbox /sandbox/.cache/ms-playwright; \
+    install -D -m 0644 /downloads/p5.min.js /usr/local/share/nemoclaw-tools/p5/p5.min.js; \
+    NPM_CONFIG_OFFLINE=false npm install -g --no-audit --no-fund /downloads/pnpm-12.16.1.tgz
+
+# Offline frontend projects start from this template. Installing it once
+# fills the package store and metadata cache named in its
+# pnpm-workspace.yaml; the build copy is then removed.
+COPY tools/openclaw-tools-image/frontend-template/ /usr/local/share/nemoclaw-tools/frontend-template/
+# hadolint ignore=DL3003
+RUN set -eu; \
+    cp -R /usr/local/share/nemoclaw-tools/frontend-template /tmp/nemoclaw-tools/frontend-build; \
+    cd /tmp/nemoclaw-tools/frontend-build; \
+    pnpm install --frozen-lockfile; \
+    pnpm run build; \
+    chmod -R a+rX /usr/local/share/nemoclaw-tools/pnpm-store /usr/local/share/nemoclaw-tools/pnpm-cache
+
+RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 
 # Same user name as the base image configuration.
 # hadolint ignore=DL3066

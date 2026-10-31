@@ -65,7 +65,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$OUT"
           start=$(date +%s)
-          DOCKER_BUILDKIT=1 docker build --progress=plain -f Dockerfile.tools -t "$TOOLS_IMAGE" . 2>&1 | tee "$OUT/build.log"
+          DOCKER_BUILDKIT=1 docker build --progress=plain --platform "linux/${{ matrix.arch }}" -f Dockerfile.tools -t "$TOOLS_IMAGE" . 2>&1 | tee "$OUT/build.log"
           echo "build_seconds=$(( $(date +%s) - start ))" | tee "$OUT/build-time.txt"
 
       - name: Compare with base image

@@ -34,7 +34,7 @@ HTML
 # Usage: browser_journey URL SCREENSHOT [EXECUTABLE]
 browser_journey() {
   # HOME=/sandbox exercises the default Playwright browser lookup.
-  HOME=/sandbox python3 - "$@" <<'PY'
+  HOME=${PW_HOME:-/sandbox} python3 - "$@" <<'PY'
 import sys
 from playwright.sync_api import sync_playwright
 url, shot = sys.argv[1], sys.argv[2]
@@ -70,16 +70,17 @@ playwright_default() {
 }
 
 playwright_shared() {
-  # Evidence for sharing Debian Chromium with Playwright.
+  # Evidence for sharing Debian Chromium with Playwright. Debian Chromium's
+  # crash handler needs a writable home directory.
   write_page
-  browser_journey "file://$WORK/page.html" "$WORK/playwright-shared.png" /usr/lib/chromium/chromium
+  PW_HOME=$HOME browser_journey "file://$WORK/page.html" "$WORK/playwright-shared.png" /usr/lib/chromium/chromium
 }
 
 frontend_offline() {
   pnpm --version | grep -Fx 12.16.1
-  cp -R "$TOOLS/frontend-template" app
-  cd app
-  pnpm install --offline --frozen-lockfile
+  cp -a "$TOOLS/frontend-template" app
+  cd app || return
+  test -d node_modules/.pnpm
   pnpm run build
   pnpm exec parcel build index.html --dist-dir bundle --no-source-maps
   pnpm exec html-inline bundle/index.html >bundle.html
@@ -89,7 +90,7 @@ frontend_offline() {
     return 1
   fi
   cp bundle.html "$OUT/files/frontend-bundle.html"
-  cd "$WORK"
+  cd "$WORK" || return
   browser_journey "file://$WORK/app/bundle.html" "$WORK/frontend-bundle.png"
 }
 

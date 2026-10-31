@@ -169,17 +169,18 @@ RUN --mount=type=bind,from=downloads,target=/downloads \
     install -D -m 0644 /downloads/p5.min.js /usr/local/share/nemoclaw-tools/p5/p5.min.js; \
     NPM_CONFIG_OFFLINE=false npm install -g --no-audit --no-fund /downloads/pnpm-12.16.1.tgz
 
-# Offline frontend projects start from this template. Installing it once
-# fills the package store and metadata cache named in its
-# pnpm-workspace.yaml; the build copy is then removed.
+# Offline frontend projects start from a copy of this template. pnpm's store
+# keeps a SQLite index that cannot be opened from a read-only path, so the
+# template ships with node_modules installed and no store. Copying it with
+# `cp -a` keeps pnpm's relative links working.
 COPY tools/openclaw-tools-image/frontend-template/ /usr/local/share/nemoclaw-tools/frontend-template/
 # hadolint ignore=DL3003
 RUN set -eu; \
-    cp -R /usr/local/share/nemoclaw-tools/frontend-template /tmp/nemoclaw-tools/frontend-build; \
-    cd /tmp/nemoclaw-tools/frontend-build; \
-    pnpm install --frozen-lockfile; \
+    cd /usr/local/share/nemoclaw-tools/frontend-template; \
+    pnpm install --frozen-lockfile --store-dir /tmp/nemoclaw-tools/pnpm-store; \
     pnpm run build; \
-    chmod -R a+rX /usr/local/share/nemoclaw-tools/pnpm-store /usr/local/share/nemoclaw-tools/pnpm-cache
+    rm -rf dist /tmp/nemoclaw-tools/pnpm-store; \
+    chmod -R a+rX /usr/local/share/nemoclaw-tools/frontend-template
 
 RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 

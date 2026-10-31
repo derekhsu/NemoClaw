@@ -1,3 +1,7 @@
+# The OpenClaw tools image ships this template with node_modules installed.
+# Do not reinstall before `pnpm run` or `pnpm exec`; that needs the network.
+verifyDepsBeforeRun: false
+
 # Prebuilt platform packages supply these native bindings. Deny install
 # scripts so installs never compile or download.
 allowBuilds:

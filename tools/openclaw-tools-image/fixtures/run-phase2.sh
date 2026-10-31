@@ -72,23 +72,23 @@ controlled_packages() {
 
 base_security_checks() {
   test "$(perl -e 'print $^V')" = v5.44.0
-  ldd /usr/bin/jq | grep -Eq 'libonig[.]so[.]5'
+  grep -Eq 'libonig[.]so[.]5' <<<"$(ldd /usr/bin/jq)"
   test "$(tmux -V)" = "tmux 3.5a"
   test "$(jq --version)" = jq-1.8.2
   PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"
   printf '%s  %s\n' 4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7 \
     /usr/lib/python3.13/html/parser.py | sha256sum -c -
   PATH=/usr/bin:/bin python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2')"
-  vim.tiny --version | head -n 1 | grep -Eq '^VIM - Vi IMproved 9[.]2 '
-  vim.tiny --version | grep -Fx 'Included patches: 1-858'
+  grep -Eq '^VIM - Vi IMproved 9[.]2 ' <<<"$(vim.tiny --version | head -n 1)"
+  grep -Fx 'Included patches: 1-858' <<<"$(vim.tiny --version)"
   test -z "$(dpkg --audit)"
 }
 
 fontconfig_cache() {
   ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null
-  fc-match 'Noto Sans CJK TC' | grep -q 'Noto Sans CJK'
-  fc-match 'Liberation Serif' | grep -q Liberation
-  fc-match 'DejaVu Sans' | grep -q DejaVu
+  grep -q 'Noto Sans CJK' <<<"$(fc-match 'Noto Sans CJK TC')"
+  grep -q Liberation <<<"$(fc-match 'Liberation Serif')"
+  grep -q DejaVu <<<"$(fc-match 'DejaVu Sans')"
   # The baked cache must cover every font, so no per-user cache is written.
   test -z "$(find "$HOME/.cache/fontconfig" -type f 2>/dev/null)"
 }
@@ -126,15 +126,15 @@ PY
 
 officecli_journey() {
   export OFFICECLI_RESIDENT_FLUSH=each
-  officecli --version | grep -Fx 1.0.160
+  grep -Fx 1.0.160 <<<"$(officecli --version)"
   officecli add doc.docx /body --type paragraph --prop text="officecli 新增段落"
   officecli validate doc.docx
   officecli validate sheet.xlsx
-  officecli view doc.docx text | grep -q "officecli 新增段落"
-  officecli get sheet.xlsx /Sheet1/A2 --json | grep -q 'A1\*2'
+  grep -q "officecli 新增段落" <<<"$(officecli view doc.docx text)"
+  grep -q 'A1\*2' <<<"$(officecli get sheet.xlsx /Sheet1/A2 --json)"
   # pptxgenjs output fails strict schema validation (element order), so
   # validate an officecli-created deck and only read back the pptxgenjs one.
-  officecli view slides.pptx text | grep -q '中文測試'
+  grep -q '中文測試' <<<"$(officecli view slides.pptx text)"
   officecli create deck.pptx
   officecli add deck.pptx / --type slide
   officecli validate deck.pptx
@@ -155,8 +155,8 @@ office_to_pdf() {
     echo "== $pdf"
     pdffonts "$pdf"
     pdftotext "$pdf" - | tee "$pdf.txt"
-    tr -d '[:space:]' <"$pdf.txt" | grep -q '中文測試'
-    pdffonts "$pdf" | grep -Eq 'Noto(Sans|Serif)CJK'
+    grep -q '中文測試' <<<"$(tr -d '[:space:]' <"$pdf.txt")"
+    grep -Eq 'Noto(Sans|Serif)CJK' <<<"$(pdffonts "$pdf")"
   done
   cp pdf/*.pdf "$OUT/files/"
 }
@@ -202,7 +202,7 @@ showpage
 EPS
   gs -q -dSAFER -dBATCH -dNOPAUSE -dEPSCrop -sDEVICE=pdfwrite -o eps.pdf fixture.eps
   qpdf --check eps.pdf
-  pdftotext eps.pdf - | grep -q 'EPS fixture'
+  grep -q 'EPS fixture' <<<"$(pdftotext eps.pdf -)"
   printf '(/etc/passwd) (r) file\n' >read.ps
   if gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=nullpage read.ps >gs-read.log 2>&1; then
     echo "SAFER allowed a file read"
@@ -216,10 +216,23 @@ ocr() {
 import subprocess
 from PIL import Image, ImageDraw, ImageFont
 font_path = subprocess.check_output(["fc-match", "-f", "%{file}", "Noto Sans CJK TC"], text=True)
-cases = {"eng": "Hello OCR 2026", "chi_tra": "繁體中文測試", "chi_sim": "简体中文测试"}
-for lang, text in cases.items():
+
+def face(family):
+    # Pick the face by name; the collection holds JP, KR, SC, TC, and HK faces.
+    for index in range(10):
+        font = ImageFont.truetype(font_path, 72, index=index)
+        if font.getname()[0] == family:
+            return font
+    raise SystemExit(f"{family} not found in {font_path}")
+
+cases = {
+    "eng": ("Hello OCR 2026", "Noto Sans CJK TC"),
+    "chi_tra": ("繁體中文測試", "Noto Sans CJK TC"),
+    "chi_sim": ("简体中文测试", "Noto Sans CJK SC"),
+}
+for lang, (text, family) in cases.items():
     img = Image.new("RGB", (900, 160), "white")
-    ImageDraw.Draw(img).text((30, 30), text, fill="black", font=ImageFont.truetype(font_path, 72, index=0))
+    ImageDraw.Draw(img).text((30, 30), text, fill="black", font=face(family))
     img.save(f"ocr-{lang}.png")
 PY
   local lang text
@@ -253,7 +266,7 @@ pandoc_roundtrip() {
 # --- Images, metadata, media, charts -------------------------------------
 
 images() {
-  magick -version | head -n 1 | grep -q 'ImageMagick 7'
+  grep -q 'ImageMagick 7' <<<"$(magick -version | head -n 1)"
   magick -size 320x240 xc:steelblue image.png
   magick image.png -resize 160x120 image.webp
   test "$(magick identify -format '%m %wx%h' image.webp)" = 'WEBP 160x120'
@@ -321,7 +334,7 @@ workspace() {
   cmp zipdir/a.txt unzipped/zipdir/a.txt
   rg -q 'zip fixture' unzipped
   printf 'name: fixture\nitems:\n  - a\n' >valid.yaml
-  yq --version | grep -q 'mikefarah'
+  grep -q 'mikefarah' <<<"$(yq --version)"
   yq -i '.items += ["b"]' valid.yaml
   test "$(yq '.items | length' valid.yaml)" = 2
   yamllint -d relaxed valid.yaml
@@ -340,7 +353,7 @@ for name in ["anthropic", "mcp", "yaml", "playwright", "markitdown", "pptx",
     importlib.import_module(name)
 print("ok")
 PY
-  python3 -m markitdown slides.pptx | grep -q 'Latin Test'
+  grep -q 'Latin Test' <<<"$(python3 -m markitdown slides.pptx)"
 }
 
 node_resolution() {

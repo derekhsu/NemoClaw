@@ -1,0 +1,12 @@
+Created sandbox: i16-afunix-probe
+  [0.0s] Requesting compute...
+[0.0s] Sandbox allocated
+[0.0s] Pulling image docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
+[0.1s] Image already present
+[0.8s] Starting sandbox Container created
+uid 998 tmpdir /tmp
+AF_UNIX/STREAM ok
+AF_UNIX/DGRAM ok
+socketpair ok
+bind+listen ok /tmp/af-test.sock
+✓ Deleted sandbox i16-afunix-probe

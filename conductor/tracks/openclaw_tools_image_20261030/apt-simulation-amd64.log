@@ -1,0 +1,229 @@
+SECURITY_BEFORE
+architecture=amd64
+zlib1g=1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1
+libc6=2.41-12+deb13u4
+libc-bin=2.41-12+deb13u4
+bsdutils=1:2.41.5-0+deb13u1
+login=1:4.16.0-2+really2.41.5-0+deb13u1
+mount=2.41.5-0+deb13u1
+util-linux=2.41.5-0+deb13u1
+libblkid1=2.41.5-0+deb13u1
+liblastlog2-2=2.41.5-0+deb13u1
+libmount1=2.41.5-0+deb13u1
+libsmartcols1=2.41.5-0+deb13u1
+libuuid1=2.41.5-0+deb13u1
+libpcre2-8-0=10.46-1~deb13u3
+libsqlite3-0=3.46.1-7+deb13u2
+gzip=1.13-1+deb13u1
+libexpat1=2.8.3-1
+libonig5=6.9.9-1+b1
+libjq1=1.8.2-1
+jq=1.8.2-1
+vim-common=2:9.2.0858-1
+vim-tiny=2:9.2.0858-1
+libssh2-1t64=1.11.1-1+deb13u2+nemoclaw2
+libssl3t64=3.5.7-1~deb13u3
+nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u5+nemoclaw1
+perl-base=5.44.0-1nemoclaw1
+perl=5.44.0-1nemoclaw1
+libevent-core-2.1-7t64=2.1.13-stable-1
+
+APT_UPDATE
+Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9678 kB]
+Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [720 B]
+Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [270 kB]
+rm: cannot remove '/var/cache/apt/archives/partial/*.deb': Permission denied
+Fetched 10.2 MB in 2s (5459 kB/s)
+Reading package lists...
+
+APT_CANDIDATES
+libreoffice-core:
+  Installed: (none)
+  Candidate: 4:25.2.3-2+deb13u8
+  Version table:
+     4:25.2.3-2+deb13u8 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     4:25.2.3-2+deb13u6 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+libreoffice-writer:
+  Installed: (none)
+  Candidate: 4:25.2.3-2+deb13u8
+  Version table:
+     4:25.2.3-2+deb13u8 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     4:25.2.3-2+deb13u6 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+libreoffice-calc:
+  Installed: (none)
+  Candidate: 4:25.2.3-2+deb13u8
+  Version table:
+     4:25.2.3-2+deb13u8 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     4:25.2.3-2+deb13u6 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+libreoffice-impress:
+  Installed: (none)
+  Candidate: 4:25.2.3-2+deb13u8
+  Version table:
+     4:25.2.3-2+deb13u8 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     4:25.2.3-2+deb13u6 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+pandoc:
+  Installed: (none)
+  Candidate: 3.1.11.1+ds-2
+  Version table:
+     3.1.11.1+ds-2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+poppler-utils:
+  Installed: (none)
+  Candidate: 25.03.0-5+deb13u4
+  Version table:
+     25.03.0-5+deb13u4 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+     25.03.0-5+deb13u3 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+qpdf:
+  Installed: (none)
+  Candidate: 12.2.0-1
+  Version table:
+     12.2.0-1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+ghostscript:
+  Installed: (none)
+  Candidate: 10.05.1~dfsg-1+deb13u3
+  Version table:
+     10.05.1~dfsg-1+deb13u3 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     10.05.1~dfsg-1+deb13u1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+tesseract-ocr:
+  Installed: (none)
+  Candidate: 5.5.0-1+b1
+  Version table:
+     5.5.0-1+b1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+tesseract-ocr-eng:
+  Installed: (none)
+  Candidate: 1:4.1.0-2
+  Version table:
+     1:4.1.0-2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+tesseract-ocr-chi-tra:
+  Installed: (none)
+  Candidate: 1:4.1.0-2
+  Version table:
+     1:4.1.0-2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+tesseract-ocr-chi-sim:
+  Installed: (none)
+  Candidate: 1:4.1.0-2
+  Version table:
+     1:4.1.0-2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+imagemagick:
+  Installed: (none)
+  Candidate: 8:7.1.1.43+dfsg1-1+deb13u13
+  Version table:
+     8:7.1.1.43+dfsg1-1+deb13u13 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     8:7.1.1.43+dfsg1-1+deb13u12 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+ffmpeg:
+  Installed: (none)
+  Candidate: 7:7.1.5-0+deb13u1
+  Version table:
+     7:7.1.5-0+deb13u1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+libimage-exiftool-perl:
+  Installed: (none)
+  Candidate: 13.25+dfsg-1
+  Version table:
+     13.25+dfsg-1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+chromium:
+  Installed: (none)
+  Candidate: 156.0.8078.73-1~deb13u1
+  Version table:
+     156.0.8078.73-1~deb13u1 500
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+     150.0.7871.181-1~deb13u1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+fontconfig:
+  Installed: (none)
+  Candidate: 2.15.0-2.3
+  Version table:
+     2.15.0-2.3 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+fonts-noto-cjk:
+  Installed: (none)
+  Candidate: 1:20240730+repack1-1
+  Version table:
+     1:20240730+repack1-1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+fonts-liberation:
+  Installed: (none)
+  Candidate: 1:2.1.5-3
+  Version table:
+     1:2.1.5-3 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+fonts-dejavu-core:
+  Installed: (none)
+  Candidate: 2.37-8
+  Version table:
+     2.37-8 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+zip:
+  Installed: (none)
+  Candidate: 3.0-15+deb13u1
+  Version table:
+     3.0-15+deb13u1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+unzip:
+  Installed: (none)
+  Candidate: 6.0-29+deb13u1
+  Version table:
+     6.0-29+deb13u1 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+        500 http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+ripgrep:
+  Installed: (none)
+  Candidate: 14.1.1-1+b4
+  Version table:
+     14.1.1-1+b4 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+sqlite3:
+  Installed: (none)
+  Candidate: 3.46.1-7+deb13u2
+  Version table:
+     3.46.1-7+deb13u2 500
+        500 http://deb.debian.org/debian trixie/main amd64 Packages
+
+APT_SIMULATION
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Solving dependencies...
+Some packages could not be installed. This may mean that you have
+requested an impossible situation or if you are using the unstable
+distribution that some required packages have not yet been created
+or been moved out of Incoming.
+The following information may help to resolve the situation:
+
+The following packages have unmet dependencies:
+ libtext-charwidth-perl : Depends: perlapi-5.40.0
+E: Unable to correct problems, you have held broken packages.
+E: The following information from --solver 3.0 may provide additional context:
+   Unable to satisfy dependencies. Reached two conflicting decisions:
+   1. perl-base:amd64=5.40.1-6+deb13u1 is not selected for install
+   2. perl-base:amd64=5.40.1-6+deb13u1 is selected as a downgrade because:
+      1. libreoffice-calc:amd64=4:25.2.3-2+deb13u8 is selected for install
+      2. libreoffice-calc:amd64 PreDepends ucf
+      3. ucf:amd64 Depends libtext-wrapi18n-perl
+      4. libtext-wrapi18n-perl:amd64 Depends libtext-charwidth-perl
+      5. libtext-charwidth-perl:amd64 Depends perlapi-5.40.0

@@ -1,0 +1,200 @@
+# syntax=docker/dockerfile:1.7
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# OpenClaw tools image (issue #16): extends a published standard image with
+# document, PDF/OCR, media, and workspace tools. Fork-only.
+#
+# Pinned inputs live in tools/openclaw-tools-image/. The final image keeps
+# the base image's user, entrypoint, command, working directory, environment,
+# healthcheck, and controlled package versions. It ships no compiler.
+
+ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
+
+# Downloaded single-file tools, verified by checksum. The final stage
+# installs the file for its own architecture through a bind mount, so the
+# other architecture's file never enters an image layer.
+FROM scratch AS downloads
+ADD --checksum=sha256:baa084b64ec634bd9d41a0592db3ed85f11658b358bab898679537ea7f3e73a9 \
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-x64 /officecli-amd64
+ADD --checksum=sha256:e8f06aff6c59f11a73a1a1218bda3ce170299201fd56bce6d62ecd4d0c024e53 \
+    https://github.com/iOfficeAI/OfficeCLI/releases/download/v1.0.160/officecli-linux-arm64 /officecli-arm64
+# Chrome Headless Shell revision 1248 is the default browser of Playwright 1.64.1.
+ADD --checksum=sha256:c3e50596aef52c58f8fda3c6b3411c33d34c88b177b3ed1c2243359fd3b8ba20 \
+    https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux64/chrome-headless-shell-linux64.zip /chrome-headless-shell-amd64.zip
+ADD --checksum=sha256:81ab9d4d3c301dc5fdfb6c541b9e6632b16fc819a6a854460f40a76fe2b2c476 \
+    https://cdn.playwright.dev/builds/cft/156.0.8078.4/linux-arm64/chrome-headless-shell-linux-arm64.zip /chrome-headless-shell-arm64.zip
+ADD --checksum=sha256:ca362a16f2e1c3cfa81d406f3242446179a0e4aea457ba3e9e6c39e6476aba65 \
+    https://registry.npmjs.org/pnpm/-/pnpm-12.16.1.tgz /pnpm-12.16.1.tgz
+ADD --checksum=sha256:bb7f8f14b9ce2e2344ff5cd6c06f2e105eb99541ecbfec77139e2886d9c0b9ba \
+    https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js /p5.min.js
+
+# The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
+# which have HIGH vulnerabilities with available fixes. Build the same yq version with a
+# patched Go toolchain and x/net. Go verifies module hashes with sumdb.
+FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS yq-build
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
+WORKDIR /src
+RUN set -eu; \
+    go mod init nemoclaw-tools/yq; \
+    go get github.com/mikefarah/yq/v4@v4.54.1 golang.org/x/net@v0.60.0; \
+    go build -ldflags='-s -w' -o /out/yq github.com/mikefarah/yq/v4; \
+    /out/yq --version
+
+# LibreOffice Calc reaches libtext-charwidth-perl through ucf. Debian builds
+# it for Perl 5.40, but the base carries the controlled Perl 5.44. Rebuild
+# the module for Perl 5.44 here so the compiler stays out of the final image.
+# Debian 0.04-11 has no source patches; match its hardening flags.
+FROM ${BASE_IMAGE} AS perl-modules
+# hadolint ignore=DL3002,DL3066
+USER root
+ADD --checksum=sha256:abded5f4fdd9338e89fd2f1d8271c44989dae5bf50aece41b6179d8e230704f8 \
+    https://cpan.metacpan.org/authors/id/K/KU/KUBOTA/Text-CharWidth-0.04.tar.gz /tmp/Text-CharWidth-0.04.tar.gz
+# hadolint ignore=DL3003,DL3008
+RUN set -eu; \
+    while IFS='=' read -r pkg _; do \
+        [ "$pkg" = architecture ] || apt-mark hold "$pkg" >/dev/null; \
+    done </usr/local/share/nemoclaw/security-packages.txt; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc make libc6-dev dpkg-dev; \
+    mkdir -p /tmp/charwidth /tmp/stage/DEBIAN /out; \
+    tar -xzf /tmp/Text-CharWidth-0.04.tar.gz --strip-components=1 -C /tmp/charwidth; \
+    cd /tmp/charwidth; \
+    eval "$(DEB_BUILD_MAINT_OPTIONS=hardening=+all dpkg-buildflags --export=sh)"; \
+    perl Makefile.PL INSTALLDIRS=vendor OPTIMIZE="$CFLAGS $CPPFLAGS" LDDLFLAGS="-shared $LDFLAGS"; \
+    make; \
+    make test; \
+    make pure_install DESTDIR=/tmp/stage; \
+    find /tmp/stage -name .packlist -delete; \
+    printf '%s\n' \
+        'Package: libtext-charwidth-perl' \
+        'Version: 0.04-11+nemoclaw1' \
+        "Architecture: $(dpkg --print-architecture)" \
+        'Multi-Arch: same' \
+        'Depends: libc6, perl-base (= 5.44.0-1nemoclaw1)' \
+        'Maintainer: derekhsu/NemoClaw fork' \
+        'Description: Text::CharWidth rebuilt for the controlled Perl 5.44' \
+        >/tmp/stage/DEBIAN/control; \
+    dpkg-deb --build --root-owner-group /tmp/stage /out/libtext-charwidth-perl.deb
+
+FROM ${BASE_IMAGE}
+# hadolint ignore=DL3066
+USER root
+
+# System packages. Hold every controlled package so apt fails instead of
+# changing one, then confirm the versions after installation.
+COPY --from=perl-modules /out/libtext-charwidth-perl.deb /tmp/nemoclaw-tools/
+COPY tools/openclaw-tools-image/apt-packages.txt tools/openclaw-tools-image/apt-packages-browser.txt \
+    /tmp/nemoclaw-tools/
+# The package lists pin every version; hadolint cannot read them.
+# hadolint ignore=SC2046,DL3008
+RUN set -eu; \
+    inventory=/usr/local/share/nemoclaw/security-packages.txt; \
+    while IFS='=' read -r pkg version; do \
+        [ "$pkg" = architecture ] && continue; \
+        test "$(dpkg-query -W -f='${Version}' "$pkg")" = "$version"; \
+        apt-mark hold "$pkg" >/dev/null; \
+    done <"$inventory"; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        /tmp/nemoclaw-tools/libtext-charwidth-perl.deb \
+        $(grep -hEv '^(#|$)' /tmp/nemoclaw-tools/apt-packages.txt /tmp/nemoclaw-tools/apt-packages-browser.txt); \
+    while IFS='=' read -r pkg version; do \
+        [ "$pkg" = architecture ] && continue; \
+        test "$(dpkg-query -W -f='${Version}' "$pkg")" = "$version" \
+            || { echo "controlled package changed: $pkg" >&2; exit 1; }; \
+    done <"$inventory"; \
+    apt-mark unhold $(apt-mark showhold) >/dev/null; \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# The sandbox policy allows reads under /usr but not /var/cache. Build the
+# fontconfig cache in its default location, copy it under /usr, and list
+# that copy as a read-only cache directory so processes do not rebuild it.
+# fontconfig rejects a cache when a font directory's mtime differs, down to
+# nanoseconds. BuildKit's layer export drops the nanoseconds and also drops
+# a layer change that only touches a directory's mtime. Truncate each mtime
+# to its own whole second, the value the exported image has either way.
+# Follow symlinks: /usr/share/fonts/cmap links to directories elsewhere.
+RUN set -eu; \
+    for root in /usr/share/fonts /usr/local/share/fonts; do \
+        if [ -d "$root" ]; then \
+            find -L "$root" -type d -exec sh -c 'for d; do touch -m -d "@$(stat -L -c %Y "$d")" "$d"; done' sh {} +; \
+        fi; \
+    done; \
+    fc-cache -f; \
+    install -d -m 0755 /usr/local/share/nemoclaw-tools/fontconfig-cache; \
+    cp -a /var/cache/fontconfig/. /usr/local/share/nemoclaw-tools/fontconfig-cache/; \
+    ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null; \
+    printf '%s\n' \
+        '<?xml version="1.0"?>' \
+        '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">' \
+        '<fontconfig>' \
+        '  <cachedir>/usr/local/share/nemoclaw-tools/fontconfig-cache</cachedir>' \
+        '</fontconfig>' \
+        >/etc/fonts/conf.d/99-nemoclaw-tools-cachedir.conf
+
+RUN --mount=type=bind,from=downloads,target=/downloads \
+    set -eu; \
+    arch=$(dpkg --print-architecture); \
+    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli
+COPY --from=yq-build --chmod=0755 /out/yq /usr/local/bin/yq
+
+# Python packages go into the system interpreter, as the base does for
+# PyYAML, so plain python3 imports them.
+COPY tools/openclaw-tools-image/python/requirements.lock /tmp/nemoclaw-tools/
+RUN set -eu; \
+    PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install \
+        --break-system-packages --require-hashes --only-binary :all: \
+        --no-warn-script-location -r /tmp/nemoclaw-tools/requirements.lock; \
+    python3 -m pip check
+
+# Node.js document libraries. /usr/local/lib/node is a Node.js global
+# folder, so require() resolves from any directory. The /sandbox link lets
+# ESM imports resolve from the agent workspace.
+COPY tools/openclaw-tools-image/node/package.json tools/openclaw-tools-image/node/package-lock.json \
+    /usr/local/lib/nemoclaw-tools-node/
+# hadolint ignore=DL3003
+RUN set -eu; \
+    cd /usr/local/lib/nemoclaw-tools-node; \
+    NPM_CONFIG_OFFLINE=false npm ci --omit=dev --no-audit --no-fund; \
+    npm cache clean --force; \
+    ln -s /usr/local/lib/nemoclaw-tools-node/node_modules /usr/local/lib/node; \
+    ln -s /usr/local/lib/nemoclaw-tools-node/node_modules /sandbox/node_modules; \
+    chown -h sandbox:sandbox /sandbox/node_modules
+
+# Playwright looks for its browsers in $HOME/.cache/ms-playwright, and the
+# sandbox user's home is /sandbox. Install the pinned headless shell under
+# /usr and link it there, like /sandbox/node_modules.
+# hadolint ignore=DL3003
+RUN --mount=type=bind,from=downloads,target=/downloads \
+    set -eu; \
+    arch=$(dpkg --print-architecture); \
+    browsers=/usr/local/share/nemoclaw-tools/ms-playwright; \
+    install -d -m 0755 "$browsers/chromium_headless_shell-1248"; \
+    unzip -q "/downloads/chrome-headless-shell-$arch.zip" -d "$browsers/chromium_headless_shell-1248"; \
+    touch "$browsers/chromium_headless_shell-1248/INSTALLATION_COMPLETE"; \
+    install -d -o sandbox -g sandbox /sandbox/.cache; \
+    ln -s "$browsers" /sandbox/.cache/ms-playwright; \
+    chown -h sandbox:sandbox /sandbox/.cache/ms-playwright; \
+    install -D -m 0644 /downloads/p5.min.js /usr/local/share/nemoclaw-tools/p5/p5.min.js; \
+    NPM_CONFIG_OFFLINE=false npm install -g --no-audit --no-fund /downloads/pnpm-12.16.1.tgz
+
+# Offline frontend projects start from a copy of this template. pnpm's store
+# keeps a SQLite index that cannot be opened from a read-only path, so the
+# template ships with node_modules installed and no store. Copying it with
+# `cp -a` keeps pnpm's relative links working.
+COPY tools/openclaw-tools-image/frontend-template/ /usr/local/share/nemoclaw-tools/frontend-template/
+# hadolint ignore=DL3003
+RUN set -eu; \
+    cd /usr/local/share/nemoclaw-tools/frontend-template; \
+    pnpm install --frozen-lockfile --store-dir /tmp/nemoclaw-tools/pnpm-store; \
+    pnpm run build; \
+    rm -rf dist /tmp/nemoclaw-tools/pnpm-store; \
+    chmod -R a+rX /usr/local/share/nemoclaw-tools/frontend-template
+
+RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
+
+# Same user name as the base image configuration.
+# hadolint ignore=DL3066
+USER sandbox

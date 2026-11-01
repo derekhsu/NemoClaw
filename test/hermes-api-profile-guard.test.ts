@@ -827,17 +827,18 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     let result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(readFixtureText(soulPath)).toBe(current);
-    // Check through a descriptor: the same path is rewritten below.
-    const soulFd = fs.openSync(soulPath, "r");
+
+    // Any operator edit is content the guard must never replace. Check the mode
+    // and rewrite through one descriptor so the checked file is the edited one.
+    const tuned = `${legacy} Always answer in haiku.\n`;
+    const soulFd = fs.openSync(soulPath, "r+");
     try {
       expect(fs.fstatSync(soulFd).mode & 0o777).toBe(0o640);
+      fs.ftruncateSync(soulFd, 0);
+      fs.writeSync(soulFd, tuned, 0);
     } finally {
       fs.closeSync(soulFd);
     }
-
-    // Any operator edit is content the guard must never replace.
-    const tuned = `${legacy} Always answer in haiku.\n`;
-    fs.writeFileSync(soulPath, tuned);
     result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(readFixtureText(soulPath)).toBe(tuned);

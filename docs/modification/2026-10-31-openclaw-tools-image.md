@@ -111,6 +111,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 - TypeScript 改用 6.0.3:7.0.2 內含的 Go 執行檔有可修補的 HIGH 弱點。
 - `react-day-picker` 用 9.x、`react-resizable-panels` 用 2.x:shadcn 元件是照這兩個主版本寫的。
 - 移除 Vite 範本的 `favicon.svg` 連結:Parcel 打包時找不到這個檔案。
+- `tailwind.config.js` 改為 `tailwind.config.ts`,`postcss.config.js` 改為 `.postcssrc.json`:本 repository 不接受新增 JavaScript 檔案。
 - `pnpm-workspace.yaml` 以 `overrides` 把 `minimist` 升到 1.2.8(CVE-2021-44906),並設定 `verifyDepsBeforeRun: false`。
 
 ## 4. 安裝位置與使用方式

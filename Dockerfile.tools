@@ -86,7 +86,8 @@ USER root
 COPY --from=perl-modules /out/libtext-charwidth-perl.deb /tmp/nemoclaw-tools/
 COPY tools/openclaw-tools-image/apt-packages.txt tools/openclaw-tools-image/apt-packages-browser.txt \
     /tmp/nemoclaw-tools/
-# hadolint ignore=SC2046
+# The package lists pin every version; hadolint cannot read them.
+# hadolint ignore=SC2046,DL3008
 RUN set -eu; \
     inventory=/usr/local/share/nemoclaw/security-packages.txt; \
     while IFS='=' read -r pkg version; do \

@@ -65,6 +65,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      - name: Guard production build args
+        run: scripts/check-production-build-args.sh
+
       # Same Dockerfile, platform, and fixtures as the tools job in
       # openclaw-sandbox-image.yaml.
       - name: Build tools image

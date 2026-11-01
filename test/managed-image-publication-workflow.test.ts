@@ -457,11 +457,13 @@ describe("complete managed-image publication workflow", () => {
       "agents/hermes/Dockerfile.base",
     );
     expect(matrix.find(({ agent }) => agent === "hermes")?.base_alias).toBeUndefined();
-    expect(
-      matrix
-        .filter(({ agent }) => agent !== "hermes")
-        .every(({ base_alias }) => base_alias?.endsWith(":latest")),
-    ).toBe(true);
+    expect(matrix.find(({ agent }) => agent === "openclaw")?.base_alias).toBe(
+      "ghcr.io/nvidia/nemoclaw/sandbox-base:latest",
+    );
+    // Pinned to the last base that matches the fork's Deep Agents Code version (#22).
+    expect(matrix.find(({ agent }) => agent === "langchain-deepagents-code")?.base_alias).toBe(
+      "ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base@sha256:35ec718bc6a86c3b38b599a77239c5e917b20dbbbe20cc36e1f05262509d89b5",
+    );
     expect(step(prBuilder, "Build PR Hermes source base").with).toMatchObject({
       file: "${{ matrix.base_dockerfile }}",
       platforms: "linux/amd64",

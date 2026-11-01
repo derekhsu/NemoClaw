@@ -83,7 +83,8 @@ jobs:
           - agent: langchain-deepagents-code
             display_name: Deep Agents Code
             dockerfile: agents/langchain-deepagents-code/Dockerfile
-            base_alias: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base:latest
+            # Pinned until Deep Agents Code is upgraded to match the upstream base (#22).
+            base_alias: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base@sha256:35ec718bc6a86c3b38b599a77239c5e917b20dbbbe20cc36e1f05262509d89b5
             base_repository: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base
             image: nemoclaw-managed-pr/langchain-deepagents-code
             repository: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox

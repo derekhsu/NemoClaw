@@ -6,7 +6,7 @@
 > **日期**: 2026-10-31
 > **Fork**: `derekhsu/NemoClaw`
 > **分支**: `codex/issue-16-tools-image`(基於 `feat/image-only-cli`,commit `70ff5c849`)
-> **狀態**: 實作中 — Phase 4 已確認,Phase 5 文件與審查進行中;尚未發布映像
+> **狀態**: Phase 1–4 完成,Phase 5 待人工確認(Task 5.3 移至 #18);尚未發布映像
 > **Issue**: [#16](https://github.com/derekhsu/NemoClaw/issues/16)(映像與發布)、[#18](https://github.com/derekhsu/NemoClaw/issues/18)(部署驗收)
 > **Track**: `conductor/tracks/openclaw_tools_image_20261030/`
 
@@ -42,7 +42,7 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | Phase 2 | 文件與影音工具、`Dockerfile.tools` | 完成 |
 | Phase 3 | Chromium、Python Playwright、離線前端建置 | 完成 |
 | Phase 4 | 發布 workflow | 完成 |
-| Phase 5 | 文件定稿與審查 | 進行中 |
+| Phase 5 | 文件定稿與審查 | 完成,待人工確認 |
 | #18 | 實際部署環境驗收 | 等 #16 發布第一個 tools 映像 |
 
 第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。

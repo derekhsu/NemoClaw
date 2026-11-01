@@ -110,7 +110,12 @@ RUN set -eu; \
 # The sandbox policy allows reads under /usr but not /var/cache. Build the
 # fontconfig cache in its default location, copy it under /usr, and list
 # that copy as a read-only cache directory so processes do not rebuild it.
+# fontconfig rejects a cache when a font directory's mtime differs, down to
+# nanoseconds, and BuildKit's layer export keeps whole seconds only. Round
+# the directory mtimes first so the cache stays valid in the exported image.
 RUN set -eu; \
+    now=$(date +%s); \
+    find /usr/share/fonts /usr/local/share/fonts -type d -exec touch -m -d "@$now" {} + 2>/dev/null || true; \
     fc-cache -f; \
     install -d -m 0755 /usr/local/share/nemoclaw-tools/fontconfig-cache; \
     cp -a /var/cache/fontconfig/. /usr/local/share/nemoclaw-tools/fontconfig-cache/; \

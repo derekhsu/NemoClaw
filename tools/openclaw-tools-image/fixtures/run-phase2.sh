@@ -72,10 +72,15 @@ fontconfig_cache() {
   # The baked cache must cover every font, so no per-user cache is written.
   if [ -n "$(find "$HOME/.cache/fontconfig" -type f 2>/dev/null)" ]; then
     echo "fontconfig wrote a per-user cache; cache validation follows"
+    # Diagnostics only: under set -e and pipefail, keep a failed command from
+    # ending the check before everything is printed.
+    ls -l "$HOME/.cache/fontconfig" || true
+    for f in "$HOME"/.cache/fontconfig/*.cache-*; do fc-cat -r "$f" 2>&1 | head -2 || true; done
     rm -rf "$HOME/.cache/fontconfig"
-    FC_DEBUG=16 fc-list >/dev/null 2>"$WORK/fc-debug.txt" || true
-    grep -v -E '^ *$' "$WORK/fc-debug.txt" | head -60
-    find /usr/share/fonts /usr/local/share/fonts -maxdepth 2 -type d -exec stat -c '%y %n' {} + 2>/dev/null | head -20
+    # fontconfig writes debug messages to standard output.
+    FC_DEBUG=16 fc-list >"$WORK/fc-debug.txt" 2>&1 || true
+    grep -i -E 'cache|checksum|valid|scan' "$WORK/fc-debug.txt" | head -60 || true
+    find /usr/share/fonts -maxdepth 2 -type d -exec stat -c '%y %n' {} + | head -30 || true
     return 1
   fi
 }

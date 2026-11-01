@@ -283,6 +283,7 @@ Docker Hub 無法一次原子寫入多個 tag。
 - 某個架構失敗時,不寫入任何 tag。
   `Report untagged digests` job 會列出已以 digest 推送、但沒有 tag 的映像。
 - 寫入 tag 時失敗,摘要會列出兩個架構的 digest 與已寫入的 tag。
+- tag 寫入後若讀不到 index digest,workflow 會失敗;摘要會列出已寫入的 tag 與查詢指令。
 - workflow 不刪除任何已推送的內容。
   重試時改用新的 `<n>` 或 `-r<n>`;要移除已寫入的 tag,由維護者手動處理。
 

@@ -16,14 +16,21 @@ const image = "docker.io/derekhsu/openshell-openclaw";
 const baseDigest = `${image}@sha256:${"a".repeat(64)}`;
 const amd64 = `${image}@sha256:${"1".repeat(64)}`;
 const arm64 = `${image}@sha256:${"2".repeat(64)}`;
+const indexDigest = `sha256:${"3".repeat(64)}`;
 const tempDirs: string[] = [];
 
 // A fake docker that records every call. EXISTING_TAGS lists tags that the
 // registry has; INSPECT_ERROR replaces "not found" with another failure;
-// FAIL_CREATE_TAG makes the create call for that tag fail.
+// FAIL_CREATE_TAG makes the create call for that tag fail; FAIL_INDEX_DIGEST
+// makes the index digest lookup after publication fail.
 const fakeDocker = `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >>"$CALLS"
+if [ "$1 $2 $3 \${4:-}" = "buildx imagetools inspect --format" ]; then
+  [ -z "\${FAIL_INDEX_DIGEST:-}" ] || { echo "registry unavailable" >&2; exit 17; }
+  echo "${indexDigest}"
+  exit 0
+fi
 if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then
   ref=\${!#}
   for tag in $EXISTING_TAGS; do
@@ -241,6 +248,22 @@ describe("OpenClaw image publication (#16)", () => {
     expect(creates(result.calls)).toEqual([
       `buildx imagetools create -t ${image}:2026.9.2-tools.1 ${amd64} ${arm64}`,
     ]);
+    expect(result.summary).toContain(`Index digest: \`${indexDigest}\``);
+  });
+
+  it("fails after writing tags when the index digest cannot be read", () => {
+    const result = run(["publish"], {
+      VARIANT: "tools",
+      TAG: "2026.9.2-tools.1",
+      FAIL_INDEX_DIGEST: "1",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(creates(result.calls)).toHaveLength(1);
+    expect(result.summary).toContain("Published without an index digest");
+    expect(result.summary).toContain(`Tag: \`${image}:2026.9.2-tools.1\``);
+    expect(result.summary).not.toContain("Index digest:");
+    expect(result.stderr).toContain("cannot read the index digest");
   });
 
   it("writes standard release tags before moving latest and openclaw-<version>", () => {

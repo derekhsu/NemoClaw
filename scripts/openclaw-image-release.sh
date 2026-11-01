@@ -175,10 +175,23 @@ cmd_publish() {
     written+=(latest "openclaw-$version")
   fi
 
-  summary "### Published" "" "- amd64 digest: \`$amd64\`" "- arm64 digest: \`$arm64\`"
+  # Read the index digest before reporting success: deployment needs it.
+  local index heading="### Published" status=0
+  index=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE_NAME:$TAG") || index=""
+  if ! [[ "$index" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    heading="### Published without an index digest"
+    status=1
+  fi
+
+  summary "$heading" "" "- amd64 digest: \`$amd64\`" "- arm64 digest: \`$arm64\`"
   local t
   for t in ${written[@]+"${written[@]}"}; do summary "- Tag: \`$IMAGE_NAME:$t\`"; done
-  summary "- Index digest: \`$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE_NAME:$TAG")\`"
+  if [ "$status" -ne 0 ]; then
+    summary "" "The tags are written, but reading the index digest of $IMAGE_NAME:$TAG failed." \
+      "Read it with: docker buildx imagetools inspect --format '{{.Manifest.Digest}}' $IMAGE_NAME:$TAG"
+    fail "cannot read the index digest of $IMAGE_NAME:$TAG after publication"
+  fi
+  summary "- Index digest: \`$index\`"
 }
 
 case "${1:-}" in

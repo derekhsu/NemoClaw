@@ -187,9 +187,10 @@ cmd_publish() {
   local t
   for t in ${written[@]+"${written[@]}"}; do summary "- Tag: \`$IMAGE_NAME:$t\`"; done
   if [ "$status" -ne 0 ]; then
-    summary "" "The tags are written, but reading the index digest of $IMAGE_NAME:$TAG failed." \
-      "Read it with: docker buildx imagetools inspect --format '{{.Manifest.Digest}}' $IMAGE_NAME:$TAG"
-    fail "cannot read the index digest of $IMAGE_NAME:$TAG after publication"
+    summary "" "The tags are written, but the index digest of $IMAGE_NAME:$TAG could not be read or is not a sha256 digest." \
+      "Read it with: \`docker buildx imagetools inspect --format '{{.Manifest.Digest}}' $IMAGE_NAME:$TAG\`" \
+      "Nothing was deleted. Do not retry: the tags are valid."
+    fail "no valid index digest for $IMAGE_NAME:$TAG after publication"
   fi
   summary "- Index digest: \`$index\`"
 }

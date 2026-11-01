@@ -263,7 +263,7 @@ describe("OpenClaw image publication (#16)", () => {
     expect(result.summary).toContain("Published without an index digest");
     expect(result.summary).toContain(`Tag: \`${image}:2026.9.2-tools.1\``);
     expect(result.summary).not.toContain("Index digest:");
-    expect(result.stderr).toContain("cannot read the index digest");
+    expect(result.stderr).toContain("no valid index digest");
   });
 
   it("writes standard release tags before moving latest and openclaw-<version>", () => {

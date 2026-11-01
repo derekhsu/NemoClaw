@@ -135,6 +135,11 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 `nemoclaw-blueprint/policies/openclaw-sandbox.yaml` 把 `/usr` 列為唯讀路徑,但沒有列出 `/var/cache`,所以 sandbox 讀的是 `/usr` 底下的複本。
 CI 測試確認執行期間不會在使用者目錄重建字型快取。
 
+fontconfig 只在字型目錄的修改時間與快取記錄完全相同(含奈秒)時使用快取。
+BuildKit 匯出映像時會捨去奈秒,也會丟掉只改目錄修改時間的變更。
+因此建置時先把每個字型目錄(含 symlink 指向的目錄)的修改時間截成整秒,再產生快取。
+新增字型目錄或改變建置方式時,`fontconfig_cache` fixture 會檢查快取是否仍然有效。
+
 ### 4.4 LibreOffice
 
 每次轉檔都必須在 `/tmp` 下指定唯一的 profile 目錄。

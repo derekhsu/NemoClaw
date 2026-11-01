@@ -69,7 +69,7 @@ creation requires the workflow's explicit opt-in before execution.
 - [x] Task 4.1: Add failing workflow behavior tests for variant/base/tag inputs, shell-sensitive values, existing release tags, fork/ref restrictions, architecture failure, and partial publication. `91cfa8e`
 - [x] Task 4.2: Extend the fork workflow with standard/tools selection, tools base digest handling, base-derived version identity, separate caches/artifacts/tags, and both directions of tag namespace protection. `c615495`
 - [x] Task 4.3: Restrict publication to the approved fork, ref, and registries; minimize CI permissions, keep registry secrets out of build/runtime outputs, and preserve standard aliases during tools builds. `c615495`
-- [ ] Task 4.4: Validate planning/build/manifest behavior with mocked publication boundaries and isolated local fixtures; record non-atomic partial-write behavior and exact retry/reporting rules without pushing images.
+- [x] Task 4.4: Validate planning/build/manifest behavior with mocked publication boundaries and isolated local fixtures; record non-atomic partial-write behavior and exact retry/reporting rules without pushing images. `994d434` ([evidence](phase4-evidence.md))
 - [ ] Task: Conductor - User Manual Verification 'Image variant publication workflow' (Protocol in workflow.md)
 
 Phase evidence: success and failure behavior, including rejection before alias

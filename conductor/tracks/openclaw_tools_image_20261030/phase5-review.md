@@ -122,7 +122,17 @@ Sign-off status: **pending**.
 - The fork documentation is
   `docs/modification/2026-10-31-openclaw-tools-image.md`. Fern does not
   publish `docs/modification/`, so `npm run docs` does not apply.
-- Independent documentation writer review: pending.
+- Independent documentation writer review, for the PR receipt:
+  - Reviewer surface: Claude Code.
+  - Scope: the fork doc, the track records, `scripts/openclaw-image-release.sh`,
+    both image workflows, `Dockerfile.tools` comments, and `run-fixtures.sh`.
+  - Result: `docs-updated`; evidence path
+    `docs/modification/2026-10-31-openclaw-tools-image.md`.
+  - The first review at `4434ea647` found 2 blocking and 6 non-blocking
+    findings. Commit `6d58a965e` fixes all 8, and the re-review found no
+    open finding (2026-11-01).
+  - Metadata: head `6d58a965e`, `AGENTS.md` blob `248d426b1`. Refresh both
+    values after any later change.
 
 ## Acceptance gaps
 

@@ -79,9 +79,9 @@ validation unless separately authorized.
 
 ## Phase 5: Document, review, and qualify the selected deployment
 
-- [ ] Task 5.1: Reconcile the documentation author's work with the completed behavior; finalize tool inventory, versions, offline limits, image selection by digest, update ownership, and return to a standard image in the approved fork documentation surface.
-- [ ] Task 5.2: Run focused source checks and applicable shell/Dockerfile/workflow checks after final edits; run npm run docs for public documentation changes and resolve independent documentation writer findings.
-- [ ] Task 5.3: With explicit live-environment authorization and the named operator, stage the qualified image by the deployment's actual digest-selection setting; run all accepted journeys and negative policy checks on both architectures, retaining reproducible evidence.
+- [x] Task 5.1: Reconcile the documentation author's work with the completed behavior; finalize tool inventory, versions, offline limits, image selection by digest, update ownership, and return to a standard image in the approved fork documentation surface. `4434ea6`, `6d58a96`
+- [x] Task 5.2: Run focused source checks and applicable shell/Dockerfile/workflow checks after final edits; run npm run docs for public documentation changes and resolve independent documentation writer findings. `6d58a96` ([review](phase5-review.md))
+- [-] Task 5.3: With explicit live-environment authorization and the named operator, stage the qualified image by the deployment's actual digest-selection setting; run all accepted journeys and negative policy checks on both architectures, retaining reproducible evidence. Moved to [#18](https://github.com/derekhsu/NemoClaw/issues/18) ([decisions](decisions.md)).
 - [ ] Task 5.4: Review security/scanner results, package inventories, capacity and cold-start budget, and all acceptance gaps; record documentation review evidence and publication handoff without creating a PR or publishing implicitly.
 - [ ] Task: Conductor - User Manual Verification 'Deployment qualification and handoff' (Protocol in workflow.md)
 

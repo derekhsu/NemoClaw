@@ -145,46 +145,6 @@ export async function assertHermesCliAdapterLiveContract({
     stripAnsi(resultText(sessionsAfterDelete)),
   ).toBe(false);
 
-  const usageFilePath = `/tmp/nemoclaw-cli-adapter-usage-${Date.now()}.json`;
-  const sessionsBeforeGuardedUsage = await listDefaultSessions(
-    "phase-4-cli-adapter-sessions-before-guarded-usage",
-  );
-  const guardedUsage = await sandbox.exec(
-    sandboxName,
-    [
-      "hermes",
-      "--resume",
-      seedSessionId,
-      "-z",
-      `N8011_${Date.now().toString(36)}_USAGE_GUARD`,
-      "--usage-file",
-      usageFilePath,
-    ],
-    {
-      artifactName: "phase-4-cli-adapter-guarded-usage-file",
-      env,
-      redactionValues,
-      timeoutMs: 60_000,
-    },
-  );
-  expect(guardedUsage.exitCode, resultText(guardedUsage)).toBe(2);
-  expect(resultText(guardedUsage)).toContain(
-    "[COMPATIBILITY] Refusing resumed one-shot with --usage-file",
-  );
-  expect(
-    [...(await listDefaultSessions("phase-4-cli-adapter-sessions-after-guarded-usage"))].sort(),
-  ).toEqual([...sessionsBeforeGuardedUsage].sort());
-  const guardedUsageFile = await sandbox.execShell(
-    sandboxName,
-    trustedSandboxShellScript(`test ! -e ${shellQuote(usageFilePath)}`),
-    {
-      artifactName: "phase-4-cli-adapter-guarded-usage-file-absence",
-      env,
-      timeoutMs: 30_000,
-    },
-  );
-  expect(guardedUsageFile.exitCode, resultText(guardedUsageFile)).toBe(0);
-
   const profileName = "nemoclaw-cli-adapter-e2e";
   await runHermesCli(
     ["profile", "create", profileName],

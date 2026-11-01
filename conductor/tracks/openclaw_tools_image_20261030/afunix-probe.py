@@ -1,4 +1,4 @@
-import os, socket, tempfile, subprocess
+import os, socket, tempfile
 print("uid", os.getuid(), "tmpdir", tempfile.gettempdir())
 for name, fam, typ in [("AF_UNIX/STREAM", socket.AF_UNIX, socket.SOCK_STREAM), ("AF_UNIX/DGRAM", socket.AF_UNIX, socket.SOCK_DGRAM)]:
     try:

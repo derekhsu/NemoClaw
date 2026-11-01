@@ -114,10 +114,11 @@ RUN set -eu; \
 # nanoseconds. BuildKit's layer export drops the nanoseconds and also drops
 # a layer change that only touches a directory's mtime. Truncate each mtime
 # to its own whole second, the value the exported image has either way.
+# Follow symlinks: /usr/share/fonts/cmap links to directories elsewhere.
 RUN set -eu; \
     for root in /usr/share/fonts /usr/local/share/fonts; do \
         if [ -d "$root" ]; then \
-            find "$root" -type d -exec sh -c 'for d; do touch -m -d "@$(stat -c %Y "$d")" "$d"; done' sh {} +; \
+            find -L "$root" -type d -exec sh -c 'for d; do touch -m -d "@$(stat -L -c %Y "$d")" "$d"; done' sh {} +; \
         fi; \
     done; \
     fc-cache -f; \

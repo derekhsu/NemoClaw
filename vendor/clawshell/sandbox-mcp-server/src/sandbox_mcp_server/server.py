@@ -116,13 +116,28 @@ def _debug_log(event: str, **fields: Any) -> None:
         return
 
 
-def create_server() -> FastMCP:
+def _resolve_toolset() -> str:
+    toolset = (os.getenv("CLAWSHELL_MCP_TOOLSET") or "uploader").strip().lower()
+    return toolset or "uploader"
+
+
+def create_server(toolset: str | None = None) -> FastMCP:
     """
     Create and configure FastMCP server.
+
+    Args:
+        toolset: Tool group to expose. ``uploader`` (default) exposes the
+            sandbox file upload tool; ``gateway`` exposes the Gateway-side
+            identity and artifact tools that ClawShell registers under the
+            ``clawshell-gateway`` name, because the remote streamable-http
+            server is unreachable inside OpenShell sandboxes.
 
     Returns:
         Configured FastMCP instance with tools registered.
     """
+    toolset = toolset or _resolve_toolset()
+    if toolset == "gateway":
+        return _create_gateway_server()
     mcp = FastMCP("sandbox-file-uploader")
 
     @mcp.tool()
@@ -217,6 +232,62 @@ def create_server() -> FastMCP:
                 resolved_path=str(path),
             )
             return f"Error: Unexpected error during upload: {type(e).__name__}: {e}"
+
+    return mcp
+
+
+def _create_gateway_server() -> FastMCP:
+    """Expose the Gateway-hosted identity and artifact tools over stdio."""
+    mcp = FastMCP("clawshell-gateway")
+
+    @mcp.tool()
+    def whoami() -> dict[str, Any]:
+        """Return the Gateway identity and sandbox context for this session.
+
+        Reports the resolved owner, api-key kind, and scopes associated
+        with the managed upload key configured for this sandbox.
+        """
+        try:
+            with GatewayClient.from_env() as client:
+                return client.whoami()
+        except GatewayError as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def publish_sandbox_artifact(path: str, description: str | None = None) -> dict[str, Any]:
+        """Publish an existing sandbox workspace file as a short-lived download URL.
+
+        Call this when the user needs a shareable link for a file produced
+        inside the sandbox. Provide the workspace-relative `path` of an
+        existing file and an optional `description` used as the Markdown
+        link label. The sandbox is identified by the Gateway registration
+        context, never by a tool argument. Returns the filename, a signed
+        `download_url` with bounded expiry and use count, and a
+        ready-to-use Markdown link.
+
+        Args:
+            path: Sandbox workspace path of an existing file to publish,
+                such as '/sandbox/.openclaw/workspace/report.pdf' or
+                '/sandbox/.hermes/workspace/report.pdf'.
+            description: Optional human-readable label for the generated
+                Markdown download link.
+        """
+        try:
+            with GatewayClient.from_env() as client:
+                published = client.publish_artifact(path)
+        except GatewayError as e:
+            return {"error": str(e)}
+
+        download_url = published.get("download_url", "")
+        filename = Path(path).name
+        label = description or filename
+        return {
+            "filename": filename,
+            "download_url": download_url,
+            "expires_at": published.get("expires_at"),
+            "max_uses": published.get("max_uses"),
+            "markdown": f"[{label}]({download_url})",
+        }
 
     return mcp
 

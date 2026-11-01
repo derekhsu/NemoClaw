@@ -932,14 +932,20 @@ RUN node --experimental-strip-types /src/lib/messaging/applier/build/messaging-b
 
 # Write the default SOUL.md (agent identity) for the sandboxed agent.
 # This is the stock Hermes default soul (hermes_cli/default_soul.py,
-# DEFAULT_SOUL_MD) shipped verbatim. The OpenShell/NemoClaw environment is
-# described separately via HERMES_ENVIRONMENT_HINT (below), which Hermes
-# appends to the system prompt's environment-hints block — the correct slot
-# for execution-environment facts, keeping the identity slot unmodified.
+# DEFAULT_SOUL_MD) taken from the installed Hermes, so it cannot drift from the
+# pinned release. Hermes >= 0.21 rewrites an older auto-seeded default in place;
+# the api profile's admin-owned copy cannot be rewritten by its runtime, so the
+# guard's sealed bytes must equal this text and its legacy-upgrade list must
+# still be recognized by Hermes — the build fails closed otherwise.
+# The OpenShell/NemoClaw environment is described separately via
+# HERMES_ENVIRONMENT_HINT (below), which Hermes appends to the system prompt's
+# environment-hints block — the correct slot for execution-environment facts,
+# keeping the identity slot unmodified.
+# The check runs from /tmp so no image directory is on the import path.
+# hadolint ignore=DL3003
 RUN mkdir -p /sandbox/.hermes/memories \
-    && printf '%s' \
-    'You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.' \
-    > /sandbox/.hermes/SOUL.md
+    && cd /tmp \
+    && /opt/hermes/.venv/bin/python -I -c 'import importlib.util, sys; sys.path.insert(0, "/opt/hermes"); from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul; spec = importlib.util.spec_from_file_location("guard", "/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py"); guard = importlib.util.module_from_spec(spec); sys.modules["guard"] = guard; spec.loader.exec_module(guard); assert guard.HERMES_API_SOUL_BYTES == (DEFAULT_SOUL_MD + "\n").encode("utf-8"), "guard api SOUL drifted from Hermes DEFAULT_SOUL_MD"; assert not is_legacy_template_soul(guard.HERMES_API_SOUL_BYTES.decode("utf-8")), "Hermes treats the sealed api SOUL as legacy"; assert all(is_legacy_template_soul(text) for text in guard.HERMES_API_LEGACY_SOUL_TEXTS), "guard legacy SOUL list no longer matches Hermes"; open("/sandbox/.hermes/SOUL.md", "w", encoding="utf-8").write(DEFAULT_SOUL_MD)'
 
 # Describe the execution environment via Hermes's dedicated environment-hint
 # mechanism (agent/prompt_builder.py:build_environment_hints). This lands in

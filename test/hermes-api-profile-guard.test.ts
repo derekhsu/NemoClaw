@@ -796,6 +796,47 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(fs.statSync(path.join(skillsDir, "demo", "SKILL.md")).mode & 0o777).toBe(0o640);
   });
 
+  it("bootstrap seals the current Hermes default soul, not a legacy template", () => {
+    // Hermes >= 0.21 rewrites a legacy auto-seeded soul in place; the api
+    // runtime cannot write the admin-owned copy, so a legacy seed breaks home
+    // init for every api request.
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const soul = readFixtureText(path.join(fixture.apiDir, "SOUL.md"));
+    expect(soul.startsWith("You are Hermes Agent, built by Nous Research. Be direct:")).toBe(true);
+    expect(soul).not.toContain("an intelligent AI assistant created by Nous Research");
+  });
+
+  it("bootstrap retry upgrades only an exact legacy default soul", () => {
+    const legacy =
+      "You are Hermes Agent, an intelligent AI assistant created by Nous Research. " +
+      "You are helpful, knowledgeable, and direct. You assist users with a wide " +
+      "range of tasks including answering questions, writing and editing code, " +
+      "analyzing information, creative work, and executing actions via your " +
+      "tools. You communicate clearly, admit uncertainty when appropriate, and " +
+      "prioritize being genuinely useful over being verbose unless otherwise " +
+      "directed below. Be targeted and efficient in your exploration and " +
+      "investigations.";
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const soulPath = path.join(fixture.apiDir, "SOUL.md");
+    const current = readFixtureText(soulPath);
+
+    // Seeded by older images (and Hermes' own normalization: BOM, CRLF, trim).
+    fs.writeFileSync(soulPath, `﻿${legacy}\r\n`);
+    let result = bootstrap(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFixtureText(soulPath)).toBe(current);
+    expect(fs.statSync(soulPath).mode & 0o777).toBe(0o640);
+
+    // Any operator edit is content the guard must never replace.
+    const tuned = `${legacy} Always answer in haiku.\n`;
+    fs.writeFileSync(soulPath, tuned);
+    result = bootstrap(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFixtureText(soulPath)).toBe(tuned);
+  });
+
   it("normalize-api-profile repairs design drift and re-verifies the contract", () => {
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);

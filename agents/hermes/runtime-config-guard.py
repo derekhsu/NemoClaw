@@ -5567,18 +5567,31 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
             # The API gid can read SOUL.md, but only the admin uid can write it.
             # codeql[py/overly-permissive-file]
             os.fchmod(fd, 0o640)
+            # Snapshot the exact bytes that are classified. The replacement
+            # checks this snapshot, so any edit after the read, including an
+            # in-place write that keeps the inode, is refused rather than
+            # overwritten.
+            read_stat = os.fstat(fd)
             legacy_default = (
-                opened_stat.st_size <= HERMES_API_SOUL_MIGRATION_MAX_BYTES
+                read_stat.st_size <= HERMES_API_SOUL_MIGRATION_MAX_BYTES
                 and _api_soul_is_legacy_default(
                     os.read(fd, HERMES_API_SOUL_MIGRATION_MAX_BYTES + 1)
                 )
             )
+            classified = FileSnapshot.from_stat(read_stat)
+            if legacy_default and not _same_snapshot(os.fstat(fd), classified):
+                raise UnsafePathError("api profile SOUL.md changed during legacy default migration")
         finally:
             os.close(fd)
         if legacy_default:
-            # Atomic replace re-checks the inode snapshot, so a file swapped
-            # after the read above is refused rather than overwritten.
-            _api_write_file(soul_path, HERMES_API_SOUL_BYTES, 0o640, admin_uid, api_gid)
+            _atomic_replace(
+                soul_path,
+                HERMES_API_SOUL_BYTES,
+                expected=classified,
+                mode=0o640,
+                uid=admin_uid,
+                gid=api_gid,
+            )
     _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
     # Skills installed before the contract change remain runtime-owned inside
     # the now admin-owned dir; re-own the whole tree so installed skill

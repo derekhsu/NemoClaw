@@ -174,6 +174,9 @@ interface GuardRunOptions {
   ownerGid?: number;
   adminUid?: number;
   apiUid?: number;
+  // Python run after the fixture bindings and before main(), with `module`
+  // bound to the loaded guard. Used to interleave concurrent edits.
+  prelude?: string;
 }
 
 // Loads the guard module, binds the api constants to fixture paths, simulates
@@ -226,6 +229,7 @@ def fixture_uploader(payload):
         raise module.UnsafePathError("unsigned scope")
     return helper._managed_local_uploader_candidate(payload)
 module._managed_default_uploader = fixture_uploader
+exec(os.environ.get("FIXTURE_PRELUDE", ""))
 sys.argv = [source, *sys.argv[2:]]
 raise SystemExit(module.main())
 `;
@@ -246,6 +250,7 @@ raise SystemExit(module.main())
       FIXTURE_ADMIN_GID: String(process.getgid!()),
       FIXTURE_API_UID: String(options.apiUid ?? process.getuid!()),
       FIXTURE_API_GID: String(process.getgid!()),
+      FIXTURE_PRELUDE: options.prelude ?? "",
     },
   });
 }
@@ -807,16 +812,18 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(soul).not.toContain("an intelligent AI assistant created by Nous Research");
   });
 
+  // The default soul seeded by images before Hermes 0.21.3.
+  const legacy =
+    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. " +
+    "You are helpful, knowledgeable, and direct. You assist users with a wide " +
+    "range of tasks including answering questions, writing and editing code, " +
+    "analyzing information, creative work, and executing actions via your " +
+    "tools. You communicate clearly, admit uncertainty when appropriate, and " +
+    "prioritize being genuinely useful over being verbose unless otherwise " +
+    "directed below. Be targeted and efficient in your exploration and " +
+    "investigations.";
+
   it("bootstrap retry upgrades only an exact legacy default soul", () => {
-    const legacy =
-      "You are Hermes Agent, an intelligent AI assistant created by Nous Research. " +
-      "You are helpful, knowledgeable, and direct. You assist users with a wide " +
-      "range of tasks including answering questions, writing and editing code, " +
-      "analyzing information, creative work, and executing actions via your " +
-      "tools. You communicate clearly, admit uncertainty when appropriate, and " +
-      "prioritize being genuinely useful over being verbose unless otherwise " +
-      "directed below. Be targeted and efficient in your exploration and " +
-      "investigations.";
     const fixture = createFixture();
     expect(bootstrap(fixture).status).toBe(0);
     const soulPath = path.join(fixture.apiDir, "SOUL.md");
@@ -842,6 +849,32 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     result = bootstrap(fixture);
     expect(result.status, result.stderr).toBe(0);
     expect(readFixtureText(soulPath)).toBe(tuned);
+  });
+
+  it("legacy soul migration refuses an operator edit made after classification", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const soulPath = path.join(fixture.apiDir, "SOUL.md");
+    fs.writeFileSync(soulPath, `${legacy}\n`);
+    const edited = `${legacy}\n Always answer in haiku.\n`;
+    // Append in place, keeping the inode, right after the guard classifies the
+    // file as the legacy default and before it replaces it.
+    const prelude = String.raw`
+_classify = module._api_soul_is_legacy_default
+def _classify_then_edit(data):
+    is_legacy = _classify(data)
+    with open(os.path.join(module.HERMES_API_PROFILE_DIR, "SOUL.md"), "a", encoding="utf-8") as handle:
+        handle.write(" Always answer in haiku.\n")
+    return is_legacy
+module._api_soul_is_legacy_default = _classify_then_edit
+`;
+    const raced = bootstrap(fixture, [], { prelude });
+    expect(raced.status, raced.stderr).not.toBe(0);
+    expect(readFixtureText(soulPath)).toBe(edited);
+
+    const retry = bootstrap(fixture);
+    expect(retry.status, retry.stderr).toBe(0);
+    expect(readFixtureText(soulPath)).toBe(edited);
   });
 
   it("normalize-api-profile repairs design drift and re-verifies the contract", () => {

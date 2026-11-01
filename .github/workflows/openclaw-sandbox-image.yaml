@@ -1,34 +1,76 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Build and publish the NemoClaw OpenClaw managed image to Docker Hub.
+# Build and publish the fork's OpenClaw images to Docker Hub.
 # Fork-only manual workflow: the upstream managed-images lane is gated to
-# NVIDIA/NemoClaw and never pushes from forks, so this lane builds
-# Dockerfile.base + Dockerfile per-arch on native runners and promotes a
-# multi-arch manifest on derekhsu/openshell-openclaw.
+# NVIDIA/NemoClaw and never pushes from forks. Both variants build per-arch on
+# native runners, push by digest, and then create the multi-arch tags on
+# derekhsu/openshell-openclaw.
+#
+#   standard  Dockerfile.base + Dockerfile. Tag <version> or <version>-r<n>;
+#             also writes <tag>-amd64, <tag>-arm64, latest, openclaw-<version>.
+#   tools     Dockerfile.tools on the published standard image pinned in that
+#             file (issue #16). Tag <version>-tools.<n> only; the image must
+#             pass the tools fixtures and scan gate before it is pushed.
+#
+# scripts/openclaw-image-release.sh owns the tag rules: it rejects existing
+# release tags and runs only in derekhsu/NemoClaw from feat/image-only-cli.
 #
 # Required Actions secrets on this fork:
 #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
-#
-# Trigger manually and provide the release tag, e.g. 2026.9.2.
 
 name: Images / OpenClaw Sandbox
 
 on:
   workflow_dispatch:
     inputs:
+      variant:
+        description: "Image to publish"
+        required: true
+        type: choice
+        default: standard
+        options:
+          - standard
+          - tools
       tag:
-        description: "Docker Hub tag to publish (for example 2026.9.2)"
+        description: "Release tag: standard 2026.9.2-r3, tools 2026.9.2-tools.1"
         required: true
         type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-sandbox-image-publish
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: docker.io/derekhsu/openshell-openclaw
   BASE_IMAGE_NAME: docker.io/derekhsu/openclaw-sandbox-base
 
 jobs:
-  build-platform:
-    name: Build ${{ matrix.platform }}
+  plan:
+    name: Check release request
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      base_image: ${{ steps.plan.outputs.base_image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check variant, tag, ref, and existing tags
+        id: plan
+        env:
+          VARIANT: ${{ inputs.variant }}
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: scripts/openclaw-image-release.sh plan
+
+  build-standard:
+    name: Build standard ${{ matrix.platform }}
+    needs: plan
+    if: inputs.variant == 'standard'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     strategy:
@@ -108,35 +150,91 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: platform-digest-${{ matrix.arch }}
+          name: platform-digest-standard-${{ matrix.arch }}
           path: digests/
-          retention-days: 1
+          retention-days: 7
 
-  publish-manifest:
-    name: Publish multi-arch manifest
-    runs-on: ubuntu-24.04
-    needs: build-platform
+  build-tools:
+    name: Build tools ${{ matrix.platform }}
+    needs: plan
+    if: inputs.variant == 'tools'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      TOOLS_IMAGE: nemoclaw-openclaw-tools:release
+      OUT: ${{ github.workspace }}/tools-image-evidence
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: platform-digest-*
-          path: digests
-          merge-multiple: true
-
-      # Emit the bundled OpenClaw version as an extra tag so date-based tags
-      # stay traceable to the pinned Dockerfile ARG.
-      - name: Resolve bundled OpenClaw version
-        id: openclaw-version
+      - name: Free runner disk
         run: |
           set -euo pipefail
-          version="$(grep -oP 'ARG OPENCLAW_VERSION=\K\S+' Dockerfile | head -n1)"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "ERROR: could not parse OPENCLAW_VERSION from Dockerfile" >&2
-            exit 1
-          fi
-          echo "calver=${version}" >> "$GITHUB_OUTPUT"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Build and test before logging in, so registry credentials are not on
+      # the runner while the image and its fixtures run. The base comes from
+      # the digest in Dockerfile.tools; the tools image keeps no build cache
+      # in GitHub Actions, so it cannot evict the standard image caches.
+      - name: Build ${{ matrix.platform }} tools image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.tools
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.TOOLS_IMAGE }}
+          load: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Compare with base image
+        run: tools/openclaw-tools-image/fixtures/check-image.sh "${{ needs.plan.outputs.base_image }}" "$TOOLS_IMAGE" "$OUT/image"
+
+      - name: Check tag against the image's OpenClaw version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: scripts/openclaw-image-release.sh check-tools-version "$TAG" "$(cat "$OUT/image/openclaw-version.txt")"
+
+      - name: Run fixtures offline as sandbox
+        run: tools/openclaw-tools-image/fixtures/run-fixtures.sh "$TOOLS_IMAGE" "$OUT/fixtures"
+
+      - name: Scan tools image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.TOOLS_IMAGE }}
+          format: json
+          output: tools-image-evidence/trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Scan base image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ needs.plan.outputs.base_image }}
+          format: json
+          output: tools-image-evidence/trivy-base.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Reject findings added by the tools layer
+        run: |
+          python3 tools/openclaw-tools-image/fixtures/trivy-new-findings.py \
+            "$OUT/trivy-base.json" "$OUT/trivy.json" "$OUT/trivy-added.json"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -145,26 +243,106 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create multi-arch manifest and arch tags
-        run: |
-          set -euo pipefail
-          amd64_ref="$(cat digests/amd64.txt)"
-          arm64_ref="$(cat digests/arm64.txt)"
-          docker buildx imagetools create \
-            -t "${{ env.IMAGE_NAME }}:${{ inputs.tag }}" \
-            -t "${{ env.IMAGE_NAME }}:latest" \
-            -t "${{ env.IMAGE_NAME }}:openclaw-${{ steps.openclaw-version.outputs.calver }}" \
-            "$amd64_ref" "$arm64_ref"
-          docker buildx imagetools create \
-            -t "${{ env.IMAGE_NAME }}:${{ inputs.tag }}-amd64" "$amd64_ref"
-          docker buildx imagetools create \
-            -t "${{ env.IMAGE_NAME }}:${{ inputs.tag }}-arm64" "$arm64_ref"
+      # Same inputs as the tested build, so this step reuses its layers.
+      # Push only the digest; the publish job creates the tag.
+      - name: Push ${{ matrix.platform }} tools image by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.tools
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Verify published manifest
+      - name: Record platform digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "${{ env.IMAGE_NAME }}:${{ inputs.tag }}"
-          echo "published manifest digest:"
-          docker buildx imagetools inspect \
-            --format '{{.Manifest.Digest}}' \
-            "${{ env.IMAGE_NAME }}:${{ inputs.tag }}"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: invalid digest: $DIGEST" >&2
+            exit 1
+          fi
+          mkdir -p digests
+          printf '%s\n' "$IMAGE_NAME@$DIGEST" > "digests/${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-digest-tools-${{ matrix.arch }}
+          path: digests/
+          retention-days: 7
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tools-image-evidence-${{ matrix.arch }}
+          path: tools-image-evidence
+          retention-days: 30
+
+  publish-manifest:
+    name: Publish multi-arch manifest
+    runs-on: ubuntu-24.04
+    needs: [plan, build-standard, build-tools]
+    # One variant's build job is skipped; the other must succeed on both
+    # architectures before any tag is written.
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      (needs.build-standard.result == 'success' || needs.build-tools.result == 'success')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: platform-digest-${{ inputs.variant }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create tags
+        env:
+          VARIANT: ${{ inputs.variant }}
+          TAG: ${{ inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DIGEST_DIR: digests
+        run: scripts/openclaw-image-release.sh publish
+
+  # A failed architecture leaves the other one pushed by digest with no tag.
+  report-untagged-digests:
+    name: Report untagged digests
+    runs-on: ubuntu-24.04
+    needs: [build-standard, build-tools]
+    if: always() && (needs.build-standard.result == 'failure' || needs.build-tools.result == 'failure')
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: platform-digest-${{ inputs.variant }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: List digests pushed without a tag
+        run: |
+          set -euo pipefail
+          {
+            echo "### Not published"
+            echo
+            echo "An architecture failed, so no tag was written. Pushed by digest only:"
+            echo
+            found=0
+            for file in digests/*.txt; do
+              [ -f "$file" ] || continue
+              found=1
+              echo "- $(basename "$file" .txt): \`$(cat "$file")\`"
+            done
+            [ "$found" = 1 ] || echo "- none"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

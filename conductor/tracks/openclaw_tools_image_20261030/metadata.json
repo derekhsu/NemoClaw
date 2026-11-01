@@ -1,30 +1,50 @@
 {
   "track_id": "openclaw_tools_image_20261030",
   "type": "feature",
-  "status": "in_progress",
+  "status": "completed",
   "created_at": "2026-10-30T09:26:49Z",
-  "updated_at": "2026-10-30T09:57:22Z",
-  "description": "Fork issue #16: build a digest-pinned OpenClaw tools image with document, media, browser, workspace, and selected skill dependencies, separate publication tags, and offline non-root validation.",
+  "updated_at": "2026-11-01T09:04:31Z",
+  "description": "Fork issue #16: digest-pinned OpenClaw tools image, offline non-root image verification, and Phase 5 documentation and handoff completed. Actual deployment acceptance, Tasks 3.4 and 5.3, and the cold-start budget remain pending in issue #18.",
   "issue_url": "https://github.com/derekhsu/NemoClaw/issues/16",
   "branch": "codex/issue-16-tools-image",
   "base_branch": "feat/image-only-cli",
   "base_commit": "70ff5c849b369c0cf467df3b2431dd4f00b795c9",
-  "current_phase": 1,
-  "current_task": "1.2",
+  "current_phase": 5,
+  "current_task": null,
   "phases": {
     "total": 5,
-    "completed": 0
+    "completed": 5
   },
   "tasks": {
     "total": 25,
-    "completed": 1
+    "completed": 23,
+    "transferred": 2
   },
   "commits": [
-    "204877e56"
+    "b5a81d16b945a7f8230c21ff522fab348dc339d9",
+    "204877e56d4bbd8153d675e56f430e6d2b2a54c2",
+    "f8c6e174b18cac2f11541b687bf089d525810c22",
+    "69a4baf2dacf03c1a619d7d144ce1e5e940be19f",
+    "61101394f2be0c9746af1e3b03f27749f3538935",
+    "6ff70eb455b2ffd67c9dad15f195f39095f6a4fa",
+    "eee30363a014661b61cc9f9a20d02a0b5163ca07",
+    "f2449cf72066178ac0fc9907608f493a2936e866",
+    "7a040dd40f6ebd656653e8a60a58b4da995343b1",
+    "35b49697d40b8d13d63356b380d5ca1687b8b6c3",
+    "a782f31e5c84cf667604f8b545a0fedf2324da6e",
+    "9abc0a93ec55bda732ddeb118816242a2303553f",
+    "91cfa8e3c9d22eea407f7b560f69475affb84d2d",
+    "c615495a9ed81ec144d53a0094f2ccd71a1c240a",
+    "994d434697333aef5b82220f1b8cf7ae80ebc9ed",
+    "4434ea647a79a845996cb95f7f601cf327a73059",
+    "6d58a965ee68bfafae20bc02505e87fdec77a258",
+    "611b55aa8181c45b4fd95d594f576bf746f72f7e",
+    "c4f09dc95c3bf644092ff4372b76a55fcbb1a463"
   ],
   "selected_base": {
     "tag": "2026.9.2-r2",
     "index_digest": "sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02",
     "source_revision": "70ff5c849b369c0cf467df3b2431dd4f00b795c9"
-  }
+  },
+  "completed_at": "2026-11-01T09:04:31Z"
 }

@@ -3,7 +3,7 @@
 
 # Phase 5 Review: Security, Inventory, Capacity, and Handoff
 
-All results come from verify run
+The image results below come from verify run
 [41261560595](https://github.com/derekhsu/NemoClaw/actions/runs/41261560595)
 (commit `994d434`) on native amd64 and arm64 runners. No image was pushed.
 
@@ -143,6 +143,25 @@ Debian versions and picks up any fix that Debian publishes.
   [#18](https://github.com/derekhsu/NemoClaw/issues/18) (Task 5.3).
 - Docker Hub login, push by digest, and `imagetools create` run only in the
   first real publication from `feat/image-only-cli`.
+
+## Maintainer Manual Confirmation
+
+On 2026-11-01, the maintainer (`derekhsu`) reviewed the Phase 5 documents and
+verification evidence for commit `b5a81d16b` and confirmed the #16 scope
+([confirmation](https://github.com/derekhsu/NemoClaw/pull/20#issuecomment-6555856173)).
+The statement was:
+
+> 我已審閱 Phase 5 文件與驗證證據，確認交付符合 #16 的範圍；實際部署與相關驗收由 #18 繼續追蹤，同意完成 Phase 5 的文件與交接人工確認。
+
+This confirmation completes Phase 5 documentation and handoff for #16.
+There are 23 completed phase tasks and two tasks transferred to #18.
+Task 3.4 and Task 5.3 remain unperformed; the confirmation does not establish
+deployment qualification or authorize image publication.
+
+The tools verification run for commit `eb525178a` also passed on both native
+architectures ([run 41281336276](https://github.com/derekhsu/NemoClaw/actions/runs/41281336276)).
+Commit `b5a81d16b` adds the #23 managed-image CI base pin and its workflow
+test; it does not change the tools Dockerfile, inputs, or fixtures.
 
 ## Publication handoff
 

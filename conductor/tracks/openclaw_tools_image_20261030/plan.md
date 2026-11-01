@@ -6,7 +6,7 @@
 - Track ID: `openclaw_tools_image_20261030`
 - Specification: [spec.md](spec.md)
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
-- Status: [~] Phase 5 in progress
+- Status: [x] Phase 5 documentation and handoff complete for #16; deployment acceptance remains in #18.
 
 ## Working rules
 
@@ -17,9 +17,12 @@ tracks, not this OpenClaw image. Follow repository npm scripts for source
 validation. A pinned pnpm inside the tools image serves frontend fixtures only;
 it does not replace this repository's package manager.
 
-Track creation completed planning artifacts only. Phase 1 input inspection is
-in progress. Do not interpret review opinions or an unchecked checklist as evidence
-that a package installs or a release is qualified.
+The maintainer confirmed the completed documentation and handoff on 2026-11-01
+for commit `b5a81d16b` ([confirmation](https://github.com/derekhsu/NemoClaw/pull/20#issuecomment-6555856173)).
+The #16 scope is complete with 23 completed phase tasks and two tasks transferred
+to #18.
+This completion records image verification and handoff; deployment acceptance
+and image publication remain separate work.
 
 ## Phase 1: Establish reproducible inputs and acceptance owners
 
@@ -77,28 +80,34 @@ changes. Tests must exercise the owning logic; avoid source-shape tests that
 only mirror workflow text. No image push is performed by this phase's local
 validation unless separately authorized.
 
-## Phase 5: Document, review, and qualify the selected deployment
+## Phase 5: Document, Review, and Hand Off Deployment Acceptance
 
 - [x] Task 5.1: Reconcile the documentation author's work with the completed behavior; finalize tool inventory, versions, offline limits, image selection by digest, update ownership, and return to a standard image in the approved fork documentation surface. `4434ea6`, `6d58a96`
 - [x] Task 5.2: Run focused source checks and applicable shell/Dockerfile/workflow checks after final edits; run npm run docs for public documentation changes and resolve independent documentation writer findings. `6d58a96` ([review](phase5-review.md))
 - [-] Task 5.3: With explicit live-environment authorization and the named operator, stage the qualified image by the deployment's actual digest-selection setting; run all accepted journeys and negative policy checks on both architectures, retaining reproducible evidence. Moved to [#18](https://github.com/derekhsu/NemoClaw/issues/18) ([decisions](decisions.md)).
 - [x] Task 5.4: Review security/scanner results, package inventories, capacity and cold-start budget, and all acceptance gaps; record documentation review evidence and publication handoff without creating a PR or publishing implicitly. `611b55a` ([review](phase5-review.md); 67 unfixed CVEs signed off by maintainer 2026-11-01; cold-start budget moved to #18)
-- [ ] Task: Conductor - User Manual Verification 'Deployment qualification and handoff' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Documentation and deployment handoff' (Protocol in workflow.md) (confirmed by maintainer 2026-11-01 for reviewed commit `b5a81d16b`; [confirmation](https://github.com/derekhsu/NemoClaw/pull/20#issuecomment-6555856173))
 
-Phase evidence: named deployment, tested source/image identity, real outputs,
-scanner acceptance, docs validation and independent review. If deployment or
-an architecture is unavailable, record the missing evidence and leave the
-corresponding acceptance and track incomplete.
+Phase evidence for #16 includes image identities and fixture outputs, scanner
+acceptance, documentation review, and the maintainer's manual confirmation.
+Task 3.4, Task 5.3, the actual deployment policy and browser journeys, and the
+cold-start budget remain pending in #18 under the recorded scope decision.
+The manual confirmation closes the documentation and handoff scope; it does
+not establish deployment qualification.
 
 ## Final verification
 
-- [ ] Every required inventory item has functional amd64/arm64 evidence or an explicit accepted scope change.
-- [ ] Base metadata and controlled packages remain valid for the selected base revision.
-- [ ] Offline/non-root behavior and declared/denied network access satisfy spec.md.
-- [ ] Standard/tools publication rejects tag collisions and reports partial writes accurately.
-- [ ] Documentation and independent writer review are complete; receipt evidence is retained for any subsequent PR.
-- [ ] All external qualification and vulnerability decisions are recorded; no unresolved finding is hidden by a passing build.
+- [x] Required inventory items have functional amd64/arm64 fixture evidence; the accepted deployment-only checks are transferred to #18 ([review](phase5-review.md)).
+- [x] Base metadata and controlled package comparisons pass for the selected base revision ([review](phase5-review.md)).
+- [x] Offline/non-root fixtures pass on both architectures; declared/denied network access under the deployment policy remains pending in #18.
+- [x] Standard/tools publication tests cover tag collisions and partial-write reports; the index-digest failure is fixed in `c4f09dc95` and was verified in the [PR re-review](https://github.com/derekhsu/NemoClaw/pull/20#pullrequestreview-5726862616).
+- [x] Documentation and independent writer review are recorded; PR #20 retains the review receipt and the maintainer's manual confirmation.
+- [x] Vulnerability acceptance and external qualification gaps are recorded; deployment acceptance and cold-start measurements remain pending in #18 ([review](phase5-review.md)).
 
 The final verification checks summarize acceptance; they are not counted as
 implementation tasks in metadata.json. There are 25 phase tasks, including
-five manual-verification tasks. Completed tasks record their commit SHA.
+five manual-verification tasks.
+Of those tasks, 23 are complete and two are transferred to #18, with neither
+transferred task counted as completed deployment evidence.
+Completed implementation tasks record their commit SHA; the final manual
+confirmation identifies the reviewed commit and the maintainer's statement.

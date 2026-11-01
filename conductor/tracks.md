@@ -2,7 +2,7 @@
 
 ---
 
-## [~] Track: OpenClaw Tools Image
+## [x] Track: OpenClaw Tools Image
 
 *Link: [./tracks/openclaw_tools_image_20261030/](./tracks/openclaw_tools_image_20261030/)*
 
@@ -11,8 +11,12 @@ image from a published full OpenClaw image, with document, media, browser,
 workspace, and selected skill dependencies. Keep publication tags separate and
 qualify offline non-root behavior on Linux amd64 and arm64.
 
-Phase 1 input inspection started. The track names the required
-input, deployment, package, and release decisions before implementation.
+The maintainer completed the Phase 5 documentation and handoff confirmation
+on 2026-11-01 for the scope accepted in #16.
+There are 23 completed phase tasks and two tasks transferred to
+[#18](https://github.com/derekhsu/NemoClaw/issues/18).
+Deployment acceptance remains pending in #18; image publication requires
+separate authorization.
 
 ---
 

@@ -6,7 +6,7 @@
 - Track ID: `openclaw_tools_image_20261030`
 - Specification: [spec.md](spec.md)
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
-- Status: [~] Phase 4 in progress
+- Status: [~] Phase 5 in progress
 
 ## Working rules
 
@@ -70,7 +70,7 @@ creation requires the workflow's explicit opt-in before execution.
 - [x] Task 4.2: Extend the fork workflow with standard/tools selection, tools base digest handling, base-derived version identity, separate caches/artifacts/tags, and both directions of tag namespace protection. `c615495`
 - [x] Task 4.3: Restrict publication to the approved fork, ref, and registries; minimize CI permissions, keep registry secrets out of build/runtime outputs, and preserve standard aliases during tools builds. `c615495`
 - [x] Task 4.4: Validate planning/build/manifest behavior with mocked publication boundaries and isolated local fixtures; record non-atomic partial-write behavior and exact retry/reporting rules without pushing images. `994d434` ([evidence](phase4-evidence.md))
-- [ ] Task: Conductor - User Manual Verification 'Image variant publication workflow' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Image variant publication workflow' (Protocol in workflow.md) (confirmed by maintainer 2026-11-01)
 
 Phase evidence: success and failure behavior, including rejection before alias
 changes. Tests must exercise the owning logic; avoid source-shape tests that

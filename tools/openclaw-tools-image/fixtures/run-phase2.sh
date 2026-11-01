@@ -63,12 +63,21 @@ base_security_checks() {
 }
 
 fontconfig_cache() {
+  ls -l /usr/local/share/nemoclaw-tools/fontconfig-cache/
   ls /usr/local/share/nemoclaw-tools/fontconfig-cache/*.cache-* >/dev/null
+  fc-match 'Noto Sans CJK TC'
   grep -q 'Noto Sans CJK' <<<"$(fc-match 'Noto Sans CJK TC')"
   grep -q Liberation <<<"$(fc-match 'Liberation Serif')"
   grep -q DejaVu <<<"$(fc-match 'DejaVu Sans')"
   # The baked cache must cover every font, so no per-user cache is written.
-  test -z "$(find "$HOME/.cache/fontconfig" -type f 2>/dev/null)"
+  if [ -n "$(find "$HOME/.cache/fontconfig" -type f 2>/dev/null)" ]; then
+    echo "fontconfig wrote a per-user cache; cache validation follows"
+    rm -rf "$HOME/.cache/fontconfig"
+    FC_DEBUG=16 fc-list >/dev/null 2>"$WORK/fc-debug.txt" || true
+    grep -v -E '^ *$' "$WORK/fc-debug.txt" | head -60
+    find /usr/share/fonts /usr/local/share/fonts -maxdepth 2 -type d -exec stat -c '%y %n' {} + 2>/dev/null | head -20
+    return 1
+  fi
 }
 
 # --- Office, PDF, OCR ---------------------------------------------------

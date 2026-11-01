@@ -313,7 +313,7 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
 - base 原有 11 個可修補的弱點,由 [#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建標準映像處理。
 - tools 層新增 67 個尚無修補的 CVE,其中 1 個是 CRITICAL(`libxml2` CVE-2026-6653)。
   主要來自 Chromium、FFmpeg、libxml2 與 Tesseract。
-  完整清單與簽核狀態在 track 的 `phase5-review.md`。
+  維護者已於 2026-11-01 逐一具名簽核這 67 個 CVE,清單在 track 的 `phase5-review.md`。
 
 ## 9. 驗證方式
 

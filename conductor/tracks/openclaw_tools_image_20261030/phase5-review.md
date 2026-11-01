@@ -45,7 +45,9 @@ The decision for group 6 requires the maintainer to sign off each unfixed
 CRITICAL or HIGH finding by name. The tools layer adds the 67 CVEs below; the
 set is the same on amd64 and arm64.
 
-Sign-off status: **pending**.
+Sign-off status: **signed off**. The maintainer (`derekhsu`) accepted all 67
+CVEs below by name on 2026-11-01. A later tools release re-resolves the
+Debian versions and picks up any fix that Debian publishes.
 
 | Source | CVE | Severity | Packages | Debian status |
 | --- | --- | --- | --- | --- |
@@ -144,8 +146,7 @@ Sign-off status: **pending**.
 
 ## Publication handoff
 
-0. The maintainer signs off the 67 CVEs above by name and records the
-   result in this file. Publication waits for this sign-off.
+0. Done: the maintainer signed off the 67 CVEs above on 2026-11-01.
 1. Merge `codex/issue-16-tools-image` into `feat/image-only-cli`.
 2. Run `Images / OpenClaw Sandbox` from `feat/image-only-cli` with variant
    `tools` and tag `2026.9.2-tools.1`.

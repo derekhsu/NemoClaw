@@ -75,8 +75,8 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 | Finding | Status | Resolution |
 | --- | --- | --- |
 | B1 controlled packages vs. apt | Resolved in design | Conflict reproduced and fixed by a Perl 5.44 rebuild ([verification.md](verification.md)); hold every inventory package; compare versions before and after; re-resolve pins per release |
-| B2 deployment consumer | Moved to #18 | The review names clawshell-gateway `blueprint.sandbox_source` as the consumer; #18 must confirm it |
-| B3 sandbox policy | Split | Docker-level fixtures here use unique LibreOffice profiles and `pdffonts`; Landlock paths and the 512-process limit are checked in #18 |
+| B2 deployment consumer | Confirmed in #18 | clawshell-gateway passes the blueprint `sandbox_source` to OpenShell unchanged; a digest reference works ([deployment acceptance](#deployment-acceptance-18)) |
+| B3 sandbox policy | Split | Docker-level fixtures here use unique LibreOffice profiles and `pdffonts`; Landlock paths were checked in #18 ([deployment acceptance](#deployment-acceptance-18)); the 512-process limit is not yet measured |
 | B4 base source and version | Resolved | Digest fixed in `Dockerfile.tools`; version read from `openclaw --version`; base user and architecture checks fail closed |
 | B5 tag namespace | Resolved in design, implemented in Phase 4 | One tools tag, no architecture tags; reject existing tags; standard path rejects `-tools.` |
 | B6 vulnerability standard | Resolved | Trivy JSON; no fixable CRITICAL/HIGH; maintainer signs off unfixed findings |
@@ -86,3 +86,43 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 | Partial publication | Accepted for Phase 4 | Report tags and digests already written |
 | Package set | Done | `--no-install-recommends`; Liberation and DejaVu fonts added; size recorded |
 | Build-args guard | No change | `Dockerfile.tools` declares no `*_INTEGRITY` or `*_TARBALL` ARG |
+
+## Deployment acceptance (#18)
+
+First amd64 round on 2026-11-01, in the maintainer's test deployment.
+Results, decisions, and screenshots are in the
+[#18 comments](https://github.com/derekhsu/NemoClaw/issues/18).
+
+### Deployment
+
+| Item | Value |
+| --- | --- |
+| Tools release | `docker.io/derekhsu/openshell-openclaw:2026.9.2-tools.1` |
+| Index digest | `sha256:d22a7f704413c8a0ab1ececc2c422209d2906481dfc6cec38ff19da7e377a107` |
+| amd64 manifest digest | `sha256:2a05b9d0969b7d50967efc205af0fe9a85ce2a9aa4af5c1b3e2f542dc3f1c7aa` |
+| amd64 image ID (config digest) | `sha256:9e08b5cb5e7200582e9c1e35aaade75b45aa1bfe52b04a406470e1a6f84409ff` |
+| Runtime | OpenShell 0.0.92 with the Podman driver. The blueprint requires 0.0.101; the maintainer accepted the difference |
+| Deployment system | clawshell-gateway `main-486fcba0`, test stack |
+| Image selection | Blueprint `sandbox_source` set to `derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
+| Transfer | The host has no Internet access. The amd64 manifest and blobs were copied as an oci-archive and loaded with `podman load`; the manifest digest and image ID stayed the same as on Docker Hub |
+| Network policy | Restricted tier with one custom preset that lets only the headless Chrome binary reach the internal SSO site and its redirect host on port 443 |
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Sandbox start | OpenShell reported Ready about 2 seconds after creation |
+| clawshell-gateway provisioning | Marked `error`. `openclaw onboard` prints a retired-config warning on stderr, and the gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` blueprint fails the same way, so the tools image is not the cause. The fix is clawshell-gateway PR #190 |
+| Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`; the same check passes in the build workflow |
+| Phase 3 fixtures | 5 of 5 pass |
+| `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |
+| Python Playwright on the allowed site | Opens the page, clicks and types into a field, and saves a screenshot. The form is not submitted |
+| Denied destinations | `curl` to the allowed site, Chrome to a public site, and Chrome to an undeclared internal host are all denied |
+
+### Open items
+
+- OpenClaw browser tool journey through an agent session: needs working
+  clawshell-gateway provisioning.
+- arm64 acceptance: the test host is amd64. Deferred, not scheduled.
+- Cold-start budget: one measurement of about 2 seconds to Ready; no limit set.
+- 512-process limit under parallel LibreOffice and Chromium: not measured.

@@ -22,6 +22,7 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | OpenClaw 與 Node.js 版本 | 由建置時的 pin 決定 | 與 base 標準映像相同,不升級 |
 | 執行設定 | — | `User`、`Entrypoint`、`Cmd`、`WorkingDir`、`Env`、`Healthcheck` 與 base 完全相同 |
 | 額外工具 | 無 | 第 3 節列出的套件 |
+| 映像大小 | 約 2.3 GB | 約 5.6 GB(amd64 增加 3.36 GB,arm64 增加 3.26 GB) |
 
 目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r2`,
 index digest 為
@@ -41,7 +42,7 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | Phase 2 | 文件與影音工具、`Dockerfile.tools` | 完成 |
 | Phase 3 | Chromium、Python Playwright、離線前端建置 | 完成 |
 | Phase 4 | 發布 workflow | 完成 |
-| Phase 5 | 文件定稿與審查 | 未開始 |
+| Phase 5 | 文件定稿與審查 | 進行中 |
 | #18 | 實際部署環境驗收 | 等 #16 發布第一個 tools 映像 |
 
 第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
@@ -287,6 +288,13 @@ Docker Hub 無法一次原子寫入多個 tag。
 ### 7.4 部署端選用
 
 部署端以完整 digest 選用 tools 映像。
+發布 workflow 的摘要會列出 index digest;也可以用以下指令查詢:
+
+```bash
+docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-tools.1 \
+  --format '{{.Manifest.Digest}}'
+```
+
 要回到標準映像,把設定改回標準映像的 digest。
 部署系統的實際設定位置與驗收由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 確認。
 
@@ -297,6 +305,14 @@ Docker Hub 無法一次原子寫入多個 tag。
 - base 映像原有的可修補弱點,以重建標準映像處理,不在 tools 映像中修補。
 - 每個無法修補的 CRITICAL 或 HIGH 弱點,由維護者逐一具名簽核。
 - base 的受控套件版本必須維持不變,並重跑該 base 版本的安全檢查。
+
+目前的掃描結果(兩個架構相同):
+
+- tools 層沒有新增可修補的 CRITICAL 或 HIGH 弱點。
+- base 原有 11 個可修補的弱點,由 [#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建標準映像處理。
+- tools 層新增 67 個尚無修補的 CVE,其中 1 個是 CRITICAL(`libxml2` CVE-2026-6653)。
+  主要來自 Chromium、FFmpeg、libxml2 與 Tesseract。
+  完整清單與簽核狀態在 track 的 `phase5-review.md`。
 
 ## 9. 驗證方式
 

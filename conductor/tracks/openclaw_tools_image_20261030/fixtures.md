@@ -115,7 +115,7 @@ fixture table calls Chromium.
 | --- | --- |
 | Sandbox image | Podman reports the sandbox container image as `docker.io/derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
 | Sandbox start | OpenShell reported `Ready` about 2 seconds after creation |
-| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, OpenShell returns that line with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. [clawshell-gateway PR 190](https://github.com/derekhsu/clawshell-gateway/pull/190) proposes the fix |
+| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix |
 | Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`; the same check passes in the build workflow |
 | Phase 3 fixtures | 5 of 5 pass |
 | `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |

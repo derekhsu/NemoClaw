@@ -83,7 +83,9 @@ jobs:
           - agent: langchain-deepagents-code
             display_name: Deep Agents Code
             dockerfile: agents/langchain-deepagents-code/Dockerfile
-            base_alias: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base:latest
+            # Upstream :latest ships deepagents-code 0.1.87; this fork pins 0.1.71, so pip check fails.
+            # Remove the pin after #22.
+            base_alias: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base@sha256:35ec718bc6a86c3b38b599a77239c5e917b20dbbbe20cc36e1f05262509d89b5
             base_repository: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base
             image: nemoclaw-managed-pr/langchain-deepagents-code
             repository: ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox

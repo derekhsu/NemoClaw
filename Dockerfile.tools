@@ -111,11 +111,15 @@ RUN set -eu; \
 # fontconfig cache in its default location, copy it under /usr, and list
 # that copy as a read-only cache directory so processes do not rebuild it.
 # fontconfig rejects a cache when a font directory's mtime differs, down to
-# nanoseconds, and BuildKit's layer export keeps whole seconds only. Round
-# the directory mtimes first so the cache stays valid in the exported image.
+# nanoseconds. BuildKit's layer export drops the nanoseconds and also drops
+# a layer change that only touches a directory's mtime. Truncate each mtime
+# to its own whole second, the value the exported image has either way.
 RUN set -eu; \
-    now=$(date +%s); \
-    find /usr/share/fonts /usr/local/share/fonts -type d -exec touch -m -d "@$now" {} + 2>/dev/null || true; \
+    for root in /usr/share/fonts /usr/local/share/fonts; do \
+        if [ -d "$root" ]; then \
+            find "$root" -type d -exec sh -c 'for d; do touch -m -d "@$(stat -c %Y "$d")" "$d"; done' sh {} +; \
+        fi; \
+    done; \
     fc-cache -f; \
     install -d -m 0755 /usr/local/share/nemoclaw-tools/fontconfig-cache; \
     cp -a /var/cache/fontconfig/. /usr/local/share/nemoclaw-tools/fontconfig-cache/; \

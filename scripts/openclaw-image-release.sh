@@ -17,7 +17,7 @@
 #   standard  <version> or <version>-r<n>; also writes <tag>-amd64,
 #             <tag>-arm64, latest, and openclaw-<version>.
 #   tools     <version>-tools.<n>; writes only that tag. <version> must equal
-#             the base image's OpenClaw version.
+#             the version that the built image reports with openclaw --version.
 # Release tags are never overwritten. latest and openclaw-<version> are the
 # only tags that move, and only standard releases move them.
 
@@ -48,7 +48,7 @@ summary() {
   printf '%s\n' "$@"
 }
 
-# Print the release tags (never overwritten) and then the moving aliases.
+# Print the release tags. These tags are never overwritten.
 release_tags() {
   case "$VARIANT" in
     standard) printf '%s\n' "$TAG" "$TAG-amd64" "$TAG-arm64" ;;

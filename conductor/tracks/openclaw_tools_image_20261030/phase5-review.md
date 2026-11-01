@@ -134,6 +134,8 @@ Sign-off status: **pending**.
 
 ## Publication handoff
 
+0. The maintainer signs off the 67 CVEs above by name and records the
+   result in this file. Publication waits for this sign-off.
 1. Merge `codex/issue-16-tools-image` into `feat/image-only-cli`.
 2. Run `Images / OpenClaw Sandbox` from `feat/image-only-cli` with variant
    `tools` and tag `2026.9.2-tools.1`.

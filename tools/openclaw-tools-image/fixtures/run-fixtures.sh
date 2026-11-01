@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Run every tools image fixture offline as the sandbox user (issue #16), with
-# the same restrictions as the sandbox: read-only root, writable /tmp only,
+# the same restrictions as the sandbox: read-only root, writable /tmp and /out only,
 # no capabilities, and no network.
 # Usage: run-fixtures.sh IMAGE OUT_DIR
 

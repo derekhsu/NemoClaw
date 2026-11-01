@@ -30,7 +30,7 @@ ADD --checksum=sha256:bb7f8f14b9ce2e2344ff5cd6c06f2e105eb99541ecbfec77139e2886d9
     https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js /p5.min.js
 
 # The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
-# which have fixed HIGH vulnerabilities. Build the same yq version with a
+# which have HIGH vulnerabilities with available fixes. Build the same yq version with a
 # patched Go toolchain and x/net. Go verifies module hashes with sumdb.
 FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS yq-build
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath

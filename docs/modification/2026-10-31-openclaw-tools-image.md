@@ -265,14 +265,14 @@ Debian `0.04-11` 沒有原始碼修補,只多了 hardening 旗標、`dh_perl -d`
 - 只有標準映像的發布會移動 `latest` 與 `openclaw-<version>`,而且在發布 tag 寫入之後才移動。
 - workflow 輸入只透過環境變數傳給 shell,不直接寫進指令。
 
-tools 映像在推送前必須在兩個架構上都通過以下檢查:
+每個架構的映像以 digest 推送前,必須先通過該架構的以下檢查;兩個架構都成功後,workflow 才寫入 tag:
 
 - 與 base 比較執行設定。
 - 檢查 tag 版本。
 - 離線 fixture。
 - Trivy 新增弱點檢查。
 
-workflow 在這些檢查之後才登入 Docker Hub,先以 digest 推送各架構映像,再建立多架構 tag。
+workflow 在這些檢查之後才登入 Docker Hub。
 tools 映像不使用 GitHub Actions 的建置快取,以免擠掉標準映像的快取。
 
 ### 7.3 失敗與重試
@@ -303,8 +303,9 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
 - 以 Trivy 掃描映像,保存 JSON 報告。
 - 同時掃描 base 映像。tools 層不得新增可修補的 CRITICAL 或 HIGH 弱點,否則 CI 失敗。
 - base 映像原有的可修補弱點,以重建標準映像處理,不在 tools 映像中修補。
-- 每個無法修補的 CRITICAL 或 HIGH 弱點,由維護者逐一具名簽核。
-- base 的受控套件版本必須維持不變,並重跑該 base 版本的安全檢查。
+- 每個無法修補的 CRITICAL 或 HIGH 弱點,由維護者逐一具名簽核。簽核完成前,維護者不得發布 tools 映像。CI 不檢查這項簽核。
+- `Dockerfile.tools` 以 apt hold 鎖住 base 的受控套件,安裝後再確認版本。
+- `base_security_checks` fixture 在 tools 映像中重跑 base 的安全檢查。
 
 目前的掃描結果(兩個架構相同):
 
@@ -325,12 +326,12 @@ fork 上的 GitHub Actions workflow 在原生 runner 上建置 `Dockerfile.tools
 | arm64 | `ubuntu-24.04-arm` |
 
 workflow 以 `run-fixtures.sh` 執行 track `fixtures.md` 中的 fixture、執行 Trivy 掃描並上傳輸出。
-這個驗證 workflow 不推送映像。它使用與發布 workflow 相同的建置步驟與 fixture。
+這個驗證 workflow 不推送映像。它使用與發布 workflow 相同的 Dockerfile、平台與 fixture。
 
 fixture 的執行條件:
 
 - 以 `sandbox` 使用者執行。
-- 使用 `--network none` 與唯讀 root,只有 `/tmp` 可寫入。
+- 使用 `--network none` 與唯讀 root,只有 `/tmp` 與輸出目錄 `/out` 可寫入。
 - 不加 capability,啟用 `no-new-privileges`。
 
 OpenShell policy 下的檢查、OpenClaw browser 工具與冷啟動時間由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 驗收。

@@ -6,7 +6,7 @@
 > **日期**: 2026-10-31
 > **Fork**: `derekhsu/NemoClaw`
 > **分支**: `codex/issue-16-tools-image`(基於 `feat/image-only-cli`,commit `70ff5c849`)
-> **狀態**: 實作中 — Phase 3 映像已在 CI 建置並通過測試,尚未發布
+> **狀態**: 實作中 — Phase 4 發布 workflow 已完成,尚未發布映像
 > **Issue**: [#16](https://github.com/derekhsu/NemoClaw/issues/16)(映像與發布)、[#18](https://github.com/derekhsu/NemoClaw/issues/18)(部署驗收)
 > **Track**: `conductor/tracks/openclaw_tools_image_20261030/`
 
@@ -39,13 +39,13 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 |------|------|------|
 | Phase 1 | 檢查 base、固定版本、相依性解析、決策 | 完成 |
 | Phase 2 | 文件與影音工具、`Dockerfile.tools` | 完成 |
-| Phase 3 | Chromium、Python Playwright、離線前端建置 | CI 測試通過,待人工確認 |
-| Phase 4 | 發布 workflow | 未開始 |
+| Phase 3 | Chromium、Python Playwright、離線前端建置 | 完成 |
+| Phase 4 | 發布 workflow | 完成,待人工確認 |
 | Phase 5 | 文件定稿與審查 | 未開始 |
 | #18 | 實際部署環境驗收 | 等 #16 發布第一個 tools 映像 |
 
 第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
-第 7 節的發布流程仍是設計,尚未驗證。OpenClaw 瀏覽器工具與實際 sandbox policy 由 #18 驗證。
+第 7 節的發布規則已由單元測試與 CI 驗證,但尚未實際推送映像。OpenClaw 瀏覽器工具與實際 sandbox policy 由 #18 驗證。
 
 ## 3. 工具清單
 
@@ -231,22 +231,55 @@ Debian `0.04-11` 沒有原始碼修補,只多了 hardening 旗標、`dh_perl -d`
 
 更新 base 的 Perl 版本時,必須重新檢查這個步驟。
 
-## 7. 發布與選用(Phase 4 設計,尚未實作)
+## 7. 發布與選用
 
-### 7.1 發布規則
+### 7.1 發布方式
 
-- 每次只發布一個多架構 tag:`<openclaw-version>-tools.<n>`,例如 `2026.9.2-tools.1`。
-- `<openclaw-version>` 取自 base 映像中 `openclaw --version` 的輸出,不取自 checkout 的 pin。
-- amd64 與 arm64 映像只以 digest 推送,不加架構 tag。
-- tag 已存在時,workflow 在推送前拒絕。
-- 標準映像的發布路徑收到含 `-tools.` 的 tag 時拒絕。
-- tools 發布不改動標準映像的 `latest` 等 tag。
-- 只從 `derekhsu/NemoClaw` 發布,只推送到 fork 擁有的 Docker Hub 位置。
-- 部分失敗時,workflow 回報已寫入的 digest;發布不是原子操作。
+在 GitHub Actions 手動執行 `Images / OpenClaw Sandbox`(`.github/workflows/openclaw-sandbox-image.yaml`),
+從 `feat/image-only-cli` 分支執行,並填入兩個輸入:
 
-發布的 Docker Hub repository 名稱待 Phase 4 確定。
+| 輸入 | `standard` | `tools` |
+|------|------------|---------|
+| 建置來源 | `Dockerfile.base` + `Dockerfile` | `Dockerfile.tools`,base 為檔案中以 digest 固定的標準映像 |
+| tag 格式 | `<version>` 或 `<version>-r<n>`,例如 `2026.9.2-r3` | `<version>-tools.<n>`,例如 `2026.9.2-tools.1` |
+| `<version>` 必須等於 | `Dockerfile` 的 `OPENCLAW_VERSION` | 建好的映像中 `openclaw --version` 的版本 |
+| 寫入的 tag | `<tag>`、`<tag>-amd64`、`<tag>-arm64`、`latest`、`openclaw-<version>` | 只有 `<tag>` |
 
-### 7.2 部署端選用
+兩種映像都推送到 `docker.io/derekhsu/openshell-openclaw`。
+
+### 7.2 發布規則
+
+`scripts/openclaw-image-release.sh` 檢查以下規則,`test/openclaw-image-release.test.ts` 測試這些規則:
+
+- 只在 `derekhsu/NemoClaw` 的 `feat/image-only-cli` 分支執行,只推送到上述 repository。
+- tag 不符合所選映像的格式時拒絕。
+  因此標準映像不能使用 `-tools.` tag,tools 映像也不能使用標準映像的 tag。
+- 發布 tag(標準映像含兩個架構 tag)已存在時拒絕,不覆寫。
+  規劃階段檢查一次,寫入 tag 前再檢查一次。
+- 只有標準映像的發布會移動 `latest` 與 `openclaw-<version>`,而且在發布 tag 寫入之後才移動。
+- workflow 輸入只透過環境變數傳給 shell,不直接寫進指令。
+
+tools 映像在推送前必須在兩個架構上都通過以下檢查:
+
+- 與 base 比較執行設定。
+- 檢查 tag 版本。
+- 離線 fixture。
+- Trivy 新增弱點檢查。
+
+workflow 在這些檢查之後才登入 Docker Hub,先以 digest 推送各架構映像,再建立多架構 tag。
+tools 映像不使用 GitHub Actions 的建置快取,以免擠掉標準映像的快取。
+
+### 7.3 失敗與重試
+
+Docker Hub 無法一次原子寫入多個 tag。
+
+- 某個架構失敗時,不寫入任何 tag。
+  `Report untagged digests` job 會列出已以 digest 推送、但沒有 tag 的映像。
+- 寫入 tag 時失敗,摘要會列出兩個架構的 digest 與已寫入的 tag。
+- workflow 不刪除任何已推送的內容。
+  重試時改用新的 `<n>` 或 `-r<n>`;要移除已寫入的 tag,由維護者手動處理。
+
+### 7.4 部署端選用
 
 部署端以完整 digest 選用 tools 映像。
 要回到標準映像,把設定改回標準映像的 digest。
@@ -270,13 +303,13 @@ fork 上的 GitHub Actions workflow 在原生 runner 上建置 `Dockerfile.tools
 | amd64 | `ubuntu-24.04` |
 | arm64 | `ubuntu-24.04-arm` |
 
-workflow 執行 track `fixtures.md` 中的 fixture、執行 Trivy 掃描並上傳輸出。
-這個驗證 workflow 不推送映像。
+workflow 以 `run-fixtures.sh` 執行 track `fixtures.md` 中的 fixture、執行 Trivy 掃描並上傳輸出。
+這個驗證 workflow 不推送映像。它使用與發布 workflow 相同的建置步驟與 fixture。
 
 fixture 的執行條件:
 
 - 以 `sandbox` 使用者執行。
-- 使用 `--network none`、唯讀 root、可寫入的 `/tmp` 與 `/sandbox`。
+- 使用 `--network none` 與唯讀 root,只有 `/tmp` 可寫入。
 - 不加 capability,啟用 `no-new-privileges`。
 
 OpenShell policy 下的檢查、OpenClaw browser 工具與冷啟動時間由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 驗收。

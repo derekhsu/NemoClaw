@@ -30,6 +30,7 @@ The fork maintainer (`derekhsu`) owns these decisions. They were recorded on
 | Topic | Decision |
 | --- | --- |
 | Publication (group 5) | Publish one multi-architecture tag, `<openclaw-version>-tools.<n>` (for example `2026.9.2-tools.1`). Push the amd64 and arm64 images by digest only; add no architecture tags. Reject a tag that already exists. Publish only from `derekhsu/NemoClaw`. On partial failure, report the digests already written. |
+| Standard publication rules (group 5) | Standard tags are `<version>` or `<version>-r<n>`, where `<version>` equals `OPENCLAW_VERSION` in `Dockerfile`. Existing standard release tags, including the `-amd64` and `-arm64` tags, are never overwritten; republish with a new `-r<n>`. Both variants publish only from `feat/image-only-cli` (decided 2026-11-01). |
 | Security acceptance (group 6) | Scan the tools image and its base with Trivy and store both JSON reports. The tools layer adds no fixable CRITICAL or HIGH finding; CI fails otherwise. Fixable findings inherited from the base are fixed by rebuilding the standard image, not in the tools image (refined 2026-11-01). The maintainer signs off each unfixed CRITICAL or HIGH finding by name. |
 
 ## AF_UNIX sandbox result

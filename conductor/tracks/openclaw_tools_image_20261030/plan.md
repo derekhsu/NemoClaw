@@ -6,7 +6,7 @@
 - Track ID: `openclaw_tools_image_20261030`
 - Specification: [spec.md](spec.md)
 - Issue: [#16](https://github.com/derekhsu/NemoClaw/issues/16)
-- Status: [~] Phase 3 in progress
+- Status: [~] Phase 4 in progress
 
 ## Working rules
 
@@ -57,7 +57,7 @@ No failed required tool may be dropped without a maintainer scope decision.
 - [x] Task 3.2: Install the accepted Chromium artifacts and libraries; configure non-root writable paths and prove compatibility with OpenClaw and Python Playwright on both architectures. `a782f31`
 - [x] Task 3.3: Prepare fixed frontend templates, dependency locks/offline store, Node.js module resolution, and p5.js assets; complete frontend tasks from the agent workspace without external package downloads. `9abc0a9`
 - [-] Task 3.4: Run the controlled browser and frontend journeys under the selected deployment policy; verify undeclared destinations remain denied and inspect screenshot/HTML outputs. Moved to #18.
-- [ ] Task: Conductor - User Manual Verification 'Browser and offline frontend tasks' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Browser and offline frontend tasks' (Protocol in workflow.md) (confirmed by maintainer 2026-11-01)
 
 Phase evidence: browser actions and outputs through the intended agent tool,
 Python Playwright output, frontend artifacts, and denied-route evidence. A
@@ -66,9 +66,9 @@ creation requires the workflow's explicit opt-in before execution.
 
 ## Phase 4: Select and publish each image variant without tag collisions
 
-- [ ] Task 4.1: Add failing workflow behavior tests for variant/base/tag inputs, shell-sensitive values, existing release tags, fork/ref restrictions, architecture failure, and partial publication.
-- [ ] Task 4.2: Extend the fork workflow with standard/tools selection, tools base digest handling, base-derived version identity, separate caches/artifacts/tags, and both directions of tag namespace protection.
-- [ ] Task 4.3: Restrict publication to the approved fork, ref, and registries; minimize CI permissions, keep registry secrets out of build/runtime outputs, and preserve standard aliases during tools builds.
+- [x] Task 4.1: Add failing workflow behavior tests for variant/base/tag inputs, shell-sensitive values, existing release tags, fork/ref restrictions, architecture failure, and partial publication. `91cfa8e`
+- [x] Task 4.2: Extend the fork workflow with standard/tools selection, tools base digest handling, base-derived version identity, separate caches/artifacts/tags, and both directions of tag namespace protection. `c615495`
+- [x] Task 4.3: Restrict publication to the approved fork, ref, and registries; minimize CI permissions, keep registry secrets out of build/runtime outputs, and preserve standard aliases during tools builds. `c615495`
 - [ ] Task 4.4: Validate planning/build/manifest behavior with mocked publication boundaries and isolated local fixtures; record non-atomic partial-write behavior and exact retry/reporting rules without pushing images.
 - [ ] Task: Conductor - User Manual Verification 'Image variant publication workflow' (Protocol in workflow.md)
 

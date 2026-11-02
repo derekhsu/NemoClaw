@@ -5,6 +5,9 @@ const CURRENT_PYTHON_HTMLPARSER_FIX_PACKAGE =
   "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u5+nemoclaw1";
 const PINNED_HERMES_BASE_PYTHON_HTMLPARSER_FIX_PACKAGE =
   "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u4+nemoclaw1";
+const SHARED_LIBEXPAT_PACKAGE = "libexpat1=2.8.3-1";
+// Only the OpenClaw base installs the Debian security update (#19).
+const OPENCLAW_LIBEXPAT_PACKAGE = "libexpat1=2.9.0-1~deb13u1";
 
 const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
   "zlib1g=1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1",
@@ -22,7 +25,7 @@ const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
   "libpcre2-8-0=10.46-1~deb13u3",
   "libsqlite3-0=3.46.1-7+deb13u2",
   "gzip=1.13-1+deb13u1",
-  "libexpat1=2.8.3-1",
+  SHARED_LIBEXPAT_PACKAGE,
   "libonig5=6.9.9-1+b1",
   "libjq1=1.8.2-1",
   "jq=1.8.2-1",
@@ -43,7 +46,9 @@ const PINNED_HERMES_BASE_SECURITY_PACKAGE_INVENTORY = SANDBOX_BASE_SECURITY_PACK
 );
 
 const OPENCLAW_SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
-  ...SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY,
+  ...SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY.map((packageSpec) =>
+    packageSpec === SHARED_LIBEXPAT_PACKAGE ? OPENCLAW_LIBEXPAT_PACKAGE : packageSpec,
+  ),
   "libevent-core-2.1-7t64=2.1.13-stable-1",
 ] as const;
 

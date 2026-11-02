@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { BASE_APT_SECURITY_FUNCTIONS } from "./helpers/base-apt-security-functions";
+import { OPENCLAW_BASE_APT_SECURITY_FUNCTIONS } from "./helpers/base-apt-security-functions";
 import { dockerRunCommandBetween, runLoggedDockerShell } from "./helpers/dockerfile-run-shell";
 import { stageFixedParser, useRealPatchedParser } from "./helpers/python-parser-security-fixture";
 
@@ -106,7 +106,7 @@ function runBaseAptLayer(prefix: string) {
       'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; }',
       'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
       'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
-      ...useRealPatchedParser(BASE_APT_SECURITY_FUNCTIONS, pythonShim),
+      ...useRealPatchedParser(OPENCLAW_BASE_APT_SECURITY_FUNCTIONS, pythonShim),
     ],
     { timeoutMs: 15_000 },
   );

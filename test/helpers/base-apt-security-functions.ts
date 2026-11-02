@@ -3,10 +3,35 @@
 
 type DebianArchitecture = "amd64" | "arm64";
 
+export type BaseAptLibexpatPackage = Readonly<{
+  debianVersion: string;
+  expatVersion: string;
+  sha256: Readonly<Record<DebianArchitecture, string>>;
+}>;
+
+/** Expat package that the Hermes and Deep Agents Code base images install. */
+export const SHARED_LIBEXPAT_PACKAGE: BaseAptLibexpatPackage = {
+  debianVersion: "2.8.3-1",
+  expatVersion: "2.8.3",
+  sha256: {
+    amd64: "978e9d30b84893a4c8191d8dae4d1b93c9b7ecaa772ada2fdb892ae3765cab4e",
+    arm64: "660f5f598a06aa56613a2fbf1ffbd408708175f1a6c2fac833842148f0228176",
+  },
+};
+
+/** Expat security update that only the OpenClaw base image installs (#19). */
+export const OPENCLAW_LIBEXPAT_PACKAGE: BaseAptLibexpatPackage = {
+  debianVersion: "2.9.0-1~deb13u1",
+  expatVersion: "2.9.0",
+  sha256: {
+    amd64: "feff874772cae904ae4d24e917b35664952bec4b4ae9100a4edda5a7fa746832",
+    arm64: "d9e1c50fcdad079fe16d77f1578adcc763be1bf7f2da7fa8adca7010b0c84c83",
+  },
+};
+
 export const BASE_APT_SECURITY_HASHES: Record<
   DebianArchitecture,
   {
-    libexpat: string;
     libeventCore: string;
     libonig: string;
     libjq: string;
@@ -15,7 +40,6 @@ export const BASE_APT_SECURITY_HASHES: Record<
   }
 > = {
   amd64: {
-    libexpat: "978e9d30b84893a4c8191d8dae4d1b93c9b7ecaa772ada2fdb892ae3765cab4e",
     libeventCore: "544ca760ced0fba6c4c24f8078726031a04e8b7d9890f576ea9cd724cdbb8ee1",
     libonig: "3abee130696244050500bcc7870e3b4cb82ddd87149ece3fd55010c3d4e1d18c",
     libjq: "9a5bf964cef39ed8f0f162e20d856e31961d28a57772b5313989b42a8be7e941",
@@ -23,7 +47,6 @@ export const BASE_APT_SECURITY_HASHES: Record<
     vimTiny: "df2d037d405f1376d1d8025d022dba81fbfed8695f68a131b788d16d3b68cf83",
   },
   arm64: {
-    libexpat: "660f5f598a06aa56613a2fbf1ffbd408708175f1a6c2fac833842148f0228176",
     libeventCore: "bfc3f57347da0fa26c9cf5229c918c80dfd84fa52f52ca3d4da7148f0f7d7a43",
     libonig: "137e708575c0622d347815d19cb471a107546b16e9602805ee27afad7bba107f",
     libjq: "eae4a828df2eb53d728f88109d9f9549e0983a90b573cf0c7fa1e4bbc7533a7e",
@@ -32,7 +55,10 @@ export const BASE_APT_SECURITY_HASHES: Record<
   },
 };
 
-export function baseAptSecurityFunctions(architecture: DebianArchitecture): string[] {
+export function baseAptSecurityFunctions(
+  architecture: DebianArchitecture,
+  libexpat: BaseAptLibexpatPackage = SHARED_LIBEXPAT_PACKAGE,
+): string[] {
   const hashes = BASE_APT_SECURITY_HASHES[architecture];
   return [
     [
@@ -71,7 +97,7 @@ export function baseAptSecurityFunctions(architecture: DebianArchitecture): stri
       '    libpcre2-8-0) printf "10.46-1~deb13u3" ;;',
       '    libsqlite3-0) printf "3.46.1-7+deb13u2" ;;',
       '    gzip) printf "1.13-1+deb13u1" ;;',
-      '    libexpat1) printf "2.8.3-1" ;;',
+      `    libexpat1) printf "${libexpat.debianVersion}" ;;`,
       '    libevent-core-2.1-7t64) printf "2.1.13-stable-1" ;;',
       '    libonig5) printf "6.9.9-1+b1" ;;',
       '    libjq1|jq) printf "1.8.2-1" ;;',
@@ -93,7 +119,7 @@ export function baseAptSecurityFunctions(architecture: DebianArchitecture): stri
       '  [[ "$5" == "--retry" && "$6" == "5" && "$7" == "--retry-all-errors" && "$8" == "--retry-delay" && "$9" == "2" ]] || return 64',
       '  [[ "${10}" == "--connect-timeout" && "${11}" == "15" && "${12}" == "--max-time" && "${13}" == "120" && "${14}" == "-o" ]] || return 64',
       '  case "${16}" in',
-      `    */e/expat/libexpat1_2.8.3-1_${architecture}.deb) [[ "\${15##*/}" == "libexpat1.deb" ]] ;;`,
+      `    */e/expat/libexpat1_${libexpat.debianVersion}_${architecture}.deb) [[ "\${15##*/}" == "libexpat1.deb" ]] ;;`,
       `    https://snapshot.debian.org/archive/debian/20260703T143212Z/pool/main/libe/libevent/libevent-core-2.1-7t64_2.1.13-stable-1_${architecture}.deb) [[ "\${15##*/}" == "libevent-core-2.1-7t64.deb" ]] ;;`,
       `    */libo/libonig/libonig5_6.9.9-1+b1_${architecture}.deb) [[ "\${15##*/}" == "libonig5.deb" ]] ;;`,
       `    */j/jq/libjq1_1.8.2-1_${architecture}.deb) [[ "\${15##*/}" == "libjq1.deb" ]] ;;`,
@@ -116,7 +142,7 @@ export function baseAptSecurityFunctions(architecture: DebianArchitecture): stri
       '    path="${line#*  }"',
       '    [[ -f "$path" ]] || return 1',
       '    case "$line" in',
-      `      "${hashes.libexpat}  "*/libexpat1.deb) (( libexpat_count += 1 )) ;;`,
+      `      "${libexpat.sha256[architecture]}  "*/libexpat1.deb) (( libexpat_count += 1 )) ;;`,
       `      "${hashes.libeventCore}  "*/libevent-core-2.1-7t64.deb) (( libevent_count += 1 )) ;;`,
       `      "${hashes.libonig}  "*/libonig5.deb) (( libonig_count += 1 )) ;;`,
       `      "${hashes.libjq}  "*/libjq1.deb) (( libjq_count += 1 )) ;;`,
@@ -169,7 +195,7 @@ export function baseAptSecurityFunctions(architecture: DebianArchitecture): stri
       "python3() {",
       '  [[ "$#" -eq 2 && "$1" == "-c" ]] || return 64',
       '  case "$2" in',
-      "    \"import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION\") ;;",
+      `    "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_${libexpat.expatVersion}', pyexpat.EXPAT_VERSION") ;;`,
       "    \"import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('/usr/lib/python3.13/html/parser.py').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')\") ;;",
       "    \"import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')\") ;;",
       "    *) return 64 ;;",
@@ -203,3 +229,7 @@ export function baseAptSecurityFunctions(architecture: DebianArchitecture): stri
 }
 
 export const BASE_APT_SECURITY_FUNCTIONS = baseAptSecurityFunctions("arm64");
+export const OPENCLAW_BASE_APT_SECURITY_FUNCTIONS = baseAptSecurityFunctions(
+  "arm64",
+  OPENCLAW_LIBEXPAT_PACKAGE,
+);

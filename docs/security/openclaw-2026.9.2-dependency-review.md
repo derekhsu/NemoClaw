@@ -252,6 +252,78 @@ The candidate does not add an audit exception, lower an audit threshold, disable
 The completed smoke checks cover CLI startup, SDK transport shutdown, Zod size-bound rejection, Undici streaming, and Express/body-parser gzip handling.
 Final runtime and image validation remain pending.
 
+## Base Remediation for 2026.9.2-r3
+
+Trivy run `41219379848` scanned the published `2026.9.2-r2` image (`sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02`).
+It reported 11 HIGH findings that have a fixed release.
+This change rebuilds the standard OpenClaw sandbox image as `2026.9.2-r3` to remove them (#19).
+The candidate keeps `openclaw@2026.9.2`, `npm@12.0.2`, and OpenShell `0.0.101`.
+
+| Package | Location | r2 version | r3 version | Findings |
+| --- | --- | --- | --- | --- |
+| `libexpat1` | Debian package in the OpenClaw base | `2.8.3-1` | `2.9.0-1~deb13u1` | `CVE-2026-66046`, `CVE-2026-76956`, `CVE-2026-76957`, `CVE-2026-77214`, `CVE-2026-93990` |
+| `undici` | npm private tree | `6.27.0` | `6.29.1` | `CVE-2026-19534`, `CVE-2026-87018`, `CVE-2026-109383`, `CVE-2026-109869` |
+| `brace-expansion` | npm private tree | `5.0.9` | `5.0.12` | `CVE-2026-102276`, `CVE-2026-102278` |
+
+Trivy did not report these findings in the OpenClaw runtime graph.
+The npm findings are in `/usr/local/lib/node_modules/npm/node_modules/`.
+
+### Expat
+
+`Dockerfile.base` downloads `libexpat1_2.9.0-1~deb13u1` from Debian snapshot `20261017T204620Z`.
+The snapshot file listing for `libexpat1/2.9.0-1~deb13u1` records the same files in the `debian-security` archive from `20261016T061025Z`.
+
+| Architecture | SHA-256 | Snapshot SHA-1 |
+| --- | --- | --- |
+| `amd64` | `feff874772cae904ae4d24e917b35664952bec4b4ae9100a4edda5a7fa746832` | `074f4df385e654b2b9aaeda0eeb8be65608b7e22` |
+| `arm64` | `d9e1c50fcdad079fe16d77f1578adcc763be1bf7f2da7fa8adca7010b0c84c83` | `e33be55b621c77c4de2ac114651600499d513fb4` |
+
+The package keeps the `libexpat.so.1` soname; the shared-library file moves to `libexpat.so.1.13.0`.
+It pre-depends on `libc6 (>= 2.36)`, and the base installs `libc6=2.41-12+deb13u4`.
+The base image and the sandbox image assert that Python `pyexpat` reports `expat_2.9.0`.
+
+For Expat, issue #19 changes only the OpenClaw base image, so only the OpenClaw security inventory changes.
+The Hermes sandbox image builds on a pinned base digest that contains `libexpat1=2.8.3-1`.
+The LangChain Deep Agents Code base image still installs `2.8.3-1`.
+The shared inventory keeps `2.8.3-1` for both, and those images still carry the Expat findings.
+
+### npm private tree
+
+npm `12.2.1` bundles `undici@6.29.0`, which does not fix three of the four undici findings.
+The candidate therefore keeps `npm@12.0.2` and replaces only the `undici` and `brace-expansion` packages in npm's private tree.
+
+| Replacement | npm SRI | Registry Git Commit |
+| --- | --- | --- |
+| `undici@6.29.1` | `sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==` | `8c57f6c68c95465338ae97bfc991cb1513d2f76e` |
+| `brace-expansion@5.0.12` | `sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==` | `f3410159d768f56c9d9f4511d3e1b46425fc1099` |
+
+`scripts/lib/patch-bundled-npm-undici.mts` follows the `ip-address` replacement contract:
+
+- It accepts only `npm@12.0.2` with exactly one `undici` package.
+- It verifies the archive SRI and rejects symlinks in the replacement.
+- It swaps the package and restores the original package when verification fails.
+- It runs `npm --version` and `npx --version` only after the replacement passes verification.
+- It requires `main: index.js`, `types: index.d.ts`, `engines.node: >=18.17`, and no dependencies.
+
+npm's `node-gyp@13.0.0` declares `undici@^6.25.0`, which accepts `6.29.1`.
+Only the OpenClaw base image and the OpenClaw sandbox image run the `undici` helper.
+
+`scripts/patch-bundled-npm-brace-expansion.mts` now installs `5.0.12`.
+It treats the earlier `5.0.9` replacement as affected and replaces it.
+The `5.0.12` release keeps the `balanced-match@^4.0.2` dependency that the helper requires.
+The Hermes and Deep Agents Code Dockerfiles also run this shared helper.
+The next rebuild of each of those images installs `5.0.12`.
+
+### Validation
+
+- Unit tests cover these `undici` helper cases: replacement, already fixed, rollback, cleanup failure, layout drift, unsafe member, and wrong version.
+- Dockerfile contract tests require the `undici` replacement after the `ip-address` replacement in `Dockerfile.base` and `Dockerfile`.
+- Security package tests run the OpenClaw base image and sandbox image layers with the `2.9.0-1~deb13u1` inventory.
+  They keep the `2.8.3-1` inventory for Hermes and Deep Agents Code.
+
+The candidate does not add an audit exception, lower an audit threshold, or change network policy.
+Image build, Trivy scan, and runtime validation of `2026.9.2-r3` remain pending.
+
 ## Existing security and runtime contracts
 
 The supply-chain gates are unchanged: unpinned versions are rejected, versions

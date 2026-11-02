@@ -457,17 +457,22 @@ describe("complete managed-image publication workflow", () => {
       "agents/hermes/Dockerfile.base",
     );
     expect(matrix.find(({ agent }) => agent === "hermes")?.base_alias).toBeUndefined();
-    expect(matrix.find(({ agent }) => agent === "openclaw")?.base_alias).toBe(
-      "ghcr.io/nvidia/nemoclaw/sandbox-base:latest",
+    // OpenClaw builds its PR base from Dockerfile.base because
+    // ghcr.io/nvidia/nemoclaw/sandbox-base:latest does not match the fork's
+    // OpenClaw security inventory (#19).
+    expect(matrix.find(({ agent }) => agent === "openclaw")?.base_dockerfile).toBe(
+      "Dockerfile.base",
     );
+    expect(matrix.find(({ agent }) => agent === "openclaw")?.base_alias).toBeUndefined();
     // Pinned to the last upstream base index that passes pip check with the fork's Deep Agents Code version (#22).
     expect(matrix.find(({ agent }) => agent === "langchain-deepagents-code")?.base_alias).toBe(
       "ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base@sha256:35ec718bc6a86c3b38b599a77239c5e917b20dbbbe20cc36e1f05262509d89b5",
     );
-    expect(step(prBuilder, "Build PR Hermes source base").with).toMatchObject({
+    expect(step(prBuilder, "Build PR source base").if).toBe("matrix.base_dockerfile");
+    expect(step(prBuilder, "Build PR source base").with).toMatchObject({
       file: "${{ matrix.base_dockerfile }}",
       platforms: "linux/amd64",
-      outputs: "type=oci,dest=${{ runner.temp }}/pr-hermes-source-base,tar=false",
+      outputs: "type=oci,dest=${{ runner.temp }}/pr-source-base,tar=false",
       push: false,
       provenance: false,
     });
@@ -486,6 +491,8 @@ describe("complete managed-image publication workflow", () => {
       step(prBuilder, "Resolve exact linux/amd64 PR base").run,
       "PR base resolution is missing",
     );
+    expect(resolveBase).toContain('if [ -n "$BASE_DOCKERFILE" ]; then');
+    expect(resolveBase).toContain('"$RUNNER_TEMP/pr-source-base" "$SOURCE_BASE_DIGEST"');
     expect(resolveBase).toContain('.platform.architecture == "amd64"');
     expect(resolveBase).toContain('reference="${BASE_REPOSITORY}@${digest}"');
     expect(resolveBase).toContain('actual="sha256:$(sha256sum "$exact_raw"');
@@ -634,9 +641,10 @@ fi
         encoding: "utf8",
         env: {
           ...process.env,
-          AGENT: "openclaw",
           ALIAS_RAW: aliasRaw,
           BASE_ALIAS: baseAlias,
+          // GitHub sets an empty value for a matrix entry without base_dockerfile.
+          BASE_DOCKERFILE: "",
           BASE_REPOSITORY: "ghcr.io/nvidia/nemoclaw/sandbox-base",
           DISPLAY_NAME: "OpenClaw",
           EXACT_RAW: exactRaw,

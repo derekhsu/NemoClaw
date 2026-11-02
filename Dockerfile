@@ -727,6 +727,7 @@ COPY scripts/lib/openclaw-npm-remediation.mts /scripts/lib/openclaw-npm-remediat
 COPY scripts/lib/verify-mcporter-audit.sh /scripts/lib/verify-mcporter-audit.sh
 COPY scripts/patch-bundled-npm-brace-expansion.mts /scripts/patch-bundled-npm-brace-expansion.mts
 COPY scripts/lib/patch-bundled-npm-ip-address.mts /scripts/lib/patch-bundled-npm-ip-address.mts
+COPY scripts/lib/patch-bundled-npm-undici.mts /scripts/lib/patch-bundled-npm-undici.mts
 COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts
 
 FROM scratch AS openclaw-plugin-payload
@@ -892,6 +893,15 @@ RUN if [ -f /usr/local/share/nemoclaw/corporate-ca.pem ]; then \
       export CURL_CA_BUNDLE=/usr/local/share/nemoclaw/corporate-ca.pem; \
     fi; \
     node --experimental-strip-types /scripts/lib/patch-bundled-npm-ip-address.mts \
+      --npm-root /usr/local/lib/node_modules/npm
+
+# Reassert the npm-private undici fix for the exact final filesystem (#19).
+# When onboarding supplied a corporate CA, use it for the registry-backed download.
+# hadolint ignore=DL3059
+RUN if [ -f /usr/local/share/nemoclaw/corporate-ca.pem ]; then \
+      export CURL_CA_BUNDLE=/usr/local/share/nemoclaw/corporate-ca.pem; \
+    fi; \
+    node --experimental-strip-types /scripts/lib/patch-bundled-npm-undici.mts \
       --npm-root /usr/local/lib/node_modules/npm
 
 # Harden: remove unnecessary build tools and network probes from base image (#830)
@@ -2516,6 +2526,7 @@ RUN check_metadata() { \
     } \
     && check_metadata /scripts/patch-bundled-npm-brace-expansion.mts 'root:root:755' \
     && check_metadata /scripts/lib/patch-bundled-npm-ip-address.mts 'root:root:755' \
+    && check_metadata /scripts/lib/patch-bundled-npm-undici.mts 'root:root:755' \
     && check_metadata /scripts/patch-bundled-npm-tar.mts 'root:root:755' \
     && check_metadata /opt/nemoclaw/openclaw.plugin.json 'root:root:644' \
     && check_metadata /usr/local/lib/nemoclaw/patch-openclaw-tool-catalog.mts 'root:root:755' \
@@ -2606,7 +2617,7 @@ RUN --mount=type=bind,source=scripts/security/standalone-security-package-invent
     ldd /usr/bin/tmux | grep -Eq 'libevent_core-2[.]1[.]so[.]7'; \
     test "$(jq --version)" = "jq-1.8.2"; \
     printf '%s\n' '{"sandbox":"healthy"}' | jq -e '.sandbox == "healthy"' >/dev/null; \
-    PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"; \
+    PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.9.0', pyexpat.EXPAT_VERSION"; \
     printf '%s  %s\n' \
         "4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7" \
         /usr/lib/python3.13/html/parser.py \

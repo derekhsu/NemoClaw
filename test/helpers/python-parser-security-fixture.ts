@@ -12,8 +12,11 @@ export function htmlParserSecurityProbe(parserPath: string): string {
   return `import sys; from pathlib import Path; import html.parser; Path(html.parser.__file__).resolve() == Path('${parserPath}').resolve() or sys.exit('html.parser loaded from an unexpected path'); from html.parser import HTMLParser; p=HTMLParser(); [p.feed('') for _ in range(20000)]; p._pending == [] or sys.exit('empty feeds accumulated pending entries'); p.feed('<!--'); [p.feed('a' * 64) for _ in range(20000)]; p.feed('-->'); p.close(); p.rawdata == '' or sys.exit('incremental parsing retained raw data')`;
 }
 
-const PYEXPAT_PROBE =
-  "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION";
+// #19 moves only the OpenClaw base image to Expat 2.9.0; Hermes and Deep Agents Code keep 2.8.3.
+const PYEXPAT_PROBES = ["2.8.3", "2.9.0"].map(
+  (version) =>
+    `import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_${version}', pyexpat.EXPAT_VERSION`,
+);
 const LIBSSH2_PROBE =
   "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2 runtime version')";
 const FIXED_PARSER_FIXTURE = path.resolve(
@@ -49,7 +52,7 @@ export function stageFixedParser(tmp: string): {
       "import sys",
       `parser_path = ${JSON.stringify(fixedParser)}`,
       `html_probe = ${JSON.stringify(htmlParserSecurityProbe(fixedParser))}`,
-      `accepted_noop_probes = {${JSON.stringify(PYEXPAT_PROBE)}, ${JSON.stringify(LIBSSH2_PROBE)}}`,
+      `accepted_noop_probes = {${[...PYEXPAT_PROBES, LIBSSH2_PROBE].map((probe) => JSON.stringify(probe)).join(", ")}}`,
       "if len(sys.argv) != 3 or sys.argv[1] != '-c':",
       "    raise SystemExit(64)",
       "code = sys.argv[2]",

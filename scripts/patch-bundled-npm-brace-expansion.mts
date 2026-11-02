@@ -26,16 +26,18 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 export const AFFECTED_BRACE_EXPANSION_VERSION = "5.0.7";
-export const FIXED_BRACE_EXPANSION_VERSION = "5.0.9";
+export const FIXED_BRACE_EXPANSION_VERSION = "5.0.12";
 export const FIXED_BRACE_EXPANSION_INTEGRITY =
-  "sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==";
+  "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==";
 export const FIXED_BRACE_EXPANSION_TARBALL =
-  "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz";
+  "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz";
 export const REVIEWED_NPM_VERSION = "12.0.2";
 
 const REVIEWED_BRACE_EXPANSION_VERSIONS = new Set([
   AFFECTED_BRACE_EXPANSION_VERSION,
   "5.0.8",
+  // Images built before #19 carry the earlier 5.0.9 replacement.
+  "5.0.9",
   FIXED_BRACE_EXPANSION_VERSION,
 ]);
 

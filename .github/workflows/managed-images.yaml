@@ -69,7 +69,10 @@ jobs:
           - agent: openclaw
             display_name: OpenClaw
             dockerfile: Dockerfile
-            base_alias: ghcr.io/nvidia/nemoclaw/sandbox-base:latest
+            # OpenClaw builds its PR base from Dockerfile.base because
+            # ghcr.io/nvidia/nemoclaw/sandbox-base:latest does not match the fork's
+            # OpenClaw security inventory (#19).
+            base_dockerfile: Dockerfile.base
             base_repository: ghcr.io/nvidia/nemoclaw/sandbox-base
             image: nemoclaw-managed-pr/openclaw
             repository: ghcr.io/nvidia/nemoclaw/openclaw-sandbox
@@ -104,8 +107,8 @@ jobs:
         with:
           node-version: 22.19.0
 
-      - name: Validate PR Hermes source-base build args
-        if: matrix.agent == 'hermes'
+      - name: Validate PR source-base build args
+        if: matrix.base_dockerfile
         shell: bash
         env:
           BASE_DOCKERFILE: ${{ matrix.base_dockerfile }}
@@ -113,34 +116,34 @@ jobs:
           set -euo pipefail
           scripts/check-production-build-args.sh -f "$BASE_DOCKERFILE"
 
-      - name: Build PR Hermes source base
-        if: matrix.agent == 'hermes'
-        id: hermes_source_base
+      - name: Build PR source base
+        if: matrix.base_dockerfile
+        id: source_base
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ${{ matrix.base_dockerfile }}
           platforms: linux/amd64
-          outputs: type=oci,dest=${{ runner.temp }}/pr-hermes-source-base,tar=false
+          outputs: type=oci,dest=${{ runner.temp }}/pr-source-base,tar=false
           push: false
           provenance: false
           sbom: false
-          cache-from: type=registry,ref=ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:buildcache-amd64
+          cache-from: type=registry,ref=${{ matrix.base_repository }}:buildcache-amd64
 
       - name: Resolve exact linux/amd64 PR base
         id: base
         shell: bash
         env:
-          AGENT: ${{ matrix.agent }}
-          SOURCE_BASE_DIGEST: ${{ steps.hermes_source_base.outputs.digest }}
+          BASE_DOCKERFILE: ${{ matrix.base_dockerfile }}
+          SOURCE_BASE_DIGEST: ${{ steps.source_base.outputs.digest }}
           BASE_ALIAS: ${{ matrix.base_alias }}
           BASE_REPOSITORY: ${{ matrix.base_repository }}
           DISPLAY_NAME: ${{ matrix.display_name }}
         run: |
           set -euo pipefail
-          if [ "$AGENT" = "hermes" ]; then
+          if [ -n "$BASE_DOCKERFILE" ]; then
             bash scripts/checks/resolve-hermes-pr-source-base.sh \
-              "$RUNNER_TEMP/pr-hermes-source-base" "$SOURCE_BASE_DIGEST"
+              "$RUNNER_TEMP/pr-source-base" "$SOURCE_BASE_DIGEST"
             exit 0
           fi
           alias_raw="$RUNNER_TEMP/pr-base-alias.raw"

@@ -91,8 +91,11 @@ describe("npm bundled brace-expansion remediation", () => {
     ).toBe("fixed\n");
   });
 
-  it("upgrades the previous remediation release", () => {
-    const target = fixture("5.0.8");
+  it.each([
+    "5.0.8",
+    "5.0.9",
+  ])("upgrades the previous remediation release %s (#19)", (previousVersion) => {
+    const target = fixture(previousVersion);
 
     expect(patchBundledNpmBraceExpansion(target)).toMatchObject({
       braceExpansionVersion: FIXED_BRACE_EXPANSION_VERSION,

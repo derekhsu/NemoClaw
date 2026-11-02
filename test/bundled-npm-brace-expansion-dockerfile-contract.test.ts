@@ -37,10 +37,12 @@ describe("bundled npm brace-expansion image remediation contract", () => {
   it("binds the replacement to the reviewed npm and registry artifact", () => {
     expect(REVIEWED_NPM_VERSION).toBe(UPGRADED_NPM_VERSION);
     expect(REVIEWED_NPM_VERSION).toBe("12.0.2");
-    expect(FIXED_BRACE_EXPANSION_VERSION).toBe("5.0.9");
-    expect(FIXED_BRACE_EXPANSION_INTEGRITY).toMatch(/^sha512-[A-Za-z0-9+/]+=*$/u);
+    expect(FIXED_BRACE_EXPANSION_VERSION).toBe("5.0.12");
+    expect(FIXED_BRACE_EXPANSION_INTEGRITY).toBe(
+      "sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==",
+    );
     expect(FIXED_BRACE_EXPANSION_TARBALL).toBe(
-      "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.9.tgz",
+      "https://registry.npmjs.org/brace-expansion/-/brace-expansion-5.0.12.tgz",
     );
   });
 

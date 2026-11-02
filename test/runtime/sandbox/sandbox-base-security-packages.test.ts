@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import fs from "node:fs";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,7 +17,10 @@ import {
 } from "../../../src/lib/sandbox-base-image/security-package-specs";
 import {
   BASE_APT_SECURITY_HASHES,
+  type BaseAptLibexpatPackage,
   baseAptSecurityFunctions,
+  OPENCLAW_LIBEXPAT_PACKAGE,
+  SHARED_LIBEXPAT_PACKAGE,
 } from "../../helpers/base-apt-security-functions";
 import { dockerRunCommandBetween, runLoggedDockerShell } from "../../helpers/dockerfile-run-shell";
 import {
@@ -36,6 +39,8 @@ const SECURITY_IMAGES = [
       "# Finish the security inventory after installing the reviewed Perl packages.",
     endMarker: "# setpriv runtime contract",
     expectedInventory: OPENCLAW_SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY,
+    libexpat: OPENCLAW_LIBEXPAT_PACKAGE,
+    libexpatSnapshot: "20261017T204620Z",
   },
   {
     name: "Hermes",
@@ -45,6 +50,8 @@ const SECURITY_IMAGES = [
     additionalStartMarker: null,
     endMarker: "COPY scripts/lib/reviewed-npm-archive.mts",
     expectedInventory: SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY,
+    libexpat: SHARED_LIBEXPAT_PACKAGE,
+    libexpatSnapshot: "20260811T082421Z",
   },
   {
     name: "Deep Agents Code",
@@ -54,6 +61,8 @@ const SECURITY_IMAGES = [
     additionalStartMarker: null,
     endMarker: "# Node remains available",
     expectedInventory: SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY,
+    libexpat: SHARED_LIBEXPAT_PACKAGE,
+    libexpatSnapshot: "20260811T082421Z",
   },
 ] as const;
 const ARCHITECTURES = ["amd64", "arm64"] as const;
@@ -86,7 +95,9 @@ const EXPECTED_SECURITY_PACKAGE_INVENTORY = [
   "perl=5.44.0-1nemoclaw1",
 ] as const;
 const EXPECTED_OPENCLAW_SECURITY_PACKAGE_INVENTORY = [
-  ...EXPECTED_SECURITY_PACKAGE_INVENTORY,
+  ...EXPECTED_SECURITY_PACKAGE_INVENTORY.map((entry) =>
+    entry === "libexpat1=2.8.3-1" ? "libexpat1=2.9.0-1~deb13u1" : entry,
+  ),
   "libevent-core-2.1-7t64=2.1.13-stable-1",
 ] as const;
 const PUBLISHED_HERMES_SECURITY_PACKAGE_INVENTORY = EXPECTED_SECURITY_PACKAGE_INVENTORY.map(
@@ -250,8 +261,9 @@ function securityInventory(
 function baseAptSecurityFunctionsWithVimPatchRange(
   architecture: (typeof ARCHITECTURES)[number],
   patchRange: string,
+  libexpat: BaseAptLibexpatPackage = SHARED_LIBEXPAT_PACKAGE,
 ): string[] {
-  return baseAptSecurityFunctions(architecture).map((definition) =>
+  return baseAptSecurityFunctions(architecture, libexpat).map((definition) =>
     definition.replace("Included patches: 1-858", `Included patches: ${patchRange}`),
   );
 }
@@ -259,8 +271,9 @@ function baseAptSecurityFunctionsWithVimPatchRange(
 function baseAptSecurityFunctionsWithLibeventVersion(
   architecture: (typeof ARCHITECTURES)[number],
   version: string,
+  libexpat: BaseAptLibexpatPackage = SHARED_LIBEXPAT_PACKAGE,
 ): string[] {
-  return baseAptSecurityFunctions(architecture).map((definition) =>
+  return baseAptSecurityFunctions(architecture, libexpat).map((definition) =>
     definition.replace(
       'libevent-core-2.1-7t64) printf "2.1.13-stable-1"',
       `libevent-core-2.1-7t64) printf "${version}"`,
@@ -271,8 +284,9 @@ function baseAptSecurityFunctionsWithLibeventVersion(
 function baseAptSecurityFunctionsWithPythonFixVersion(
   architecture: (typeof ARCHITECTURES)[number],
   version: string,
+  libexpat: BaseAptLibexpatPackage = SHARED_LIBEXPAT_PACKAGE,
 ): string[] {
-  return baseAptSecurityFunctions(architecture).map((definition) =>
+  return baseAptSecurityFunctions(architecture, libexpat).map((definition) =>
     definition.replace(
       'nemoclaw-python3.13-htmlparser-fix) printf "3.13.5-2+deb13u5+nemoclaw1"',
       `nemoclaw-python3.13-htmlparser-fix) printf "${version}"`,
@@ -327,7 +341,10 @@ describe("sandbox base security packages", () => {
           "perl_base_installed=1",
           "perl_installed=1",
           'stat() { printf "0:0:444\\n"; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
@@ -360,14 +377,14 @@ describe("sandbox base security packages", () => {
     const prepared = completedImageSecurityCommand(image, tmp, architecture);
     const fixedSpec = image.expectedInventory.find((entry) => entry.startsWith(`${packageName}=`))!;
     const fixedVersion = fixedSpec.slice(packageName.length + 1);
-    const functions = baseAptSecurityFunctions(architecture).map((definition) =>
+    const functions = baseAptSecurityFunctions(architecture, image.libexpat).map((definition) =>
       definition.replace(
         `${packageName}) printf "${fixedVersion}"`,
         `${packageName}) printf "${staleVersion}"`,
       ),
     );
     try {
-      expect(functions).not.toEqual(baseAptSecurityFunctions(architecture));
+      expect(functions).not.toEqual(baseAptSecurityFunctions(architecture, image.libexpat));
       const { result } = runLoggedDockerShell(
         prepared.command,
         tmp,
@@ -412,14 +429,17 @@ describe("sandbox base security packages", () => {
           'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; [[ "$*" != *"/perl-base.deb"* ]] || perl_base_installed=1; [[ "$*" != *"/perl.deb"* ]] || perl_installed=1; }',
           'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
           'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
       expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
       expect(calls).toContain("dpkg-install");
       expect(calls).toContain(
-        `download https://snapshot.debian.org/archive/debian/20260811T082421Z/pool/main/e/expat/libexpat1_2.8.3-1_${architecture}.deb`,
+        `download https://snapshot.debian.org/archive/debian/${image.libexpatSnapshot}/pool/main/e/expat/libexpat1_${image.libexpat.debianVersion}_${architecture}.deb`,
       );
       expect(calls).toContain(
         "download https://snapshot.debian.org/archive/debian/20260727T143429Z/pool/main/v/vim/vim-common_9.2.0858-1_all.deb",
@@ -437,7 +457,7 @@ describe("sandbox base security packages", () => {
           .filter((line) => line.startsWith("download "))
           .map((line) => line.slice(line.lastIndexOf("/") + 1)),
       ).toEqual([
-        `libexpat1_2.8.3-1_${architecture}.deb`,
+        `libexpat1_${image.libexpat.debianVersion}_${architecture}.deb`,
         ...(image.name === "OpenClaw"
           ? [`libevent-core-2.1-7t64_2.1.13-stable-1_${architecture}.deb`]
           : []),
@@ -471,7 +491,10 @@ describe("sandbox base security packages", () => {
           'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; [[ "$*" != *"/perl-base.deb"* ]] || perl_base_installed=1; [[ "$*" != *"/perl.deb"* ]] || perl_installed=1; }',
           'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
           'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
@@ -508,7 +531,10 @@ describe("sandbox base security packages", () => {
             '  printf "0:0:444\\n"',
             "}",
           ].join("\n"),
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
@@ -579,7 +605,7 @@ describe("sandbox base security packages", () => {
           'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
           'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
           ...useRealPatchedParser(
-            baseAptSecurityFunctionsWithVimPatchRange(architecture, "1-857"),
+            baseAptSecurityFunctionsWithVimPatchRange(architecture, "1-857", image.libexpat),
             prepared.pythonShim,
           ),
         ],
@@ -611,7 +637,7 @@ describe("sandbox base security packages", () => {
             "}",
           ].join("\n"),
           ...useRealPatchedParser(
-            baseAptSecurityFunctionsWithVimPatchRange(architecture, "1-857"),
+            baseAptSecurityFunctionsWithVimPatchRange(architecture, "1-857", image.libexpat),
             prepared.pythonShim,
           ),
         ],
@@ -640,7 +666,11 @@ describe("sandbox base security packages", () => {
           'install() { [[ "$#" -eq 8 && "$1" == "-d" && "$2" == "-o" && "$3" == "root" && "$4" == "-g" && "$5" == "root" && "$6" == "-m" && "$7" == "0755" ]] || return 64; mkdir -p "$8"; }',
           'chown() { [[ "$#" -eq 2 && "$1" == "root:root" ]] || return 64; }',
           ...useRealPatchedParser(
-            baseAptSecurityFunctionsWithLibeventVersion(architecture, "2.1.12-stable-10+b1"),
+            baseAptSecurityFunctionsWithLibeventVersion(
+              architecture,
+              "2.1.12-stable-10+b1",
+              image.libexpat,
+            ),
             prepared.pythonShim,
           ),
         ],
@@ -672,7 +702,11 @@ describe("sandbox base security packages", () => {
             "}",
           ].join("\n"),
           ...useRealPatchedParser(
-            baseAptSecurityFunctionsWithLibeventVersion(architecture, "2.1.12-stable-10+b1"),
+            baseAptSecurityFunctionsWithLibeventVersion(
+              architecture,
+              "2.1.12-stable-10+b1",
+              image.libexpat,
+            ),
             prepared.pythonShim,
           ),
         ],
@@ -700,7 +734,10 @@ describe("sandbox base security packages", () => {
         tmp,
         [
           'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
@@ -729,7 +766,10 @@ describe("sandbox base security packages", () => {
         tmp,
         [
           'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );
@@ -756,7 +796,10 @@ describe("sandbox base security packages", () => {
         tmp,
         [
           'apt-get() { printf "apt-get %s\\n" "$*" >> "$call_log"; }',
-          ...useRealPatchedParser(baseAptSecurityFunctions(architecture), prepared.pythonShim),
+          ...useRealPatchedParser(
+            baseAptSecurityFunctions(architecture, image.libexpat),
+            prepared.pythonShim,
+          ),
         ],
         { timeoutMs: 15_000 },
       );

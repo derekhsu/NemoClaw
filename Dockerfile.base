@@ -112,11 +112,11 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Trixie has not published fixes for the reviewed libevent, libexpat, jq, or Vim
-# advisories. Install fixed Expat packages from the 20260811T082421Z snapshot
-# and fixed libevent, jq, and Vim packages from the 20260703T143212Z,
-# 20260724T000000Z, and 20260727T143429Z snapshots, respectively, with
-# architecture-specific hashes, until Trixie carries them.
+# Trixie has not published fixes for the reviewed libevent, jq, or Vim
+# advisories. Install the Expat 2.9.0-1~deb13u1 security update (#19) from the
+# 20261017T204620Z snapshot and fixed libevent, jq, and Vim packages from the
+# 20260703T143212Z, 20260724T000000Z, and 20260727T143429Z snapshots,
+# respectively, with architecture-specific hashes, until Trixie carries them.
 # The checksum and runtime probes put the validating command last in each pipe.
 # The runtime Vim probe verifies the package that this layer installs.
 # hadolint ignore=DL3001,DL4006
@@ -157,7 +157,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && arch="$(dpkg --print-architecture)" \
     && case "$arch" in \
         amd64) \
-            libexpat_sha256="978e9d30b84893a4c8191d8dae4d1b93c9b7ecaa772ada2fdb892ae3765cab4e"; \
+            libexpat_sha256="feff874772cae904ae4d24e917b35664952bec4b4ae9100a4edda5a7fa746832"; \
             libevent_core_sha256="544ca760ced0fba6c4c24f8078726031a04e8b7d9890f576ea9cd724cdbb8ee1"; \
             libonig_sha256="3abee130696244050500bcc7870e3b4cb82ddd87149ece3fd55010c3d4e1d18c"; \
             libjq_sha256="9a5bf964cef39ed8f0f162e20d856e31961d28a57772b5313989b42a8be7e941"; \
@@ -165,7 +165,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
             vim_tiny_sha256="df2d037d405f1376d1d8025d022dba81fbfed8695f68a131b788d16d3b68cf83" \
             ;; \
         arm64) \
-            libexpat_sha256="660f5f598a06aa56613a2fbf1ffbd408708175f1a6c2fac833842148f0228176"; \
+            libexpat_sha256="d9e1c50fcdad079fe16d77f1578adcc763be1bf7f2da7fa8adca7010b0c84c83"; \
             libevent_core_sha256="bfc3f57347da0fa26c9cf5229c918c80dfd84fa52f52ca3d4da7148f0f7d7a43"; \
             libonig_sha256="137e708575c0622d347815d19cb471a107546b16e9602805ee27afad7bba107f"; \
             libjq_sha256="eae4a828df2eb53d728f88109d9f9549e0983a90b573cf0c7fa1e4bbc7533a7e"; \
@@ -177,7 +177,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && perl_version_before="$(dpkg-query -W -f='${Version}' perl)" \
     && security_deb_dir="/tmp/nemoclaw-debian-security" \
     && snapshot_url="https://snapshot.debian.org/archive/debian/20260724T000000Z/pool/main" \
-    && expat_snapshot_url="https://snapshot.debian.org/archive/debian/20260811T082421Z/pool/main" \
+    && expat_snapshot_url="https://snapshot.debian.org/archive/debian/20261017T204620Z/pool/main" \
     && libevent_snapshot_url="https://snapshot.debian.org/archive/debian/20260703T143212Z/pool/main" \
     && vim_snapshot_url="https://snapshot.debian.org/archive/debian/20260727T143429Z/pool/main" \
     && vim_common_sha256="c21aad77632ef790d2352f1c38e688069980bbd530034248dd5e1158da9c9fe3" \
@@ -185,7 +185,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl --proto '=https' --tlsv1.2 -fsSL \
         --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 120 \
         -o "$security_deb_dir/libexpat1.deb" \
-        "$expat_snapshot_url/e/expat/libexpat1_2.8.3-1_${arch}.deb" \
+        "$expat_snapshot_url/e/expat/libexpat1_2.9.0-1~deb13u1_${arch}.deb" \
     && curl --proto '=https' --tlsv1.2 -fsSL \
         --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 120 \
         -o "$security_deb_dir/libevent-core-2.1-7t64.deb" \
@@ -238,7 +238,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ldd /usr/bin/tmux | grep -Eq 'libevent_core-2[.]1[.]so[.]7' \
     && command -v lsof >/dev/null \
     && printf '%s\n' '{"sandbox":"healthy"}' | jq -e '.sandbox == "healthy"' >/dev/null \
-    && python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION" \
+    && python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.9.0', pyexpat.EXPAT_VERSION" \
     && printf '%s  %s\n' \
         "4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7" \
         /usr/lib/python3.13/html/parser.py \
@@ -433,6 +433,7 @@ COPY scripts/lib/patch-openclaw-npm12-pack-json.mts /scripts/lib/patch-openclaw-
 COPY --chmod=0444 scripts/openclaw-cli-wrapper.sh /usr/local/lib/nemoclaw/openclaw-cli-wrapper.sh
 COPY scripts/patch-bundled-npm-brace-expansion.mts /scripts/patch-bundled-npm-brace-expansion.mts
 COPY scripts/lib/patch-bundled-npm-ip-address.mts /scripts/lib/patch-bundled-npm-ip-address.mts
+COPY scripts/lib/patch-bundled-npm-undici.mts /scripts/lib/patch-bundled-npm-undici.mts
 COPY scripts/patch-bundled-npm-tar.mts /scripts/patch-bundled-npm-tar.mts
 COPY scripts/upgrade-bundled-npm.mts /scripts/upgrade-bundled-npm.mts
 COPY ci/reviewed-npm-audit.json /ci/reviewed-npm-audit.json
@@ -455,7 +456,7 @@ RUN node /scripts/patch-bundled-npm-tar.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # npm 12.0.2 contains brace-expansion 5.0.7. Replace only that private
-# package from the reviewed 5.0.9 archive after the complete npm upgrade.
+# package from the reviewed 5.0.12 archive after the complete npm upgrade.
 # hadolint ignore=DL3059
 RUN node /scripts/patch-bundled-npm-brace-expansion.mts \
     --npm-root /usr/local/lib/node_modules/npm
@@ -464,6 +465,12 @@ RUN node /scripts/patch-bundled-npm-brace-expansion.mts \
 # with the reviewed 10.3.1 archive after the complete npm upgrade.
 # hadolint ignore=DL3059
 RUN node /scripts/lib/patch-bundled-npm-ip-address.mts \
+    --npm-root /usr/local/lib/node_modules/npm
+
+# npm 12.0.2 contains undici 6.27.0. Replace only that private package with the
+# reviewed 6.29.1 archive after the complete npm upgrade (#19).
+# hadolint ignore=DL3059
+RUN node /scripts/lib/patch-bundled-npm-undici.mts \
     --npm-root /usr/local/lib/node_modules/npm
 
 # Keep OpenClaw's jiti-generated source cache out of /tmp so provider marker

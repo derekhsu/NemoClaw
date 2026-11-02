@@ -75,7 +75,7 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 | Finding | Status | Resolution |
 | --- | --- | --- |
 | B1 controlled packages vs. apt | Resolved in design | Conflict reproduced and fixed by a Perl 5.44 rebuild ([verification.md](verification.md)); hold every inventory package; compare versions before and after; re-resolve pins per release |
-| B2 deployment consumer | Confirmed in #18 on OpenShell 0.0.92 | clawshell-gateway reads the image from the blueprint `sandbox_source`; the sandbox started from a digest reference. clawshell-gateway marked a second sandbox `running` only after the maintainer applied clawshell-gateway PR 190, which is not merged. OpenShell 0.0.92 is older than the 0.0.101 that `blueprint.yaml` requires ([deployment acceptance](#deployment-acceptance-18)) |
+| B2 deployment consumer | Confirmed in #18 on OpenShell 0.0.92 | clawshell-gateway reads the image from the blueprint `sandbox_source`; the sandbox started from a digest reference. clawshell-gateway marked a second sandbox `running` after the maintainer applied clawshell-gateway PR 190 as a hot-patch. PR 190 is now merged and deployed in the test and production deployments. OpenShell 0.0.92 is older than the 0.0.101 that `blueprint.yaml` requires ([deployment acceptance](#deployment-acceptance-18)) |
 | B3 sandbox policy | Split | Docker-level fixtures here use unique LibreOffice profiles and `pdffonts`; the Landlock read policy was exercised in #18 and denies `/var/lib/dpkg` ([deployment acceptance](#deployment-acceptance-18)); the 512-process limit is not yet measured |
 | B4 base source and version | Resolved | Digest fixed in `Dockerfile.tools`; version read from `openclaw --version`; base user and architecture checks fail closed |
 | B5 tag namespace | Resolved in design, implemented in Phase 4 | One tools tag, no architecture tags; reject existing tags; standard path rejects `-tools.` |
@@ -117,7 +117,7 @@ Chromium means Debian Chromium, `/usr/bin/chromium`, which the fixture table's C
 | --- | --- |
 | Sandbox image | Podman reports the sandbox container image as `docker.io/derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
 | Sandbox start | OpenShell reported `Ready` about 2 seconds after creation |
-| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix. After the maintainer applied PR 190 to the test deployment as a hot-patch, clawshell-gateway marked a second sandbox from the same digest `running` |
+| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) stops clawshell-gateway from treating that warning as fatal. After the maintainer applied PR 190 to the test deployment as a hot-patch, clawshell-gateway marked a second sandbox from the same digest `running`. On 2026-11-02 the maintainer deployed a clawshell-gateway build that includes the merged PR 190 to the test and production deployments. In the test deployment, this build replaced the hot-patch |
 | Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`. The maintainer accepted this failure on 2026-11-02 and counts `controlled_packages` as a build-only check. In publication [run 41293472246](https://github.com/derekhsu/NemoClaw/actions/runs/41293472246), `controlled_packages` passed on the amd64 image before the push; that image has the same manifest digest and image ID as the deployed image. The version checks in `base_security_checks` pass in the deployment; its `dpkg --audit` line cannot read `/var/lib/dpkg` there and passes without auditing. The policy stays unchanged, because one fixture does not justify giving every sandbox that uses this policy read access to `/var/lib/dpkg` |
 | Phase 3 fixtures | 5 of 5 pass |
 | `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |
@@ -170,6 +170,13 @@ The measured times need no timeout change. The two clawshell-gateway settings ar
 | --- | --- | --- |
 | `SANDBOX_PROVISIONING_TIMEOUT_SECONDS` | 1800 | Inside clawshell-gateway `provisioning`: the wait until OpenShell reports the sandbox ready |
 | `GATEWAY_START_TIMEOUT_SECONDS` | 90 | One OpenClaw gateway start request until the OpenClaw gateway health check reports live |
+
+### Production deployment
+
+On 2026-11-02 the maintainer added the tools image to the production clawshell-gateway deployment as blueprint `openclaw-202692-tools1`, which all production users can select.
+The blueprint `sandbox_source` uses the same amd64 manifest digest (`sha256:2a05b9d0…`) as the test deployment, and the blueprint uses the same policy profile as the standard `2026.9.2-r2` blueprint.
+A smoke sandbox reached `running` about 80 to 85 seconds after the create request. The OpenClaw gateway reported live about 10 seconds after the start request.
+In that sandbox, Python Playwright clicked a local page and saved a screenshot, and LibreOffice converted a text file to PDF.
 
 ### Open items
 

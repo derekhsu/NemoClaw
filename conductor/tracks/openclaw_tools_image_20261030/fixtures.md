@@ -118,7 +118,7 @@ Chromium means Debian Chromium, `/usr/bin/chromium`, which the fixture table's C
 | Sandbox image | Podman reports the sandbox container image as `docker.io/derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
 | Sandbox start | OpenShell reported `Ready` about 2 seconds after creation |
 | clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix. After the maintainer applied PR 190 to the test deployment as a hot-patch, clawshell-gateway marked a second sandbox from the same digest `running` |
-| Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`; the same check passes in the build workflow |
+| Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`. The maintainer accepted this failure on 2026-11-02 and counts `controlled_packages` as a build-only check. In publication [run 41293472246](https://github.com/derekhsu/NemoClaw/actions/runs/41293472246), `controlled_packages` passed on the amd64 image before the push; that image has the same manifest digest and image ID as the deployed image. The version checks in `base_security_checks` pass in the deployment; its `dpkg --audit` line cannot read `/var/lib/dpkg` there and passes without auditing. The policy stays unchanged, because one fixture does not justify giving every sandbox that uses this policy read access to `/var/lib/dpkg` |
 | Phase 3 fixtures | 5 of 5 pass |
 | `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |
 | Python Playwright on the allowed site | Opens the page, clicks and types into a field, and saves a screenshot. The form is not submitted |
@@ -174,7 +174,5 @@ The measured times need no timeout change. The two clawshell-gateway settings ar
 ### Open items
 
 - OpenClaw browser tool: fails in the sandbox; the fix is not chosen. #27 lists the options.
-- `controlled_packages` in the deployment: fails because the policy gives no read access to `/var/lib/dpkg`.
-  No decision yet between granting that read access, changing the fixture for deployments, or accepting the failure.
 - arm64 acceptance: the test deployment host is amd64. Deferred, not scheduled.
 - 512-process limit under parallel LibreOffice and Chrome: not measured.

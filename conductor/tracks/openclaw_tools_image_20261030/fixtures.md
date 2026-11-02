@@ -89,7 +89,9 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 
 ## Deployment acceptance (#18)
 
-First amd64 round on 2026-11-01, in the maintainer's test deployment.
+The maintainer ran two amd64 rounds in the test deployment.
+The 2026-11-01 round covered every result below except the OpenClaw browser tool.
+The 2026-11-02 round re-ran provisioning with PR 190 and checked the OpenClaw browser tool.
 Results, decisions, and screenshots are in the
 [#18 comments](https://github.com/derekhsu/NemoClaw/issues/18).
 In this section, Chrome means the Chrome Headless Shell binary that the
@@ -115,17 +117,31 @@ fixture table calls Chromium.
 | --- | --- |
 | Sandbox image | Podman reports the sandbox container image as `docker.io/derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
 | Sandbox start | OpenShell reported `Ready` about 2 seconds after creation |
-| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix |
+| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix. After the maintainer applied PR 190 to the test deployment as a hot-patch, clawshell-gateway marked a second sandbox from the same digest `running` |
 | Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`; the same check passes in the build workflow |
 | Phase 3 fixtures | 5 of 5 pass |
 | `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |
 | Python Playwright on the allowed site | Opens the page, clicks and types into a field, and saves a screenshot. The form is not submitted |
 | Denied destinations | `curl` to the allowed site, Chrome to a public site, and Chrome to an undeclared internal host are all denied |
+| OpenClaw browser tool | Fails through an agent session and when run directly in the sandbox without a model. The tools image does not need a rebuild for this failure; the three causes follow the table. Tracked in [#27](https://github.com/derekhsu/NemoClaw/issues/27) |
+
+The OpenClaw browser tool fails for three causes.
+In `openclaw browser open`, each cause appears only after the previous one is fixed; `openclaw browser snapshot` shows cause 3 directly.
+
+1. `openclaw browser open` fails with `getaddrinfo EAI_AGAIN`.
+   OpenClaw 2026.9.2 resolves every hostname with `dns.lookup` before navigation.
+   The sandbox has no DNS; outbound connections go only through the OpenShell proxy.
+   Setting `browser.ssrfPolicy.allowedHostnames` does not skip the lookup.
+   The maintainer removed the setting from the test configuration after the retry.
+2. The tool starts `/usr/bin/chromium` instead of Chrome.
+   The custom preset does not allow that binary.
+3. `openclaw browser snapshot` fails because `/usr/bin/chromium` reports `No usable sandbox!`.
+   OpenClaw suggests `browser.noSandbox: true`.
+   That setting turns off the Chromium sandbox and breaks the #18 rule against lowering browser security, so the test did not use it.
 
 ### Open items
 
-- OpenClaw browser tool check through an agent session: needs working
-  clawshell-gateway provisioning.
+- OpenClaw browser tool: fails in the sandbox; the fix is not chosen. #27 lists the options.
 - arm64 acceptance: the test deployment host is amd64. Deferred, not scheduled.
 - Cold-start budget: one measurement of about 2 seconds to `Ready`; no limit set.
 - 512-process limit under parallel LibreOffice and Chrome: not measured.

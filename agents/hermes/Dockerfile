@@ -375,7 +375,7 @@ RUN find /opt/nemoclaw-hermes-config -type d -exec chmod 755 {} + \
         /scripts/patch-bundled-npm-tar.mts \
     && chmod -R a+rX /src/lib/messaging
 
-ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=098e318e49d9cd7e4551d4ebb446cc5cf918e3281a5b15815f0f455f312dc976
+ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=39d5ee84fd0175a0d837b8cd588c0c87d842e507b55e16f03d2a045df07ecccb
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256" /opt/nemoclaw-hermes-config/image-build-probes.py \
@@ -849,7 +849,7 @@ RUN install -o root -g root -m 0444 \
 
 # Fresh named profiles do not receive config.yaml. Patch the pinned Hermes
 # fallback readers from the generated manifest, then validate a real profile.
-ARG NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256=954e982162b8c79ca2e08897907f561b307235eefc33fa882b5c22faa22f152a
+ARG NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256=a4d8064331dc38af52fcd4f34f364ea0669d19d3b0ed6750823d1e3753de5f17
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_PROFILE_POLICY_PATCHER_SHA256" /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defaults.py \
@@ -859,12 +859,12 @@ RUN /usr/bin/python3 -I /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defa
 # Hermes v0.21.3 no longer re-enables an explicitly disabled platform from
 # ambient credentials, but its table-driven credential steps still copy those
 # credentials into the disabled platform's runtime configuration.
-# Apply this after the profile-policy patch above, then bind both its exact
-# output module and this narrow patcher before preserving explicit disables
-# across environment processing.
+# The profile-policy patch above leaves gateway/config.py unchanged, so bind
+# the pinned upstream module and this narrow patcher before preserving
+# explicit disables across environment processing.
 ARG NEMOCLAW_HERMES_NEUTRAL_PLATFORM_PATCHER_SHA256=31e0d97721ff74de12ded3db6ac215adc8784d96143e33a7ac5acef025dd685d
-ARG NEMOCLAW_HERMES_POST_PROFILE_GATEWAY_CONFIG_SHA256=c39e6942ca52127b1371a536bcf0d3614769e523cf638d59db3715c8aa98072c
-ARG NEMOCLAW_HERMES_NEUTRAL_PLATFORM_OUTPUT_SHA256=7015dbe86fb049e5765dcc8a914009606b5cdb3a99a634e84fe283d4c910f728
+ARG NEMOCLAW_HERMES_POST_PROFILE_GATEWAY_CONFIG_SHA256=a9dd00bad424dfe7975cbd2002df978e4db0f0738555a8bf73379e434ab3deea
+ARG NEMOCLAW_HERMES_NEUTRAL_PLATFORM_OUTPUT_SHA256=892189fb90b19eee4403893d7d8a2bbc5a495c2341c3a4a782b8472aa4a51aa9
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_NEUTRAL_PLATFORM_PATCHER_SHA256" /opt/nemoclaw-hermes-config/patch-neutral-platform-env-activation.py \

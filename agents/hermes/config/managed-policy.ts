@@ -209,8 +209,9 @@ export function buildHermesManagedPolicy(
       temp_store: 2,
     },
     session_reset: {
-      // Preserve the prior daily and idle expiry instead of inheriting an
-      // upstream no-reset default.
+      // Hermes 0.21.3 ignores these values: gateway sessions reset only on
+      // /new, /reset or an explicit suspension, never by time. They stay in
+      // the generated config only to keep its managed layout unchanged.
       mode: "both",
       at_hour: 4,
       idle_minutes: 1440,

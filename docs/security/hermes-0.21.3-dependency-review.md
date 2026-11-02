@@ -65,7 +65,7 @@ Migration v44 rewrites `curator.stale_after_days` 30 to 14 and `curator.archive_
 With a schema 39 stamp, Hermes 0.21.3 startup migration therefore rewrites `config.yaml`, shortens managed skill retention, and trips the managed drift guard; a probe against the installed 0.21.3 migration code confirmed both effects.
 The generator now emits schema 44 directly, which keeps the file byte-identical through `migrate_config()` and keeps the managed curator retention authoritative.
 
-The retained authorization and policy migrations are unchanged in intent: `approvals.mode: manual`, `browser.restrict_evaluate: true` with `allow_unsafe_evaluate: false`, the complete `session_reset` policy, `display.show_reasoning: false`, `display.show_commentary: false`, and disabled `updates` side effects all remain explicit generated pins.
+The retained authorization and policy migrations are unchanged in intent: `approvals.mode: manual`, `browser.restrict_evaluate: true` with `allow_unsafe_evaluate: false`, the complete `session_reset` policy (which Hermes 0.21.3 ignores, see `HERMES-15`), `display.show_reasoning: false`, `display.show_commentary: false`, and disabled `updates` side effects all remain explicit generated pins.
 The managed policy additionally pins `database.temp_store: 2`, which Hermes 0.21.3 honors natively through `apply_database_pragmas()`.
 Fresh `hermes profile create <name>` homes still omit `config.yaml`, so the hash-bound exact-source profile-policy patcher remains in place; for 0.21.3 it binds the config defaults, browser tool, browser evaluation policy, gateway, classic CLI, TUI gateway, TUI config methods, agent initialization, and update-maintenance sources.
 
@@ -83,6 +83,10 @@ The neutral managed image requires disabled platforms to stay complete and crede
 
 The `resumed_oneshot` CLI adapter translation (#5254) is retired: Hermes 0.21.3 resumes and continues one-shot turns in the selected session natively.
 The adapter now records only the provider and model composition translation and targets Hermes `0.21.3`; the version guard that rejects a stale compatibility workaround set now targets `0.21.3`.
+
+Hermes 0.21.3 removes time-based gateway session reset.
+`SessionLifecycleMixin._route_reset_reason()` replaces a routed conversation only after an explicit suspension, and `gateway.config.SessionResetPolicy` is an inert compatibility type, so the generated `session_reset` values no longer take effect.
+The profile-policy patch no longer edits `gateway/config.py`, and the build probe no longer checks `SessionResetPolicy`.
 
 ## Selected Python dependency graph
 
@@ -116,10 +120,10 @@ The remaining identifiers affect `aiohttp`, `anyio`, `brotlicffi`, `certifi`, `m
 | `HERMES-10` | High | Pin and test | The exact-source patch updates Hermes metadata and its frozen lock together and fails the base image build on dependency inconsistency or installed-version drift. |
 | `HERMES-13` | Medium | Document bounded residual | Static `state_files` entries online-back up the default profile only. Cron or Discord ledgers created under `profiles/<name>` remain in the raw `profiles` tar capture (default-profile versus named-profile scope is unchanged by this upgrade). |
 | `HERMES-14` | High | Migrate and test | The browser evaluation denylist remains opt-in upstream. Generated configuration writes `browser.restrict_evaluate: true`, and the 0.21.3 evaluation-policy module keeps a missing raw value restricted. |
-| `HERMES-15` | Medium | Migrate and test | Generated configuration explicitly writes the complete bounded reset and notification policy. |
+| `HERMES-15` | Medium | Accept upstream behavior and document | Hermes 0.21.3 no longer resets gateway sessions by time; they continue until `/new`, `/reset`, or an explicit suspension. Generated configuration still writes the `session_reset` policy, which Hermes ignores, and the inert `SessionResetPolicy` default is no longer patched. |
 | `HERMES-16` | High | Migrate and test | Generated configuration explicitly disables reasoning and commentary. |
 | `HERMES-17` | High | Migrate and test | Generated configuration explicitly disables in-place update state duplication and the mutable secondary download. |
-| `HERMES-18` | High | Migrate and test | The image hash-binds the exact `v2026.9.14` config-defaults, browser, browser-evaluation-policy, gateway, classic-CLI, TUI, TUI-config, agent-init, and update-maintenance sources, patches their fail-safe defaults, and probes a real config-less profile. |
+| `HERMES-18` | High | Migrate and test | The image hash-binds the exact `v2026.9.14` config-defaults, browser, browser-evaluation-policy, classic-CLI, TUI, TUI-config, agent-init, and update-maintenance sources, patches their fail-safe defaults, and probes a real config-less profile. |
 | `HERMES-21` | Medium | Document inherited bounded residual | The runtime-metadata workaround still does not retarget every direct upstream metadata consumer; the 0.21.3 retarget adds no regression to the supported host-managed default-gateway lifecycle. |
 | `HERMES-22` | High | Patch, pin, test, and runtime-proof | The WhatsApp proxy-agent patch applies unchanged to the 0.21.3 bridge; live WhatsApp E2E through the OpenShell proxy remains a merge gate. |
 | `HERMES-25` | High | Migrate, test, and runtime-proof | A schema 39 stamp lets v44 rewrite the managed curator retention and `config.yaml`. Generated configuration emits schema 44; the installed 0.21.3 `migrate_config()` leaves it byte-identical. |

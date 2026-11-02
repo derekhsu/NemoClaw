@@ -82,18 +82,6 @@ def _restrict_browser_evaluate() -> bool:
     return _browser_eval_flag("restrict_evaluate")
 `;
 
-const gatewayFixture = `\
-from dataclasses import dataclass
-
-@dataclass
-class SessionResetPolicy:
-    mode: str = "none"
-
-    @classmethod
-    def from_dict(cls, data):
-        return cls() if data.get("mode") is None else cls(mode=data["mode"])
-`;
-
 const cliFixture = `\
 CLI_CONFIG = {
     "display": {
@@ -144,16 +132,7 @@ def _refresh():
 `;
 
 function patchSource(
-  kind:
-    | "config"
-    | "browser"
-    | "browser_policy"
-    | "gateway"
-    | "cli"
-    | "tui"
-    | "tui_config"
-    | "agent"
-    | "main",
+  kind: "config" | "browser" | "browser_policy" | "cli" | "tui" | "tui_config" | "agent" | "main",
   source: string,
 ) {
   const harness = `\
@@ -259,16 +238,14 @@ print(namespace["_restrict_browser_evaluate"](), namespace["_allow_unsafe_browse
     expect(probe.stdout.trim()).toBe("True False");
   });
 
-  it("keeps the gateway reset policy fail-safe without config.yaml", () => {
-    const result = patchSource("gateway", gatewayFixture);
+  it("leaves the inert gateway reset policy unpatched because Hermes 0.21.3 never resets by time (#15)", () => {
+    const source = fs.readFileSync(patcher, "utf8");
 
-    expect(result.status, result.stderr).toBe(0);
-    const probe = runPatchedPython(
-      result.stdout,
-      'print(namespace["SessionResetPolicy"].from_dict({}).mode)',
+    expect(source).not.toContain("gateway/config.py");
+    expect(source).not.toContain("patch_gateway_source");
+    expect(source).not.toContain(
+      "a9dd00bad424dfe7975cbd2002df978e4db0f0738555a8bf73379e434ab3deea",
     );
-    expect(probe.status, probe.stderr).toBe(0);
-    expect(probe.stdout.trim()).toBe("both");
   });
 
   it("keeps the independent classic CLI display default private", () => {
@@ -356,7 +333,7 @@ print(evaluate({}))
     expect(result.stderr).not.toContain("Traceback");
   });
 
-  it("checks session reset defaults at their gateway boundary for a config-less profile", () => {
+  it("skips the session reset policy Hermes 0.21.3 ignores when probing a config-less profile (#15)", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-profile-probe-"));
     const policyPath = path.join(tmp, "managed-policy.json");
     fs.writeFileSync(policyPath, `${JSON.stringify(MANAGED_POLICY)}\n`);
@@ -366,7 +343,6 @@ import importlib.util
 import json
 import pathlib
 import sys
-from types import SimpleNamespace
 
 probe_path = pathlib.Path(sys.argv[1])
 policy_path = pathlib.Path(sys.argv[2])
@@ -379,9 +355,9 @@ spec.loader.exec_module(module)
 policy = json.loads(policy_path.read_text(encoding="utf-8"))
 expected = profile_default_values(policy)
 config = copy.deepcopy(policy["config"])
-reset_policy = SimpleNamespace(**config.pop("session_reset"))
+del config["session_reset"]
 module._verify_profile_config_policy(config, expected)
-module._verify_session_reset_policy(reset_policy, expected)
+assert not hasattr(module, "_verify_session_reset_policy")
 `;
     const result = spawnSync("python3", ["-I", "-c", harness, imageBuildProbes, policyPath], {
       encoding: "utf8",
@@ -404,7 +380,6 @@ module._verify_session_reset_policy(reset_policy, expected)
       "dbb0bbeafc42d4586d02a291b4bb5606e566eb71c7d75c01644d696abe7c8bae",
       "29598fc950902eff9b503fa1fcfd02a8e4b15673acb6e8131fdc0bde65518f51",
       "80d617bf062ff9e0e87fd592e8bbaadc3c6aaef7b96d2fe3ceb49fcfecaf368a",
-      "a9dd00bad424dfe7975cbd2002df978e4db0f0738555a8bf73379e434ab3deea",
       "f660357c101629a0ebcd8f4ce6aa2d3874fcfe87de6ea4b1d121cc8b2746584f",
       "addaab48a307fc4c7924e1b8210a3fb61f02813d612045609651f79e507fff54",
       "9bc5dc068aa2417e9d8466d23c02612b18f714009b6d70ed4cb2e956f89c3de2",

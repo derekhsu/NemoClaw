@@ -6,8 +6,8 @@
 Fresh Hermes named profiles intentionally omit ``config.yaml``. The upstream
 v2026.9.14 defaults would therefore enable smart command approval, browser
 evaluation of sensitive primitives, reasoning/commentary display, update-time
-state mutation, disk-backed SQLite temporary storage, and indefinite gateway
-sessions outside NemoClaw's generated default home.
+state mutation, and disk-backed SQLite temporary storage outside NemoClaw's
+generated default home.
 
 This image-level compatibility patch changes only the pinned upstream default
 leaves that NemoClaw already writes explicitly for its default and dashboard
@@ -17,12 +17,16 @@ homes. It also fixes independent config copies and loaders that bypass
 * ``tools.browser_tool_eval_policy`` reads raw per-home YAML, so its missing-key
   fallback must keep the sensitive-expression denylist enabled.
   ``tools.browser_tool`` must also keep its runtime npx fallback offline.
-* ``gateway.config.SessionResetPolicy`` constructs its own dataclass default.
 * ``cli.CLI_CONFIG`` carries an independent display default, while
   ``tui_gateway.server`` has two raw-YAML reasoning-display fallbacks.
 * ``agent.agent_init`` has an independent commentary-visibility fallback.
 * ``hermes_cli.update_cmd_maint`` independently defaults update backups and CUA refresh
   on when configuration is missing or unreadable.
+
+Hermes v0.21.3 no longer resets gateway sessions by time:
+``SessionLifecycleMixin._route_reset_reason()`` replaces a routed conversation
+only after an explicit suspension, and ``gateway.config.SessionResetPolicy`` is
+an inert compatibility type. ``session_reset`` is therefore not patched here.
 
 Every input file is bound to its exact reviewed v2026.9.14 source state before
 any edit. The browser source hash includes NemoClaw's preceding exact
@@ -58,7 +62,6 @@ EXPECTED_SOURCE_SHA256 = {
     "config": "dbb0bbeafc42d4586d02a291b4bb5606e566eb71c7d75c01644d696abe7c8bae",
     "browser": "29598fc950902eff9b503fa1fcfd02a8e4b15673acb6e8131fdc0bde65518f51",
     "browser_policy": "80d617bf062ff9e0e87fd592e8bbaadc3c6aaef7b96d2fe3ceb49fcfecaf368a",
-    "gateway": "a9dd00bad424dfe7975cbd2002df978e4db0f0738555a8bf73379e434ab3deea",
     "cli": "f660357c101629a0ebcd8f4ce6aa2d3874fcfe87de6ea4b1d121cc8b2746584f",
     "tui": "addaab48a307fc4c7924e1b8210a3fb61f02813d612045609651f79e507fff54",
     "tui_config": "9bc5dc068aa2417e9d8466d23c02612b18f714009b6d70ed4cb2e956f89c3de2",
@@ -188,16 +191,6 @@ def patch_browser_policy_source(source: str, values: dict[str, object]) -> str:
     return _replace_exact(source, replacements, label="Hermes browser evaluation policy")
 
 
-def patch_gateway_source(source: str, values: dict[str, object]) -> str:
-    expected = _literal(values["session_reset.mode"])
-    replacements = ((
-        'mode: str = "none"',
-        "# NemoClaw compatibility override: generated policy bounds daily and idle reset.\n"
-        f"    mode: str = {expected}",
-    ),)
-    return _replace_exact(source, replacements, label="Hermes gateway policy")
-
-
 def patch_cli_source(source: str, values: dict[str, object]) -> str:
     replacements = ((
         '"show_reasoning": True',
@@ -287,7 +280,6 @@ def patch_file(path: Path, kind: str, values: dict[str, object]) -> None:
         "config": patch_config_source,
         "browser": patch_browser_source,
         "browser_policy": patch_browser_policy_source,
-        "gateway": patch_gateway_source,
         "cli": patch_cli_source,
         "tui": patch_tui_source,
         "tui_config": patch_tui_config_source,
@@ -325,11 +317,6 @@ def main() -> int:
         help="Pinned Hermes browser evaluation policy module",
     )
     parser.add_argument(
-        "--gateway",
-        default="/opt/hermes/gateway/config.py",
-        help="Pinned Hermes gateway configuration module",
-    )
-    parser.add_argument(
         "--cli",
         default="/opt/hermes/cli.py",
         help="Pinned Hermes classic CLI module",
@@ -363,7 +350,6 @@ def main() -> int:
     patch_file(Path(args.config), "config", values)
     patch_file(Path(args.browser), "browser", values)
     patch_file(Path(args.browser_policy), "browser_policy", values)
-    patch_file(Path(args.gateway), "gateway", values)
     patch_file(Path(args.cli), "cli", values)
     patch_file(Path(args.tui), "tui", values)
     patch_file(Path(args.tui_config), "tui_config", values)

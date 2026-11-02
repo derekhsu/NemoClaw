@@ -122,6 +122,16 @@
     }
   ],
   "translations": {
+    "resumed_oneshot": {
+      "issue": 5254,
+      "forms": [
+        "hermes [(-p|--profile) PROFILE] ((-r|--resume) SESSION|(-c|--continue) [SESSION]) (-z|--oneshot) PROMPT [CHAT_OPTION ...]",
+        "hermes [--profile=PROFILE] (--resume=SESSION|--continue[=SESSION]) --oneshot=PROMPT [CHAT_OPTION ...]"
+      ],
+      "reason": "Hermes 0.21.3 resumes one-shot turns natively, but its native one-shot path sets HERMES_YOLO_MODE and HERMES_ACCEPT_HOOKS without --yolo or --accept-hooks, so a resumed or continued turn would bypass the managed manual approval policy. chat --query keeps the single-query approval gate, which denies flagged actions by default.",
+      "source_fix_constraint": "The one-shot approval bypass belongs to Hermes. The durable source fix must land in Hermes before NemoClaw removes this translation.",
+      "removal_condition": "Hermes applies the configured approval policy to top-level resumed and continued one-shot turns unless --yolo or --accept-hooks is given."
+    },
     "provider_model_composition": {
       "issue": 7361,
       "forms": [

@@ -51,7 +51,7 @@ The `hermes-agent@0.21.3` npm package is only an independent registry-integrity 
 | --- | ---: | ---: | --- |
 | `v2026.8.27` (`5fc308a70`) to `v2026.8.31` (`29112bef0`) | 911 | 1,895 | Gateway lifecycle and platform increments. |
 | `v2026.8.31` (`29112bef0`) to `v2026.9.7` (`2237be355`) | 5,995 | 4,364 | Second decomposition wave: `gateway/run_shutdown.py`, `gateway/config_env.py`, `hermes_state_sessions.py`, `hermes_state_telegram.py`, `tools/browser_tool_eval_policy.py`, `tools/browser_tool_install.py`, and `hermes_cli/update_cmd_maint.py` split out. |
-| `v2026.9.7` (`2237be355`) to `v2026.9.11` (`939e45c91`) | 986 | 1,650 | One-shot `--resume` support lands, which retires the `resumed_oneshot` translation. |
+| `v2026.9.7` (`2237be355`) to `v2026.9.11` (`939e45c91`) | 986 | 1,650 | One-shot `--resume` support lands, but the native one-shot path still forces approval bypass, so the `resumed_oneshot` translation is retained. |
 | `v2026.9.11` (`939e45c91`) to `v2026.9.14` (`345cd2b05`) | 1,039 | 2,642 | Release stabilization for `0.21.3`. |
 
 The adjacent ranges contain 8,931 source commits; the end-to-end diff touches 7,369 files.
@@ -81,8 +81,11 @@ Hermes 0.21.3 routes every built-in and plugin environment-enablement path throu
 Its table-driven credential steps still copy those credentials into the disabled platform's `extra` and `token`.
 The neutral managed image requires disabled platforms to stay complete and credential-free, so the neutral-platform patch is retained and retargeted to the `gateway.config._apply_env_overrides` delegate; the `neutral-platform-inertness` build probe fails on the unpatched 0.21.3 source and passes with the patch.
 
-The `resumed_oneshot` CLI adapter translation (#5254) is retired: Hermes 0.21.3 resumes and continues one-shot turns in the selected session natively.
-The adapter now records only the provider and model composition translation and targets Hermes `0.21.3`; the version guard that rejects a stale compatibility workaround set now targets `0.21.3`.
+The `resumed_oneshot` CLI adapter translation (#5254) is retained with a new reason.
+Hermes 0.21.3 resumes and continues one-shot turns in the selected session natively, but `hermes_cli.oneshot.run_oneshot()` sets `HERMES_YOLO_MODE=1` and `HERMES_ACCEPT_HOOKS=1` without `--yolo` or `--accept-hooks`.
+Routing a resumed or continued one-shot turn there would bypass `approvals.mode: manual`, while `chat --query` keeps the single-query approval gate, which denies flagged actions by default.
+The wrapper therefore keeps translating these forms and keeps refusing `--usage-file` on them; the adapter and its version guard now target Hermes `0.21.3`.
+A top-level one-shot turn without `--resume` or `--continue` already used the native path on the previous pin and is unchanged by this upgrade.
 
 Hermes 0.21.3 removes time-based gateway session reset.
 `SessionLifecycleMixin._route_reset_reason()` replaces a routed conversation only after an explicit suspension, and `gateway.config.SessionResetPolicy` is an inert compatibility type, so the generated `session_reset` values no longer take effect.
@@ -128,7 +131,7 @@ The remaining identifiers affect `aiohttp`, `anyio`, `brotlicffi`, `certifi`, `m
 | `HERMES-22` | High | Patch, pin, test, and runtime-proof | The WhatsApp proxy-agent patch applies unchanged to the 0.21.3 bridge; live WhatsApp E2E through the OpenShell proxy remains a merge gate. |
 | `HERMES-25` | High | Migrate, test, and runtime-proof | A schema 39 stamp lets v44 rewrite the managed curator retention and `config.yaml`. Generated configuration emits schema 44; the installed 0.21.3 `migrate_config()` leaves it byte-identical. |
 | `HERMES-26` | High | Retain patch and test | Hermes 0.21.3 keeps explicit disables disabled but copies ambient credentials into the disabled platform object. The retargeted neutral-platform patch restores complete disabled objects in the neutral image. |
-| `HERMES-27` | Medium | Retire and test | The `resumed_oneshot` translation is removed because 0.21.3 resumes one-shot turns natively; the wrapper and adapter no longer carry it. |
+| `HERMES-27` | High | Retain and test | The native 0.21.3 one-shot path forces approval bypass, so the `resumed_oneshot` translation keeps resumed and continued one-shot turns on `chat --query`, where flagged actions are denied by default, and `--usage-file` stays refused on those forms. |
 | `HERMES-28` | Medium | Document pre-existing residual | The OSV advisories on 11 selected packages predate this upgrade and apply equally to the current production pin. Remediating them requires dependency floors beyond this version bump and is tracked separately. |
 
 Unresolved upgrade-created high-impact concerns: `0`.

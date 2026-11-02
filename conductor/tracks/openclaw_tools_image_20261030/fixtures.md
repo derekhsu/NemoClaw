@@ -140,11 +140,41 @@ The test did not observe cause 2 as a failure. The snapshot error shows that the
    OpenClaw suggests `browser.noSandbox: true`.
    That setting turns off the Chromium sandbox and breaks the #18 rule against lowering browser security, so the test did not use it.
 
+### Cold-start budget
+
+The maintainer measured one sandbox per image on 2026-11-02, with clawshell-gateway PR 190 applied and the same policy profile.
+The image was already loaded on the host, so no time is spent on a pull.
+Rows 1 and 3 count from the create request. Row 2 is the length of the `starting` step. Row 4 counts from the OpenClaw gateway start request.
+
+| Step | Standard `2026.9.2-r2` | Tools `2026.9.2-tools.1` | Budget |
+| --- | --- | --- | --- |
+| Create request to the end of clawshell-gateway `provisioning` | 8.9 s | about 10.2 s | No separate budget |
+| clawshell-gateway `starting`: runtime setup and readiness probe | 81.4 s | about 87.6 s | No separate budget |
+| Create request to clawshell-gateway `running` | 90.3 s | 97.8 s | 180 s |
+| OpenClaw gateway start request until its health check reports live | 9.7 s | 10.3 s | 30 s |
+
+clawshell-gateway `provisioning` includes runtime preflight and the OpenShell sandbox creation; OpenShell itself reported `Ready` about 2 seconds after creation in the 2026-11-01 round.
+The tools image adds 7.5 seconds to reach `running` in this one measurement.
+Most of the time is the `starting` step, which the standard image also needs.
+
+clawshell-gateway does not start the OpenClaw gateway during provisioning.
+In both measurements, the OpenClaw gateway did not start by itself.
+A user starts it with the Start action on the clawshell-gateway gateway status card, or with a startup session that runs the blueprint `startup_command`.
+
+The 30 s OpenClaw gateway start budget is below `GATEWAY_START_TIMEOUT_SECONDS`.
+`SANDBOX_PROVISIONING_TIMEOUT_SECONDS` bounds only the OpenShell wait inside `provisioning`, a step that took about 10 s in total, so it does not bound the 180 s budget.
+No setting bounds the whole `starting` step. Its readiness probe allows two attempts of up to 30 s each, a fixed value in the code; if both fail, clawshell-gateway marks the sandbox `error`.
+The measured times need no timeout change. The two clawshell-gateway settings are:
+
+| clawshell-gateway setting | Default | What it bounds |
+| --- | --- | --- |
+| `SANDBOX_PROVISIONING_TIMEOUT_SECONDS` | 1800 | Inside clawshell-gateway `provisioning`: the wait until OpenShell reports the sandbox ready |
+| `GATEWAY_START_TIMEOUT_SECONDS` | 90 | One OpenClaw gateway start request until the OpenClaw gateway health check reports live |
+
 ### Open items
 
 - OpenClaw browser tool: fails in the sandbox; the fix is not chosen. #27 lists the options.
 - `controlled_packages` in the deployment: fails because the policy gives no read access to `/var/lib/dpkg`.
   No decision yet between granting that read access, changing the fixture for deployments, or accepting the failure.
 - arm64 acceptance: the test deployment host is amd64. Deferred, not scheduled.
-- Cold-start budget: one measurement of about 2 seconds to `Ready`; no limit set.
 - 512-process limit under parallel LibreOffice and Chrome: not measured.

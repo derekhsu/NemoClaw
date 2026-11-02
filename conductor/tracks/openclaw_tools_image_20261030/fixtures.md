@@ -37,7 +37,7 @@ unless the row says otherwise.
 | Node.js resolution | `require` and `import` of the document libraries from `/sandbox`, not only from the install directory | 2 |
 | Chromium | Headless Chromium as `sandbox` writes a screenshot of a local `file://` page | 3 |
 | Python Playwright | Playwright drives the shared or separately installed Chromium: open a local page, click, type, screenshot | 3 |
-| OpenClaw browser tool | Browser actions through the OpenClaw tool | #18 |
+| OpenClaw browser tool | Browser actions through the OpenClaw tool; fails in the #18 deployment, tracked in #27 | #18 |
 | Frontend | Create a project from the prepared template, install offline, `vite build`, Parcel build, html-inline single file | 3 |
 | p5.js | A local HTML page loads `p5.min.js` from the image and renders a canvas screenshot | 3 |
 | Forbidden downloads | With `--network none`, frontend and Playwright fixtures complete; any download attempt fails the fixture | 3 |
@@ -75,8 +75,8 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 | Finding | Status | Resolution |
 | --- | --- | --- |
 | B1 controlled packages vs. apt | Resolved in design | Conflict reproduced and fixed by a Perl 5.44 rebuild ([verification.md](verification.md)); hold every inventory package; compare versions before and after; re-resolve pins per release |
-| B2 deployment consumer | Moved to #18 | The review names clawshell-gateway `blueprint.sandbox_source` as the consumer; #18 must confirm it |
-| B3 sandbox policy | Split | Docker-level fixtures here use unique LibreOffice profiles and `pdffonts`; Landlock paths and the 512-process limit are checked in #18 |
+| B2 deployment consumer | Confirmed in #18 on OpenShell 0.0.92 | clawshell-gateway reads the image from the blueprint `sandbox_source`; the sandbox started from a digest reference. clawshell-gateway marked a second sandbox `running` only after the maintainer applied clawshell-gateway PR 190, which is not merged. OpenShell 0.0.92 is older than the 0.0.101 that `blueprint.yaml` requires ([deployment acceptance](#deployment-acceptance-18)) |
+| B3 sandbox policy | Split | Docker-level fixtures here use unique LibreOffice profiles and `pdffonts`; the Landlock read policy was exercised in #18 and denies `/var/lib/dpkg` ([deployment acceptance](#deployment-acceptance-18)); the 512-process limit is not yet measured |
 | B4 base source and version | Resolved | Digest fixed in `Dockerfile.tools`; version read from `openclaw --version`; base user and architecture checks fail closed |
 | B5 tag namespace | Resolved in design, implemented in Phase 4 | One tools tag, no architecture tags; reject existing tags; standard path rejects `-tools.` |
 | B6 vulnerability standard | Resolved | Trivy JSON; no fixable CRITICAL/HIGH; maintainer signs off unfixed findings |
@@ -86,3 +86,65 @@ against the expanded issue and the decisions in [decisions.md](decisions.md).
 | Partial publication | Accepted for Phase 4 | Report tags and digests already written |
 | Package set | Done | `--no-install-recommends`; Liberation and DejaVu fonts added; size recorded |
 | Build-args guard | No change | `Dockerfile.tools` declares no `*_INTEGRITY` or `*_TARBALL` ARG |
+
+## Deployment acceptance (#18)
+
+The maintainer ran two amd64 rounds in the test deployment.
+The 2026-11-01 round produced every result below except two:
+the `running` provisioning result and the OpenClaw browser tool result come from the 2026-11-02 round.
+Results, decisions, and screenshots are in the
+[#18 comments](https://github.com/derekhsu/NemoClaw/issues/18).
+In this section, Chrome means the Chrome Headless Shell that Python Playwright launches by default.
+Chromium means Debian Chromium, `/usr/bin/chromium`, which the fixture table's Chromium row tests.
+
+### Deployment
+
+| Item | Value |
+| --- | --- |
+| Image reference | `docker.io/derekhsu/openshell-openclaw:2026.9.2-tools.1` |
+| Index digest | `sha256:d22a7f704413c8a0ab1ececc2c422209d2906481dfc6cec38ff19da7e377a107` |
+| amd64 manifest digest | `sha256:2a05b9d0969b7d50967efc205af0fe9a85ce2a9aa4af5c1b3e2f542dc3f1c7aa` |
+| amd64 image ID (config digest) | `sha256:9e08b5cb5e7200582e9c1e35aaade75b45aa1bfe52b04a406470e1a6f84409ff` |
+| Runtime | OpenShell 0.0.92 with the Podman driver. `min_openshell_version` and `max_openshell_version` in `blueprint.yaml` are 0.0.101; the maintainer accepted 0.0.92 for this round |
+| Deployment system | clawshell-gateway, test deployment |
+| Image selection | Blueprint `sandbox_source` set to `derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
+| Transfer | The test deployment host has no Internet access. The amd64 manifest and blobs were copied as an `oci-archive` and loaded with `podman load`; the manifest digest and image ID stayed the same as on Docker Hub |
+| Network policy | Restricted tier with one custom preset that lets only Chrome reach the internal SSO site and its redirect host on port 443 |
+
+### Results
+
+| Check | Result |
+| --- | --- |
+| Sandbox image | Podman reports the sandbox container image as `docker.io/derekhsu/openshell-openclaw@sha256:2a05b9d0…` |
+| Sandbox start | OpenShell reported `Ready` about 2 seconds after creation |
+| clawshell-gateway provisioning | clawshell-gateway marked the sandbox `error`. `openclaw onboard` prints a retired-config warning on stderr, the line reaches clawshell-gateway with an `ERROR:` prefix, and clawshell-gateway treats any `ERROR:` line as fatal. A sandbox from the standard `2026.9.2-r2` image fails the same way, so the tools image is not the cause. clawshell-gateway PR 190 (private repository) proposes the fix. After the maintainer applied PR 190 to the test deployment as a hot-patch, clawshell-gateway marked a second sandbox from the same digest `running` |
+| Phase 2 fixtures | 18 of 19 pass. `controlled_packages` fails because the policy gives no read access to `/var/lib/dpkg`; the same check passes in the build workflow |
+| Phase 3 fixtures | 5 of 5 pass |
+| `AF_UNIX` | Stream sockets and `socketpair` work; LibreOffice needs no shim |
+| Python Playwright on the allowed site | Opens the page, clicks and types into a field, and saves a screenshot. The form is not submitted |
+| Denied destinations | `curl` to the allowed site, Chrome to a public site, and Chrome to an undeclared internal host are all denied |
+| OpenClaw browser tool | Fails through an agent session and when run directly in the sandbox without a model; the three causes follow the table. The fix is not chosen and may change the image. Tracked in [#27](https://github.com/derekhsu/NemoClaw/issues/27) |
+
+The OpenClaw browser tool fails for three causes.
+The test observed cause 1 with `openclaw browser open` and cause 3 with `openclaw browser snapshot`.
+The test did not observe cause 2 as a failure. The snapshot error shows that the tool starts `/usr/bin/chromium`, and the custom preset allows only Chrome.
+
+1. `openclaw browser open` fails with `getaddrinfo EAI_AGAIN`.
+   OpenClaw 2026.9.2 resolves every hostname with `dns.lookup` before navigation.
+   The sandbox has no DNS; outbound connections go only through the OpenShell proxy.
+   Setting `browser.ssrfPolicy.allowedHostnames` does not skip the lookup.
+   The maintainer removed the setting from the test configuration after the retry.
+2. The tool starts `/usr/bin/chromium` instead of Chrome.
+   The custom preset does not allow that binary.
+3. `openclaw browser snapshot` fails because `/usr/bin/chromium` reports `No usable sandbox!`.
+   OpenClaw suggests `browser.noSandbox: true`.
+   That setting turns off the Chromium sandbox and breaks the #18 rule against lowering browser security, so the test did not use it.
+
+### Open items
+
+- OpenClaw browser tool: fails in the sandbox; the fix is not chosen. #27 lists the options.
+- `controlled_packages` in the deployment: fails because the policy gives no read access to `/var/lib/dpkg`.
+  No decision yet between granting that read access, changing the fixture for deployments, or accepting the failure.
+- arm64 acceptance: the test deployment host is amd64. Deferred, not scheduled.
+- Cold-start budget: one measurement of about 2 seconds to `Ready`; no limit set.
+- 512-process limit under parallel LibreOffice and Chrome: not measured.

@@ -21,6 +21,9 @@ on:
       - scripts/lib/patch-bundled-npm-*.mts
       - scripts/upgrade-bundled-npm.mts
       - scripts/security/**
+      - scripts/check-brew-nested-landlock.sh
+      - scripts/lib/landlock-no-root-readdir.pl
+      - ci/trivy-standard-image-exceptions.json
   workflow_dispatch:
 
 permissions:
@@ -105,31 +108,22 @@ jobs:
           exit-code: "0"
 
       # Release rule: the standard image ships no CRITICAL or HIGH finding
-      # that has a fixed version. The step summary counts findings that have no
-      # fixed version; they do not fail the job.
+      # that has a fixed version, unless an exact, unexpired entry in
+      # ci/trivy-standard-image-exceptions.json covers it. The step summary
+      # counts findings that have no fixed version; they do not fail the job.
       - name: Reject fixable CRITICAL and HIGH findings
-        run: |
-          set -euo pipefail
-          jq -r '[.Results[]? | .Target as $target | .Vulnerabilities[]?
-              | select(.FixedVersion != null and .FixedVersion != "")
-              | "\(.Severity) \(.VulnerabilityID) \(.PkgName) \(.InstalledVersion) -> \(.FixedVersion) (\($target))"]
-            | .[]' "$OUT/trivy.json" | sort -u > "$OUT/fixable.txt"
-          jq -r '[.Results[]?.Vulnerabilities[]? | select(.FixedVersion == null or .FixedVersion == "")] | length' \
-            "$OUT/trivy.json" > "$OUT/unfixed-count.txt"
-          {
-            echo "### Trivy (${{ matrix.arch }})"
-            echo
-            echo "- fixable CRITICAL/HIGH: $(wc -l < "$OUT/fixable.txt")"
-            echo "- CRITICAL/HIGH without a fix: $(cat "$OUT/unfixed-count.txt")"
-            if [ -s "$OUT/fixable.txt" ]; then
-              echo
-              sed 's/^/- /' "$OUT/fixable.txt"
-            fi
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ -s "$OUT/fixable.txt" ]; then
-            echo "ERROR: the standard image has fixable CRITICAL or HIGH findings" >&2
-            exit 1
-          fi
+        run: >-
+          scripts/security/reject-fixable-trivy-findings.sh
+          "$OUT/trivy.json" ci/trivy-standard-image-exceptions.json "$OUT" "${{ matrix.arch }}"
+
+      # Homebrew inside OpenShell runs under an outer Landlock policy that does
+      # not grant read on "/". Install a formula with post-install dependencies
+      # under an equivalent sandbox, so a Homebrew bump that breaks in-sandbox
+      # installs fails the pull request (Homebrew/brew#24446,
+      # HOMEBREW_NO_SANDBOX_LINUX deprecation). Needs formulae.brew.sh and
+      # ghcr.io, so it runs here and not on the release path.
+      - name: Check brew install under nested Landlock
+        run: scripts/check-brew-nested-landlock.sh "$STANDARD_IMAGE"
 
       - name: Upload Trivy evidence
         if: always()

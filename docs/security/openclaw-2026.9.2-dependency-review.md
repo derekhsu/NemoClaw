@@ -324,6 +324,31 @@ The next rebuild of each of those images installs `5.0.12`.
 The candidate does not add an audit exception, lower an audit threshold, or change network policy.
 Image build, Trivy scan, and runtime validation of `2026.9.2-r3` remain pending.
 
+## Homebrew Update for 2026.9.2-r4
+
+`2026.9.2-r4` moves the bundled Homebrew from `5.1.12` to `7.0.12` so that `brew install` works inside an OpenShell sandbox (NVIDIA/NemoClaw#14092).
+`Dockerfile.base` preinstalls Homebrew's portable Ruby `4.0.9`, so the scan covers the Ruby that `brew` runs.
+
+The OpenClaw Standard Verify scan of the r4 candidate reports one new fixable finding on amd64 and arm64.
+
+| Finding | Package | Location | Fixed in |
+| --- | --- | --- | --- |
+| `CVE-2026-33210` (CRITICAL, GHSA-3m6g-2423-7cp3) | `json` `2.18.0` default gem | `/home/linuxbrew/.linuxbrew/Homebrew/Library/Homebrew/vendor/portable-ruby/4.0.9/` | `2.19.2` |
+
+Homebrew `7.0.12` and Homebrew `main` both ship portable Ruby `4.0.9`, so no Homebrew release contains the fix.
+The advisory applies only when a caller parses JSON with `allow_duplicate_key: false`.
+Homebrew `7.0.12` passes only `allow_duplicate_key: true`, in `Library/Homebrew/livecheck/strategy/json.rb`.
+
+`ci/trivy-standard-image-exceptions.json` records a `not-affected` exception for this finding.
+`scripts/security/reject-fixable-trivy-findings.sh` applies it with these rules:
+
+- An entry matches one finding exactly: vulnerability ID, package, installed version, severity, and package path.
+- An entry expires within 30 days and records an owner, a NemoClaw tracking issue, a rationale, and compensating controls.
+- A malformed, duplicate, expired, or unused entry fails the gate.
+- Every other fixable CRITICAL or HIGH finding still fails the gate.
+
+Remove the entry when Homebrew ships a portable Ruby with `json` `2.19.2` or later, and bump `HOMEBREW_VERSION` to that release.
+
 ## Existing security and runtime contracts
 
 The supply-chain gates are unchanged: unpinned versions are rejected, versions

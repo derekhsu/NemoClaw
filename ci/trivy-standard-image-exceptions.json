@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "vulnerability": "CVE-2026-33210",
+      "package": "json",
+      "installedVersion": "2.18.0",
+      "severity": "CRITICAL",
+      "pkgPath": "home/linuxbrew/.linuxbrew/Homebrew/Library/Homebrew/vendor/portable-ruby/4.0.9/lib/ruby/gems/4.0.0/specifications/default/json-2.18.0.gemspec",
+      "decision": "not-affected",
+      "owner": "derekhsu",
+      "expires": "2026-12-03",
+      "trackingIssue": "https://github.com/NVIDIA/NemoClaw/issues/14092",
+      "rationale": "json 2.18.0 is a default gem of Homebrew 7.0.12's portable Ruby 4.0.9, and Homebrew main ships the same portable Ruby. GHSA-3m6g-2423-7cp3 applies only when a caller parses with `allow_duplicate_key: false`; Homebrew 7.0.12 passes only `allow_duplicate_key: true` (livecheck/strategy/json.rb). Remove this entry when Homebrew bumps portable Ruby to a release with json 2.19.2 or later.",
+      "compensatingControls": [
+        "Homebrew and its portable Ruby run as the unprivileged sandbox user inside the OpenShell Landlock and network policy.",
+        "The OpenClaw Standard Verify gate fails when this entry expires or no longer matches a finding."
+      ]
+    }
+  ]
+}

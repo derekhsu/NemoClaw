@@ -53,11 +53,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "What secret number did I give you?",
+      "--query=What secret number did I give you?",
       "--quiet",
-      "--resume",
-      "20260612_050401_aa9d27",
+      "--resume=20260612_050401_aa9d27",
     ]);
   });
 
@@ -77,15 +75,11 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Summarize the latest turn",
+      "--query=Summarize the latest turn",
       "--quiet",
-      "--continue",
-      "daily check",
-      "--provider",
-      "custom",
-      "--skills",
-      "memory,session_search",
+      "--continue=daily check",
+      "--provider=custom",
+      "--skills=memory,session_search",
       "--ignore-rules",
     ]);
   });
@@ -99,8 +93,7 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Repeat the latest turn",
+      "--query=Repeat the latest turn",
       "--quiet",
       "--continue",
     ]);
@@ -117,11 +110,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Repeat the latest turn",
+      "--query=Repeat the latest turn",
       "--quiet",
-      canonical,
-      "daily check",
+      `${canonical}=daily check`,
     ]);
   });
 
@@ -131,11 +122,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Repeat the latest turn",
+      "--query=Repeat the latest turn",
       "--quiet",
-      "--continue",
-      "daily console",
+      "--continue=daily console",
     ]);
   });
 
@@ -182,15 +171,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
   });
 
   it.each([
-    [
-      ["-p", "work"],
-      ["--profile", "work"],
-    ],
-    [
-      ["--profile", "work"],
-      ["--profile", "work"],
-    ],
-    [["--profile=work"], ["--profile", "work"]],
+    [["-p", "work"], ["--profile=work"]],
+    [["--profile", "work"], ["--profile=work"]],
+    [["--profile=work"], ["--profile=work"]],
   ])("preserves profile selector %j before translated chat routing (#5254)", (profileArgs, expected) => {
     const run = runWrapper([...profileArgs, "-c", "-z", "Repeat the latest turn"], {});
 
@@ -198,8 +181,7 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.realArgv).toEqual([
       ...expected,
       "chat",
-      "--query",
-      "Repeat the latest turn",
+      "--query=Repeat the latest turn",
       "--quiet",
       "--continue",
     ]);
@@ -214,11 +196,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Repeat it",
+      "--query=Repeat it",
       "--quiet",
-      "--resume",
-      "20260612_050401_aa9d27",
+      "--resume=20260612_050401_aa9d27",
       "--yolo",
       "--accept-hooks",
     ]);
@@ -233,11 +213,9 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.realArgv).toEqual([
       "chat",
-      "--query",
-      "Repeat it",
+      "--query=Repeat it",
       "--quiet",
-      "--resume",
-      "20260612_050401_aa9d27",
+      "--resume=20260612_050401_aa9d27",
       "--no-restore-cwd",
       "--safe-mode",
     ]);
@@ -303,7 +281,7 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
           "#!/usr/bin/env bash",
           'if [ "${NEMOCLAW_HERMES_ADAPTER_VERSION_PROBE:-}" = "1" ]; then printf "Hermes Agent v0.21.3\\n"; exit 0; fi',
           'if [ "$1" = "-z" ]; then printf "seed:%s\\n" "$2" > "$NEMOCLAW_FAKE_SESSIONS"; exit 0; fi',
-          'if [ "$1" = "chat" ] && [ "$2" = "--query" ] && [ "$4" = "--quiet" ] && { [ "$5" = "--resume" ] || [ "$5" = "--continue" ]; } && [ "$6" = "seed" ]; then printf "seed:%s\\n" "$3" >> "$NEMOCLAW_FAKE_SESSIONS"; exit 0; fi',
+          'if [ "$1" = "chat" ] && [ "${2%%=*}" = "--query" ] && [ "$3" = "--quiet" ] && { [ "$4" = "--resume=seed" ] || [ "$4" = "--continue=seed" ]; }; then printf "seed:%s\\n" "${2#--query=}" >> "$NEMOCLAW_FAKE_SESSIONS"; exit 0; fi',
           "exit 3",
           "",
         ].join("\n"),
@@ -352,7 +330,31 @@ describe.skipIf(!canRun)("agents/hermes/hermes-wrapper.py one-shot routing", () 
     expect(run.status).toBe(0);
     expect(run.stderr).toBe("");
     expect(run.realInvoked).toBe(true);
-    expect(run.realArgs).toBe("chat --query Repeat a=b --quiet --resume 20260612_050401_aa9d27");
+    expect(run.realArgs).toBe("chat --query=Repeat a=b --quiet --resume=20260612_050401_aa9d27");
+  });
+
+  it.each([
+    [
+      ["--resume=seed", "--oneshot=--help"],
+      ["chat", "--query=--help", "--quiet", "--resume=seed"],
+    ],
+    [
+      ["--resume=seed", "--oneshot=--flag=value"],
+      ["chat", "--query=--flag=value", "--quiet", "--resume=seed"],
+    ],
+    [
+      ["--resume=-seed", "--oneshot=Repeat it"],
+      ["chat", "--query=Repeat it", "--quiet", "--resume=-seed"],
+    ],
+    [
+      ["--continue=seed", "--oneshot=Repeat it", "--model=-model"],
+      ["chat", "--query=Repeat it", "--quiet", "--continue=seed", "--model=-model"],
+    ],
+  ])("keeps dash-leading value %j bound to its option on translated resumed one-shots (#5254)", (argv, expected) => {
+    const run = runWrapper(argv, {});
+
+    expect(run.status).toBe(0);
+    expect(run.realArgv).toEqual(expected);
   });
 
   it("passes positional subcommands through instead of translating nested one-shot flags (#5254)", () => {

@@ -375,7 +375,7 @@ RUN find /opt/nemoclaw-hermes-config -type d -exec chmod 755 {} + \
         /scripts/patch-bundled-npm-tar.mts \
     && chmod -R a+rX /src/lib/messaging
 
-ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=39d5ee84fd0175a0d837b8cd588c0c87d842e507b55e16f03d2a045df07ecccb
+ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=dcba6900be67a1e01931b0212b2e89ba63c667a6b7d15787752078f2d523e6b5
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256" /opt/nemoclaw-hermes-config/image-build-probes.py \
@@ -1185,8 +1185,7 @@ RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway/discord_message_recovery
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway/discord_message_recovery.db)" = "sandbox:sandbox 660" \
     && rm -f /sandbox/.hermes/gateway/discord_message_recovery.db \
         /sandbox/.hermes/gateway/discord_message_recovery.db-wal \
-        /sandbox/.hermes/gateway/discord_message_recovery.db-shm \
-    && rm -f /opt/nemoclaw-hermes-config/image-build-probes.py
+        /sandbox/.hermes/gateway/discord_message_recovery.db-shm
 
 # Pin config hash at build time for integrity verification at startup. Invoke
 # the installed runtime guard's `_canonical_mcp_servers_digest` directly so
@@ -1219,6 +1218,19 @@ RUN chown root:root /sandbox/.nemoclaw \
     && chown sandbox:sandbox /sandbox/.nemoclaw/state /sandbox/.nemoclaw/migration /sandbox/.nemoclaw/snapshots /sandbox/.nemoclaw/staging \
     && printf '%s' '{}' > /sandbox/.nemoclaw/config.json \
     && chown sandbox:sandbox /sandbox/.nemoclaw/config.json
+
+# /sandbox belongs to the sandbox user, so root can create the api profile
+# chain there only while it holds CAP_DAC_OVERRIDE. OpenShell 0.0.92 with
+# podman drops it (and CAP_FSETID) from every sandbox, so pre-create the
+# root-owned traverse-only chain here and let the volume copy-up supply it.
+RUN install -d -o root -g root -m 0711 /sandbox/.hermes-api /sandbox/.hermes-api/profiles
+
+# Prove the root guard's api profile bootstrap, normalize, write-config and
+# verify, and a default-profile write-config, work without CAP_DAC_OVERRIDE
+# and CAP_FSETID, as ClawShell runs them on such runtimes (NemoClaw #21).
+RUN /usr/bin/setpriv --bounding-set -dac_override,-fsetid -- /opt/hermes/.venv/bin/python -I \
+        /opt/nemoclaw-hermes-config/image-build-probes.py guard-without-dac-override \
+    && rm -f /opt/nemoclaw-hermes-config/image-build-probes.py
 
 # OpenShell's macOS VM backend currently remaps extracted rootfs ownership to
 # the host uid/gid before startup. Hermes uses /sandbox as a read_write path, so
@@ -1271,6 +1283,11 @@ RUN check_metadata() { \
     && test -s /sandbox/.hermes/.config-hash \
     && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /sandbox/.hermes/.config-hash \
     && check_metadata /sandbox/.nemoclaw 'root:root 755' \
+    && check_metadata /sandbox/.hermes-api 'root:root 711' \
+    && check_metadata /sandbox/.hermes-api/profiles 'root:root 711' \
+    && check_absent /sandbox/.hermes-api/profiles/api \
+    && check_absent /sandbox/.nemoclaw/hermes-api.config-hash \
+    && check_absent /sandbox/.nemoclaw/hermes-api-profile.json \
     && check_metadata /scripts/patch-bundled-npm-brace-expansion.mts 'root:root 444' \
     && check_metadata /scripts/lib/patch-bundled-npm-ip-address.mts 'root:root 444' \
     && check_metadata /scripts/patch-bundled-npm-tar.mts 'root:root 444' \

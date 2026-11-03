@@ -394,6 +394,162 @@ def verify_discord_reopen() -> None:
     assert store.call(reopen_probe) == ("gateway-reopened",)
 
 
+RUNTIME_CONFIG_GUARD = "/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py"
+CAP_DAC_OVERRIDE = 1
+CAP_FSETID = 4
+
+
+def _effective_capabilities() -> int:
+    for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
+        if line.startswith("CapEff:"):
+            return int(line.split()[1], 16)
+    raise AssertionError("CapEff is missing from /proc/self/status")
+
+
+def _load_runtime_config_guard():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "nemoclaw_runtime_config_guard_probe", RUNTIME_CONFIG_GUARD
+    )
+    assert spec is not None and spec.loader is not None
+    guard = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = guard
+    spec.loader.exec_module(guard)
+    return guard
+
+
+def _metadata(path: str) -> tuple[int, int, int]:
+    import os
+    import stat
+
+    st = os.lstat(path)
+    return st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)
+
+
+def _apply_metadata(target: str, source: str) -> None:
+    import os
+
+    uid, gid, mode = _metadata(source)
+    os.chown(target, uid, gid)
+    # chown can clear set-id bits, so chmod follows it.
+    os.chmod(target, mode)
+
+
+def verify_guard_without_dac_override() -> None:
+    """Prove root guard writes need neither CAP_DAC_OVERRIDE nor CAP_FSETID.
+
+    OpenShell 0.0.92 with podman drops both capabilities from every sandbox,
+    so ClawShell's root exec of the guard is held to ordinary permission bits
+    (NemoClaw #21). Run the api profile bootstrap, its retry, normalize,
+    write-config and verify, plus a default-profile write-config against a
+    copy of /sandbox/.hermes, in a process without both capabilities. Then
+    remove every artifact so first boot still seals a fresh api profile.
+    """
+    import contextlib
+    import hashlib
+    import io
+    import os
+    import shutil
+    import tempfile
+
+    assert os.geteuid() == 0 and os.getegid() == 0
+    caps = _effective_capabilities()
+    dropped = (1 << CAP_DAC_OVERRIDE) | (1 << CAP_FSETID)
+    assert not caps & dropped, f"probe must run without DAC_OVERRIDE/FSETID: {caps:#x}"
+
+    guard = _load_runtime_config_guard()
+    # main() joins these groups before dispatching any action.
+    guard._join_managed_runtime_groups()
+    api_dir = guard.HERMES_API_PROFILE_DIR
+    profiles_dir = os.path.dirname(api_dir)
+    api_root = os.path.dirname(profiles_dir)
+    sealed_artifacts = (api_dir, guard.HERMES_API_ANCHOR_FILE, guard.HERMES_API_RECORD_FILE)
+    for path in sealed_artifacts:
+        assert not os.path.lexists(path), path
+    chain = {path: _metadata(path) for path in (api_root, profiles_dir)}
+    assert set(chain.values()) == {(0, 0, 0o711)}, chain
+
+    scratch = tempfile.mkdtemp(prefix="nemoclaw-guard-probe-")
+    try:
+        guard.HERMES_API_STATE_FILE = os.path.join(scratch, "hermes-api-restart-seal.json")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            guard.bootstrap_api_profile()
+            guard.bootstrap_api_profile()
+            guard.normalize_api_profile()
+            config = Path(api_dir, "config.yaml").read_bytes()
+            guard.write_api_config_transaction(hashlib.sha256(config).hexdigest(), config)
+            guard.verify_api_profile()
+        assert output.getvalue().split() == [
+            "bootstrapped=1",
+            "verified=1",
+            "normalized=1",
+            "verified=1",
+        ], output.getvalue()
+        assert not os.path.lexists(guard.HERMES_API_STATE_FILE)
+
+        # Default profile: seal, replace, and restore /sandbox/.hermes
+        # metadata on a copy, so the image's own sealed files stay untouched.
+        sandbox_copy = os.path.join(scratch, "sandbox")
+        hermes_copy = os.path.join(sandbox_copy, ".hermes")
+        os.mkdir(sandbox_copy, 0o700)
+        os.mkdir(hermes_copy, 0o700)
+        for name in ("config.yaml", ".env"):
+            target = os.path.join(hermes_copy, name)
+            shutil.copyfile(f"/sandbox/.hermes/{name}", target, follow_symlinks=False)
+            _apply_metadata(target, f"/sandbox/.hermes/{name}")
+        strict_text = Path("/etc/nemoclaw/hermes.config-hash").read_text(encoding="utf-8")
+        copied_text = strict_text.replace("  /sandbox/.hermes/", f"  {hermes_copy}/")
+        assert copied_text != strict_text
+        hash_copy = os.path.join(scratch, "hermes.config-hash")
+        for target, source in (
+            (hash_copy, "/etc/nemoclaw/hermes.config-hash"),
+            (os.path.join(hermes_copy, ".config-hash"), "/sandbox/.hermes/.config-hash"),
+        ):
+            Path(target).write_text(copied_text, encoding="utf-8")
+            _apply_metadata(target, source)
+        _apply_metadata(hermes_copy, "/sandbox/.hermes")
+        _apply_metadata(sandbox_copy, "/sandbox")
+        before = {
+            path: _metadata(path)
+            for path in (
+                sandbox_copy,
+                hermes_copy,
+                *(os.path.join(hermes_copy, name) for name in guard.SEALED_FILE_NAMES),
+            )
+        }
+        assert before[hermes_copy] == _metadata("/sandbox/.hermes"), before
+        assert before[sandbox_copy] == _metadata("/sandbox"), before
+        state_dir = os.path.join(scratch, "run")
+        os.mkdir(state_dir, 0o700)
+        state_file = os.path.join(state_dir, "hermes-restart-seal.json")
+        config = Path(hermes_copy, "config.yaml").read_bytes()
+        guard.write_config_transaction(
+            hermes_copy, hash_copy, state_file, hashlib.sha256(config).hexdigest(), config
+        )
+        after = {path: _metadata(path) for path in before}
+        assert after == before, (before, after)
+        assert not os.path.lexists(state_file)
+        assert not os.path.lexists(
+            os.path.join(hermes_copy, guard.RESTART_ORPHAN_MARKER_NAME)
+        )
+    finally:
+        # The copies end up sandbox-owned; hand them back to root to remove them.
+        for current, dirs, files in os.walk(scratch):
+            for name in (*dirs, *files):
+                os.chown(os.path.join(current, name), 0, 0, follow_symlinks=False)
+        shutil.rmtree(scratch)
+        if os.path.isdir(api_dir):
+            shutil.rmtree(api_dir)
+        for path in sealed_artifacts[1:]:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
+    for path in sealed_artifacts:
+        assert not os.path.lexists(path), path
+    assert {path: _metadata(path) for path in chain} == chain
+
+
 COMMANDS: dict[str, Callable[[], None]] = {
     "cron-backup": verify_cron_backup,
     "cron-create": verify_cron_create,
@@ -405,6 +561,7 @@ COMMANDS: dict[str, Callable[[], None]] = {
     "discord-reopen": verify_discord_reopen,
     "gateway-process-identity": verify_gateway_process_identity,
     "gateway-runtime-metadata": verify_gateway_runtime_metadata,
+    "guard-without-dac-override": verify_guard_without_dac_override,
     "langfuse-credentials": verify_langfuse_credentials,
     "neutral-platform-inertness": verify_neutral_platform_inertness,
     "profile-policy": verify_profile_policy,

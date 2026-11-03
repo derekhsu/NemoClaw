@@ -424,6 +424,84 @@ describe.skipIf(process.platform === "win32")("Hermes api profile guard", () => 
     expect(defaultPaths.map((target) => fs.readFileSync(target))).toEqual(defaultBefore);
   });
 
+  // OpenShell 0.0.92 with podman drops CAP_DAC_OVERRIDE and CAP_FSETID from
+  // every sandbox (#21). The root-container lane is the image build probe
+  // `guard-without-dac-override`; these cases pin the guard-side seams.
+  it("joins the image sandbox and api groups before dispatching any action (#21)", () => {
+    const fixture = createFixture();
+    expect(bootstrap(fixture).status).toBe(0);
+    const result = verifyApiProfile(fixture, [], {
+      prelude: "module._join_managed_runtime_groups = lambda: print('joined-managed-groups')",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual(["joined-managed-groups", "verified=1"]);
+  });
+
+  it("adds only missing managed groups for root and tolerates a missing CAP_SETGID (#21)", () => {
+    const script = String.raw`
+import importlib.util, json, os, sys, types
+spec = importlib.util.spec_from_file_location("guard_groups_fixture", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+gids = {"sandbox": 999, "api": 997}
+module.grp.getgrnam = lambda name: types.SimpleNamespace(gr_gid=gids[name])
+calls = []
+results = {}
+def run(euid, groups, egid=0, deny=False):
+    calls.clear()
+    os.geteuid = lambda: euid
+    os.getegid = lambda: egid
+    os.getgroups = lambda: list(groups)
+    def setgroups(value):
+        calls.append(list(value))
+        if deny:
+            raise PermissionError(1, "Operation not permitted")
+    os.setgroups = setgroups
+    module._join_managed_runtime_groups()
+    return [list(call) for call in calls]
+results["root"] = run(0, [0])
+results["already"] = run(0, [0, 997, 999])
+results["partial"] = run(0, [0, 999])
+results["egid"] = run(0, [0], egid=997)
+results["nonroot"] = run(998, [999])
+results["denied"] = run(0, [0], deny=True)
+print(json.dumps(results))
+`;
+    const result = spawnSync("python3", ["-c", script, RUNTIME_CONFIG_GUARD], {
+      encoding: "utf-8",
+      timeout: 15000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      root: [[0, 999, 997]],
+      already: [],
+      partial: [[0, 999, 997]],
+      egid: [[0, 999]],
+      nonroot: [],
+      denied: [[0, 999, 997]],
+    });
+  });
+
+  it("explains a missing pre-created api chain instead of a bare EACCES (#21)", () => {
+    const fixture = createFixture();
+    const result = bootstrap(fixture, [], {
+      prelude: [
+        "_real_mkdir = os.mkdir",
+        "def _denied_mkdir(path, *args, **kwargs):",
+        `    if path == ${JSON.stringify(fixture.apiRootDir)}:`,
+        "        raise PermissionError(13, 'Permission denied', path)",
+        "    return _real_mkdir(path, *args, **kwargs)",
+        "os.mkdir = _denied_mkdir",
+      ].join("\n"),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("without CAP_DAC_OVERRIDE");
+    expect(result.stderr).toContain("must pre-create the root-owned /sandbox/.hermes-api chain");
+    expect(fs.existsSync(fixture.apiRootDir)).toBe(false);
+    expect(fs.existsSync(fixture.apiHashPath)).toBe(false);
+  });
+
   it("bootstrap never prints the generated key", () => {
     const fixture = createFixture();
     const result = bootstrap(fixture);

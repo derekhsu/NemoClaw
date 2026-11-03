@@ -79,6 +79,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | 名稱 | 版本 | 架構 |
 |------|------|------|
 | officecli | 1.0.160 | amd64、arm64 |
+| himalaya | 2.2.1 | amd64、arm64;官方 release 的靜態連結執行檔,與 brew 安裝的版本相同 |
 | yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.60.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
@@ -195,6 +196,17 @@ pnpm exec html-inline bundle/index.html > bundle.html
 - `pptxgenjs` 4.0.1 產生的 PPTX 不符合 OpenXML schema 的元素順序,`officecli validate` 會回報錯誤;PowerPoint 與 LibreOffice 仍可開啟。officecli 自己建立的 PPTX 可以通過驗證。
 - `markitdown` 只安裝 `pptx` 支援,不能轉換 DOCX。
 - Tesseract 4.1 的中文語言資料可能誤認少數字元。CI 測試以兩行常用字詞驗證,要求相似度不低於 0.8。
+
+### 4.9 himalaya
+
+- 執行檔在 `/usr/local/bin/himalaya`,另有 bash 補全與 man page。不需要 brew,也不需要上網安裝。
+- 連線郵件伺服器仍需要網路政策放行該主機;himalaya 會讀取 `https_proxy`、`all_proxy`。
+- OpenClaw 2026.9.2 內建的 himalaya skill 是照 v1 的指令與設定格式寫的([openclaw/openclaw#129034](https://github.com/openclaw/openclaw/issues/129034)),例如 `folder list`、`account configure` 與 `backend.*` 設定,在 v2 都無法使用。
+- 映像在 `/sandbox/.openclaw/skills/himalaya` 放一份 v2 版的 skill。OpenClaw 狀態目錄的 skill 優先於內建 skill,所以 agent 看到的是 v2 版。內容在 `tools/openclaw-tools-image/skills/himalaya/`。
+- 上游內建 skill 改成 v2 之後,移除這份副本。
+- 這份 skill 的擁有者與權限和 `/sandbox/.openclaw` 其他內容相同(`sandbox:sandbox`,目錄 2770、檔案 660)。NemoClaw 啟動時只補建目錄、修正擁有者,不會刪除它。如果沙箱還原的是舊映像留下的 `/sandbox/.openclaw`,這份 skill 可能不在,agent 會改用內建的 v1 版;執行檔不受影響。
+- 弱點掃描:官方執行檔沒有內嵌 Rust 依賴清單(cargo-auditable),Trivy 看不到 himalaya 用的 Rust 套件。掃描通過不代表這個執行檔沒有已知弱點,發布簽核需要另外涵蓋它。更新版本時,對照上游 release 的 `Cargo.lock` 檢查依賴。
+- Phase 2 以離線 Maildir 帳號驗證預設設定路徑、搜尋、讀信、複製,並以 `openclaw skills info himalaya --json` 確認 OpenClaw 解析到的是 `/sandbox/.openclaw/skills/himalaya/SKILL.md`。
 
 ## 5. 離線限制
 

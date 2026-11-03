@@ -9,7 +9,7 @@
 # the base image's user, entrypoint, command, working directory, environment,
 # healthcheck, and controlled package versions. It ships no compiler.
 
-ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:194d3ad626bc727a8e15473176e05c3a384d389864d70b580231348b4114c234
+ARG BASE_IMAGE=docker.io/derekhsu/openshell-openclaw@sha256:e654a0695522944ec43c7eeabb6aca9472f385c117a206e5000f8a61b1b96056
 
 # Downloaded single-file tools, verified by checksum. The final stage
 # installs the file for its own architecture through a bind mount, so the

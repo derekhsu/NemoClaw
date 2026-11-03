@@ -24,9 +24,9 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | 額外工具 | 無 | 第 3 節列出的套件 |
 | 映像大小 | 約 2.3 GB | 約 5.6 GB(amd64 增加 3.36 GB,arm64 增加 3.26 GB) |
 
-目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r3`,
+目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r4`,
 index digest 為
-`sha256:194d3ad626bc727a8e15473176e05c3a384d389864d70b580231348b4114c234`。
+`sha256:e654a0695522944ec43c7eeabb6aca9472f385c117a206e5000f8a61b1b96056`。
 `Dockerfile.tools` 以這個 digest 作為預設 `BASE_IMAGE`。
 不使用 `2026.9.2` tag,因為它指向較舊的發布產物。
 
@@ -321,7 +321,11 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
   主要來自 Chromium、FFmpeg、libxml2 與 Tesseract。
   維護者已於 2026-11-01 逐一具名簽核這 67 個 CVE,清單在 track 的 `phase5-review.md`。
 
-以 `2026.9.2-r3` 為 base 的 tools 映像,發布前以驗證 workflow 的掃描結果重新比對。
+`2026.9.2-r4` 加入 Homebrew 7.0.12 與 Homebrew 的 portable Ruby。
+其中的 json 2.18.0 有一個可修補的 CRITICAL 弱點 CVE-2026-33210。標準映像把它判定為不受影響(Homebrew 不使用受影響的參數),並設了到 2026-12-03 為止的例外。
+tools 驗證把它算成 base 原有的弱點,不算 tools 層新增。
+
+以 `2026.9.2-r4` 為 base 的 tools 映像,發布前以驗證 workflow 的掃描結果重新比對。
 tools 層新增的尚無修補 CVE 如果不在上述簽核清單中,維護者要先簽核才能發布。
 
 ## 9. 驗證方式

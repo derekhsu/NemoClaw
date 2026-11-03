@@ -6,8 +6,8 @@
 > **日期**: 2026-10-31
 > **Fork**: `derekhsu/NemoClaw`
 > **分支**: `codex/issue-16-tools-image`(基於 `feat/image-only-cli`,commit `70ff5c849`)
-> **狀態**: #16 範圍內的 Phase 1–5 完成,維護者已於 2026-11-01 確認文件與交接;Task 3.4、5.3 移交 #18,部署驗收尚未完成;尚未發布映像
-> **Issue**: [#16](https://github.com/derekhsu/NemoClaw/issues/16)(映像與發布)、[#18](https://github.com/derekhsu/NemoClaw/issues/18)(部署驗收)
+> **狀態**: #16 範圍內的 Phase 1–5 完成,維護者已於 2026-11-01 確認文件與交接;Task 3.4、5.3 移交 #18。已發布 `2026.9.2-tools.1` 與 `2026.9.2-tools.3`(見 7.5 節)。#18 已以 tools.1 完成 amd64 部署驗收;arm64 與 process 上限由 #32 追蹤,瀏覽器工具由 #27 追蹤
+> **Issue**: [#16](https://github.com/derekhsu/NemoClaw/issues/16)(映像與發布)、[#18](https://github.com/derekhsu/NemoClaw/issues/18)(部署驗收)、[#32](https://github.com/derekhsu/NemoClaw/issues/32)(arm64 驗收)、[#27](https://github.com/derekhsu/NemoClaw/issues/27)(瀏覽器工具)
 > **Track**: `conductor/tracks/openclaw_tools_image_20261030/`
 
 ## 1. 摘要
@@ -22,7 +22,7 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | OpenClaw 與 Node.js 版本 | 由建置時的 pin 決定 | 與 base 標準映像相同,不升級 |
 | 執行設定 | — | `User`、`Entrypoint`、`Cmd`、`WorkingDir`、`Env`、`Healthcheck` 與 base 完全相同 |
 | 額外工具 | 無 | 第 3 節列出的套件 |
-| 映像大小 | 約 2.3 GB | 約 5.6 GB(amd64 增加 3.36 GB,arm64 增加 3.26 GB) |
+| 映像大小 | 約 2.3 GB | 約 5.6–5.7 GB(`2026.9.2-tools.3`:amd64 增加 3.37 GB,arm64 增加 3.27 GB) |
 
 目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r4`,
 index digest 為
@@ -43,13 +43,13 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | Phase 3 | Chromium、Python Playwright、離線前端建置 | 完成 |
 | Phase 4 | 發布 workflow | 完成 |
 | Phase 5 | 文件定稿、審查與交接 | 完成,維護者已於 2026-11-01 人工確認 |
-| #18 | 實際部署環境驗收 | 等 #16 發布第一個 tools 映像 |
+| #18 | 實際部署環境驗收 | 2026-11-02 以 `2026.9.2-tools.1` 完成 amd64 驗收;arm64 驗收與 512 個 process 上限由 #32 追蹤;瀏覽器工具由 #27 追蹤 |
 
 第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
-第 7 節的發布規則已由單元測試與 CI 驗證,但尚未實際推送映像。OpenClaw 瀏覽器工具與實際 sandbox policy 由 #18 驗證。
+第 7 節的發布規則已由單元測試與 CI 驗證,並已實際發布兩個 tools 映像(見 7.5 節)。#18 以 tools.1 在 amd64 部署環境驗證了 fixture、Playwright、LibreOffice 與被拒絕的連線目的地。OpenClaw 瀏覽器工具仍無法在 OpenShell sandbox 中開啟網頁,由 #27 追蹤。
 
 維護者已審閱文件與驗證證據,並[確認 Phase 5 文件與交接完成](https://github.com/derekhsu/NemoClaw/pull/20#issuecomment-6555856173)。
-實際部署、網路政策驗收與冷啟動預算仍由 #18 追蹤。
+[#18](https://github.com/derekhsu/NemoClaw/issues/18) 也確認冷啟動時間在預算內。arm64 部署驗收與 512 個 process 的上限由 [#32](https://github.com/derekhsu/NemoClaw/issues/32) 追蹤。
 
 ## 3. 工具清單
 
@@ -159,7 +159,7 @@ soffice -env:UserInstallation="file://${profile_dir}" \
 
 Phase 1 在 OpenShell sandbox(OpenShell 0.0.101、Docker compute driver)中確認 `AF_UNIX` socket 可用。
 因此 `soffice.py` 不需要 `LD_PRELOAD` shim,映像也不含編譯器。
-[#18](https://github.com/derekhsu/NemoClaw/issues/18) 會在實際部署環境重測。如果那裡的 `AF_UNIX` 被擋,這個決定要重新評估。
+[#18](https://github.com/derekhsu/NemoClaw/issues/18) 已以 tools.1 在 amd64 部署環境驗證 LibreOffice 轉檔;arm64 由 [#32](https://github.com/derekhsu/NemoClaw/issues/32) 驗收。如果部署環境的 `AF_UNIX` 被擋,這個決定要重新評估。
 
 ### 4.5 officecli
 
@@ -309,12 +309,22 @@ Docker Hub 無法一次原子寫入多個 tag。
 發布 workflow 的摘要會列出 index digest;也可以用以下指令查詢:
 
 ```bash
-docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-tools.1 \
+docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-tools.3 \
   --format '{{.Manifest.Digest}}'
 ```
 
 要回到標準映像,把設定改回標準映像的 digest。
 部署系統的實際設定位置與驗收由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 確認。
+
+### 7.5 已發布版本
+
+| tag | 發布 | index digest | base |
+|-----|------|--------------|------|
+| `2026.9.2-tools.1` | 2026-11-01 | `sha256:d22a7f704413c8a0ab1ececc2c422209d2906481dfc6cec38ff19da7e377a107` | `2026.9.2-r2`(`sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02`) |
+| `2026.9.2-tools.3` | 2026-11-03,run [41605644091](https://github.com/derekhsu/NemoClaw/actions/runs/41605644091),commit `e6f400192` | `sha256:2d50e437c3224487bc97cfc4b771249bed949a0f19faea48ab68cbe93d04a2a7` | `2026.9.2-r4`(`sha256:e654a0695522944ec43c7eeabb6aca9472f385c117a206e5000f8a61b1b96056`) |
+
+`2026.9.2-tools.2` 沒有發布。tools.3 比 tools.1 多了:r3 的 base 弱點修補、r4 加入的 Homebrew 7.0.12,以及 tools 層的 himalaya 2.2.1(4.9 節)。
+[#18](https://github.com/derekhsu/NemoClaw/issues/18) 的部署驗收用的是 tools.1。
 
 ## 8. 弱點掃描
 
@@ -337,8 +347,14 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
 其中的 json 2.18.0 有一個可修補的 CRITICAL 弱點 CVE-2026-33210。標準映像把它判定為不受影響(Homebrew 不使用受影響的參數),並設了到 2026-12-03 為止的例外。
 tools 驗證把它算成 base 原有的弱點,不算 tools 層新增。
 
-以 `2026.9.2-r4` 為 base 的 tools 映像,發布前以驗證 workflow 的掃描結果重新比對。
-tools 層新增的尚無修補 CVE 如果不在上述簽核清單中,維護者要先簽核才能發布。
+`2026.9.2-tools.3`(base `2026.9.2-r4`)發布時的掃描結果(兩個架構相同):
+
+- tools 層沒有新增可修補的 CRITICAL 或 HIGH 弱點。唯一可修補的弱點是 base 原有的 CVE-2026-33210。
+- tools 層新增 3 個不在上述清單中的尚無修補 HIGH 弱點:`imagemagick` 的 CVE-2026-119123,以及 `libxi6` 的 CVE-2026-109089、CVE-2026-109090。維護者已於 2026-11-03 在 [PR #37](https://github.com/derekhsu/NemoClaw/pull/37#issuecomment-6596033545) 簽核。
+- Trivy 掃不到 himalaya 的 Rust 依賴(4.9 節)。維護者已在同一則留言接受,依賴稽核尚未進行。
+
+之後的 tools 版本仍要以發布 workflow 的掃描結果重新比對。
+tools 層新增的尚無修補 CVE 如果不在 `phase5-review.md` 或 PR #37 的簽核清單中,維護者要先簽核才能發布。
 
 ## 9. 驗證方式
 
@@ -359,4 +375,4 @@ fixture 的執行條件:
 - 使用 `--network none` 與唯讀 root,只有 `/tmp` 與輸出目錄 `/out` 可寫入。
 - 不加 capability,啟用 `no-new-privileges`。
 
-OpenShell policy 下的檢查、OpenClaw browser 工具與冷啟動時間由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 驗收。
+OpenShell policy 下的檢查與冷啟動時間已由 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 以 tools.1 在 amd64 驗收;arm64 由 [#32](https://github.com/derekhsu/NemoClaw/issues/32) 追蹤,OpenClaw 瀏覽器工具由 [#27](https://github.com/derekhsu/NemoClaw/issues/27) 追蹤。

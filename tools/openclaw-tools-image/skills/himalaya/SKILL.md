@@ -106,7 +106,9 @@ they are already in the trash.
 
 ## Safety
 
-- Show the composed message and confirm before running anything with `--send`.
+- Before every send, show the complete message and its recipients (`To`, `Cc`,
+  `Bcc`) and get confirmation. This covers `message send`, which sends without
+  a `--send` flag, and `message compose`, `reply`, and `forward` with `--send`.
 - Confirm before deleting or moving many messages.
 - Use `-a/--account <name>` when several accounts exist.
 - Quote exact message IDs in summaries.

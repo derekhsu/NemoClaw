@@ -53,7 +53,7 @@ base_security_checks() {
   grep -Eq 'libonig[.]so[.]5' <<<"$(ldd /usr/bin/jq)"
   test "$(tmux -V)" = "tmux 3.5a"
   test "$(jq --version)" = jq-1.8.2
-  PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.8.3', pyexpat.EXPAT_VERSION"
+  PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.9.0', pyexpat.EXPAT_VERSION"
   printf '%s  %s\n' 4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7 \
     /usr/lib/python3.13/html/parser.py | sha256sum -c -
   PATH=/usr/bin:/bin python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2')"

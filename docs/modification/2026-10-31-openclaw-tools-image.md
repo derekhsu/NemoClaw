@@ -24,9 +24,9 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | 額外工具 | 無 | 第 3 節列出的套件 |
 | 映像大小 | 約 2.3 GB | 約 5.6 GB(amd64 增加 3.36 GB,arm64 增加 3.26 GB) |
 
-目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r2`,
+目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r3`,
 index digest 為
-`sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02`。
+`sha256:194d3ad626bc727a8e15473176e05c3a384d389864d70b580231348b4114c234`。
 `Dockerfile.tools` 以這個 digest 作為預設 `BASE_IMAGE`。
 不使用 `2026.9.2` tag,因為它指向較舊的發布產物。
 

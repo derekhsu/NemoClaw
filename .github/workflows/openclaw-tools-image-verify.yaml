@@ -17,6 +17,13 @@ on:
       - .github/workflows/openclaw-tools-image-verify.yaml
       - .github/workflows/openclaw-sandbox-image.yaml
       - scripts/openclaw-image-release.sh
+  pull_request:
+    branches:
+      - feat/image-only-cli
+    paths:
+      - Dockerfile.tools
+      - tools/openclaw-tools-image/**
+      - .github/workflows/openclaw-tools-image-verify.yaml
   workflow_dispatch:
 
 permissions:

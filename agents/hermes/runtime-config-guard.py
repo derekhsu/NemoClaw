@@ -5473,11 +5473,68 @@ def _api_env_key(env_path: str) -> str | None:
     return None
 
 
+# Image groups whose directories the root guard writes or re-modes.
+MANAGED_RUNTIME_GROUPS = ("sandbox", "api")
+
+
+def _join_managed_runtime_groups() -> None:
+    """Keep root guard writes working without CAP_DAC_OVERRIDE/CAP_FSETID.
+
+    Some runtimes (OpenShell 0.0.92 with podman) drop CAP_DAC_OVERRIDE and
+    CAP_FSETID from every sandbox, so root is held to ordinary permission
+    bits. Two guard steps then fail: creating or renaming entries in a
+    directory root neither owns nor shares a group with (profiles/api/ is
+    sandbox:api 3770; a restored /sandbox/.hermes is sandbox:sandbox 3770),
+    and fchmod() of a setgid mode on such a directory, which the kernel
+    silently strips to a non-setgid mode. Joining the image's sandbox and api
+    groups gives the guard the group access those directories already grant
+    to their runtimes, and keeps setgid bits through fchmod(). It never
+    grants more than root holds with CAP_DAC_OVERRIDE. Without CAP_SETGID
+    the guard keeps its old behavior: it works where root still has
+    CAP_DAC_OVERRIDE and fails closed on the first denied write otherwise.
+    """
+    if os.geteuid() != 0:
+        return
+    groups = list(os.getgroups())
+    for name in MANAGED_RUNTIME_GROUPS:
+        try:
+            gid = grp.getgrnam(name).gr_gid
+        except KeyError:
+            continue
+        if gid != os.getegid() and gid not in groups:
+            groups.append(gid)
+    if groups == list(os.getgroups()):
+        return
+    try:
+        os.setgroups(groups)
+    except PermissionError:
+        # Keep going: root may still hold CAP_DAC_OVERRIDE. Name the cause, or
+        # a later stripped setgid mode or EACCES would point elsewhere.
+        print(
+            "[security] could not join the managed sandbox/api groups "
+            "(setgroups denied); continuing without group access, so root "
+            "writes need CAP_DAC_OVERRIDE and CAP_FSETID",
+            file=sys.stderr,
+        )
+
+
 def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:
     try:
         fd = _open_directory(path)
     except FileNotFoundError:
-        os.mkdir(path, 0o700)
+        try:
+            os.mkdir(path, 0o700)
+        except PermissionError as exc:
+            # /sandbox belongs to the sandbox user, so root can only create
+            # /sandbox/.hermes-api while it holds CAP_DAC_OVERRIDE. The image
+            # pre-creates the root-owned chain so the volume copy-up supplies
+            # it; a volume populated by an older image lacks it.
+            raise UnsafePathError(
+                f"cannot create api profile directory {path} without "
+                "CAP_DAC_OVERRIDE; the sandbox image must pre-create the "
+                "root-owned /sandbox/.hermes-api chain (recreate the sandbox "
+                "from a current image)"
+            ) from exc
         fd = _open_directory(path)
     try:
         os.fchown(fd, uid, gid)
@@ -6540,6 +6597,7 @@ def main() -> int:
         ):
             raise UnsafePathError(f"{args.action} requires --hermes-dir")
         _validate_action_readiness(args.action, args.startup_owner)
+        _join_managed_runtime_groups()
         if args.action == "inspect-managed-default-capability":
             for path, capability in (
                 ("/usr/local/bin/nemoclaw-gateway-control", b"reload-managed-default"),

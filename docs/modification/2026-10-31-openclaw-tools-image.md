@@ -67,7 +67,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | PDF 與轉檔 | `pandoc 3.1.11.1+ds-2`、`poppler-utils 25.03.0-5+deb13u4`、`qpdf 12.2.0-1`、`ghostscript 10.05.1~dfsg-1+deb13u3` |
 | OCR | `tesseract-ocr 5.5.0-1+b1`;語言資料 `eng`、`chi-tra`、`chi-sim` `1:4.1.0-2` |
 | 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u13`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |
-| 瀏覽器 | `chromium 156.0.8078.73-1~deb13u1`,固定在 `apt-packages-browser.txt` |
+| 瀏覽器 | `chromium 156.0.8078.79-1~deb13u1`,固定在 `apt-packages-browser.txt` |
 | 字型 | `fontconfig 2.15.0-2.3`、`fonts-noto-cjk 1:20240730+repack1-1`、`fonts-liberation 1:2.1.5-3`、`fonts-dejavu-core 2.37-8` |
 | Workspace | `zip 3.0-15+deb13u1`、`unzip 6.0-29+deb13u1`、`ripgrep 14.1.1-1+b4`、`sqlite3 3.46.1-7+deb13u2` |
 | 執行期函式庫 | `libicu76 76.1-4`(officecli 需要) |

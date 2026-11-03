@@ -212,7 +212,7 @@ pnpm exec html-inline bundle/index.html > bundle.html
   - 影響很小:`rustls` 0.23.45 的 RUSTSEC-2026-0349(後續連線降級為只用 X25519),以及 `ctutils` 0.4.2 的 RUSTSEC-2026-0385(SCRAM 雜湊的時序旁通道)。
   - 不適用:`rustls` 的 RUSTSEC-2026-0346(沒有以 `Debug` 輸出 TLS session)、RUSTSEC-2026-0347(沒有設定 ECH)、RUSTSEC-2026-0348(沒有啟用 brotli)。`libz-sys` 的 RUSTSEC-2026-0418 只影響建置過程。`webpki-root-certs` 沒有編進執行檔。
   - SQLite:官方建置沒有傳入 `vendored` feature,所以靜態連結的是 nixpkgs 的 SQLite 3.50.4,不是 `libsqlite3-sys` 內附的版本。3.50.4 有 FTS5 的 CVE-2026-11824(HIGH)、CVE-2026-119373(HIGH)、CVE-2026-11822(MEDIUM),以及 COLLATE 遞迴的 CVE-2026-119376(MEDIUM)。這些都需要偽造的資料庫或可控的 SQL。只有 pimdir 帳號會用到 SQLite,而 pimdir 的 schema 沒有 FTS 表,查詢也不用 `MATCH`。
-  - 維護者已於 2026-11-03 簽核兩個 HIGH 與 CVE-2026-111943,記錄在 `phase5-review.md`。
+  - 維護者已於 2026-11-03 在 [PR #42](https://github.com/derekhsu/NemoClaw/pull/42#issuecomment-6600751893) 簽核兩個 HIGH 與 CVE-2026-111943,記錄在 `phase5-review.md`。
   - 上游 master 已升級到 `rustls` 0.23.46、`rustls-webpki` 0.103.16、`ctutils` 0.4.7,但還沒有新的 release。上游發布新版後,升級 himalaya。
 - 更新 himalaya 版本時,重做上述稽核,並確認官方建置用的 SQLite 版本。
 - Phase 2 以離線 Maildir 帳號驗證預設設定路徑、搜尋、讀信、複製,並以 `openclaw skills info himalaya --json` 確認 OpenClaw 解析到的是 `/sandbox/.openclaw/skills/himalaya/SKILL.md`。

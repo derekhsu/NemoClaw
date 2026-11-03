@@ -144,7 +144,8 @@ himalaya 2.2.1: Trivy cannot scan the binary. A manual dependency audit of
 the v2.2.1 `Cargo.lock` and the release binary found the HIGH CVEs and the
 applicable MEDIUM CVE below. Section 4.9 of
 `docs/modification/2026-10-31-openclaw-tools-image.md` records the method and
-the full result. The maintainer accepted them on 2026-11-03. After upstream
+the full result. The maintainer accepted them on 2026-11-03
+([sign-off](https://github.com/derekhsu/NemoClaw/pull/42#issuecomment-6600751893)). After upstream
 publishes a release with a fixed `rustls-webpki`, check the SQLite version in
 its binary, then upgrade himalaya.
 

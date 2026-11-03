@@ -5508,7 +5508,14 @@ def _join_managed_runtime_groups() -> None:
     try:
         os.setgroups(groups)
     except PermissionError:
-        return
+        # Keep going: root may still hold CAP_DAC_OVERRIDE. Name the cause, or
+        # a later stripped setgid mode or EACCES would point elsewhere.
+        print(
+            "[security] could not join the managed sandbox/api groups "
+            "(setgroups denied); continuing without group access, so root "
+            "writes need CAP_DAC_OVERRIDE and CAP_FSETID",
+            file=sys.stderr,
+        )
 
 
 def _api_ensure_dir(path: str, mode: int, uid: int, gid: int) -> None:

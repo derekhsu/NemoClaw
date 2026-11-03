@@ -481,6 +481,12 @@ print(json.dumps(results))
       nonroot: [],
       denied: [[0, 999, 997]],
     });
+    // Only the denied join explains itself, so a later stripped setgid mode
+    // or EACCES still names its real cause.
+    expect(result.stderr.trim().split("\n")).toEqual([
+      "[security] could not join the managed sandbox/api groups (setgroups denied); " +
+        "continuing without group access, so root writes need CAP_DAC_OVERRIDE and CAP_FSETID",
+    ]);
   });
 
   it("explains a missing pre-created api chain instead of a bare EACCES (#21)", () => {

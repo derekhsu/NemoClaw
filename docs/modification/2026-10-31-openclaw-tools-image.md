@@ -313,13 +313,16 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
 - `Dockerfile.tools` 以 apt hold 鎖住 base 的受控套件,安裝後再確認版本。
 - `base_security_checks` fixture 在 tools 映像中重跑 base 的安全檢查。
 
-目前的掃描結果(兩個架構相同):
+`2026.9.2-tools.1`(base `2026.9.2-r2`)的掃描結果(兩個架構相同):
 
 - tools 層沒有新增可修補的 CRITICAL 或 HIGH 弱點。
-- base 原有 11 個可修補的弱點,由 [#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建標準映像處理。
+- base 原有 11 個可修補的弱點。[#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建的 `2026.9.2-r3` 已修補這 11 個弱點,r3 沒有可修補的 CRITICAL 或 HIGH 弱點。
 - tools 層新增 67 個尚無修補的 CVE,其中 1 個是 CRITICAL(`libxml2` CVE-2026-6653)。
   主要來自 Chromium、FFmpeg、libxml2 與 Tesseract。
   維護者已於 2026-11-01 逐一具名簽核這 67 個 CVE,清單在 track 的 `phase5-review.md`。
+
+以 `2026.9.2-r3` 為 base 的 tools 映像,發布前以驗證 workflow 的掃描結果重新比對。
+tools 層新增的尚無修補 CVE 如果不在上述簽核清單中,維護者要先簽核才能發布。
 
 ## 9. 驗證方式
 

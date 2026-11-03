@@ -2,6 +2,10 @@
 # Versions resolved on 2026-10-30 against base
 # docker.io/derekhsu/openshell-openclaw@sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02
 # with every controlled package held. Same versions on amd64 and arm64.
+# Rechecked on 2026-11-03 for base
+# docker.io/derekhsu/openshell-openclaw@sha256:194d3ad626bc727a8e15473176e05c3a384d389864d70b580231348b4114c234
+# (2026.9.2-r3): each version is still the newest in trixie or
+# trixie-security on amd64 and arm64.
 # Install with --no-install-recommends. jq and libsqlite3-0 come from the base.
 ffmpeg=7:7.1.5-0+deb13u1
 fontconfig=2.15.0-2.3

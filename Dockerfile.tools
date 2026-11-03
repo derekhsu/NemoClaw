@@ -28,6 +28,12 @@ ADD --checksum=sha256:ca362a16f2e1c3cfa81d406f3242446179a0e4aea457ba3e9e6c39e647
     https://registry.npmjs.org/pnpm/-/pnpm-12.16.1.tgz /pnpm-12.16.1.tgz
 ADD --checksum=sha256:bb7f8f14b9ce2e2344ff5cd6c06f2e105eb99541ecbfec77139e2886d9c0b9ba \
     https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js /p5.min.js
+# Himalaya v2.2.1 release archives: a static-pie binary plus completions and
+# man pages. Brew installs the same release.
+ADD --checksum=sha256:5c5ba2724c162f82d0a0c71b6c03224ed44f8bef7b14ace5da0635d3af2665a0 \
+    https://github.com/pimalaya/himalaya/releases/download/v2.2.1/himalaya.x86_64-linux.tgz /himalaya-amd64.tgz
+ADD --checksum=sha256:1dc21c3dd6d948929e22e5cae49b9d0b3b30ff88fafd4493fd4460c6252e9d90 \
+    https://github.com/pimalaya/himalaya/releases/download/v2.2.1/himalaya.aarch64-linux.tgz /himalaya-arm64.tgz
 
 # The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
 # which have HIGH vulnerabilities with available fixes. Build the same yq version with a
@@ -137,7 +143,15 @@ RUN set -eu; \
 RUN --mount=type=bind,from=downloads,target=/downloads \
     set -eu; \
     arch=$(dpkg --print-architecture); \
-    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli
+    install -m 0755 "/downloads/officecli-$arch" /usr/local/bin/officecli; \
+    mkdir /tmp/himalaya; \
+    tar -xzf "/downloads/himalaya-$arch.tgz" -C /tmp/himalaya himalaya share/completions/himalaya.bash share/man; \
+    install -m 0755 /tmp/himalaya/himalaya /usr/local/bin/himalaya; \
+    install -D -m 0644 /tmp/himalaya/share/completions/himalaya.bash /usr/share/bash-completion/completions/himalaya; \
+    install -d -m 0755 /usr/local/share/man/man1; \
+    install -m 0644 /tmp/himalaya/share/man/*.1.gz /usr/local/share/man/man1/; \
+    rm -rf /tmp/himalaya; \
+    case "$(/usr/local/bin/himalaya --version)" in "himalaya v2.2.1 "*) ;; *) exit 1 ;; esac
 COPY --from=yq-build --chmod=0755 /out/yq /usr/local/bin/yq
 
 # Python packages go into the system interpreter, as the base does for
@@ -192,6 +206,20 @@ RUN set -eu; \
     pnpm run build; \
     rm -rf dist /tmp/nemoclaw-tools/pnpm-store; \
     chmod -R a+rX /usr/local/share/nemoclaw-tools/frontend-template
+
+# The bundled OpenClaw himalaya skill documents the Himalaya v1 CLI
+# (openclaw/openclaw#129034). A same-named skill in the OpenClaw state
+# directory takes precedence over the bundled one, so this v2 copy replaces it.
+# Owner and modes match the base image's /sandbox/.openclaw tree:
+# sandbox:sandbox, setgid directories 2770, files 660. OpenClaw refuses only
+# world-writable paths.
+COPY --chown=sandbox:sandbox tools/openclaw-tools-image/skills/himalaya/ /sandbox/.openclaw/skills/himalaya/
+RUN set -eu; \
+    test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills)" = "sandbox:sandbox 2770"; \
+    chmod -R g+rwX,o-rwx /sandbox/.openclaw/skills/himalaya; \
+    find /sandbox/.openclaw/skills/himalaya -type d -exec chmod g+s {} +; \
+    test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills/himalaya)" = "sandbox:sandbox 2770"; \
+    test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills/himalaya/SKILL.md)" = "sandbox:sandbox 660"
 
 RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 

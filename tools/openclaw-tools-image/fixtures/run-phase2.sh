@@ -351,6 +351,48 @@ workspace() {
   if sqlite3 -readonly data.db 'insert into t values ("no");'; then return 1; fi
 }
 
+himalaya_journey() {
+  grep -q '^himalaya v2[.]2[.]1 ' <<<"$(himalaya --version)"
+  local mail=$WORK/Mail out
+  mkdir -p "$mail"/INBOX/{cur,new,tmp} "$mail"/Archive/{cur,new,tmp} "$HOME/.config/himalaya"
+  # Default config path; Maildir keeps the check offline.
+  printf '[accounts.fixture]\ndefault = true\nemail = "fixture@example.com"\nmaildir.root = "%s"\nmailbox.alias.inbox = "INBOX"\n' \
+    "$mail" >"$HOME/.config/himalaya/config.toml"
+  printf '%s\n' 'From: alice@example.com' 'To: fixture@example.com' \
+    'Subject: himalaya fixture' 'Date: Tue, 03 Nov 2026 09:00:00 +0800' \
+    'Message-ID: <fixture@example.com>' '' 'hello from maildir' >"$mail/INBOX/new/1.eml"
+  grep -q maildir <<<"$(himalaya account list)"
+  out=$(himalaya --json envelope search from alice and subject fixture)
+  jq -e '.envelopes | length == 1' <<<"$out"
+  grep -q 'hello from maildir' <<<"$(himalaya message read 1.eml)"
+  himalaya message copy --to Archive 1.eml
+  jq -e '.envelopes | length == 1' <<<"$(himalaya --json envelope list -m Archive)"
+  # The image replaces the bundled v1 skill with a v2 copy in the state dir.
+  local skill=/sandbox/.openclaw/skills/himalaya/SKILL.md
+  grep -q '^name: himalaya$' "$skill"
+  grep -q 'himalaya mailbox list' "$skill"
+  if grep -q 'himalaya folder list' "$skill"; then return 1; fi
+  test -f /sandbox/.openclaw/skills/himalaya/references/configuration.md
+  # Same owner and modes as the rest of /sandbox/.openclaw; no access for others.
+  test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills/himalaya)" = "sandbox:sandbox 2770"
+  test -z "$(find /sandbox/.openclaw/skills/himalaya -perm /o=rwx -print -quit)"
+  test -z "$(find /sandbox/.openclaw/skills/himalaya ! -user sandbox -print -quit)"
+}
+
+himalaya_skill_override() {
+  # OpenClaw must resolve the image's v2 skill, not the bundled v1 one. The CLI
+  # opens a database in its state directory, and the fixture root is
+  # read-only, so run it against a writable copy of the image state.
+  local state=$WORK/openclaw-state info
+  cp -a /sandbox/.openclaw "$state"
+  info=$(OPENCLAW_STATE_DIR="$state" OPENCLAW_CONFIG_PATH="$state/openclaw.json" \
+    timeout 120 openclaw skills info himalaya --json)
+  printf '%s\n' "$info"
+  jq -e --arg path "$state/skills/himalaya/SKILL.md" \
+    '.filePath == $path and .source == "openclaw-managed" and .bundled == false and .eligible == true' \
+    <<<"$info"
+}
+
 python_libraries() {
   python3 - <<'PY'
 import importlib
@@ -375,6 +417,8 @@ check base_security_checks base_security_checks
 check fontconfig_cache fontconfig_cache
 check office_create office_create
 check officecli_journey officecli_journey
+check himalaya_journey himalaya_journey
+check himalaya_skill_override himalaya_skill_override
 check office_to_pdf office_to_pdf
 check spreadsheet_recalc spreadsheet_recalc
 check pdf_tools pdf_tools

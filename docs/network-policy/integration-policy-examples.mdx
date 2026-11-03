@@ -364,6 +364,10 @@ $$nemoclaw my-assistant exec -- bash -lc '<formula-command>'
 
 You do not need to bootstrap Homebrew, install build dependencies, or source `brew shellenv` inside the sandbox.
 
+The image pins the Homebrew version, and the wrapper turns off `brew update`, so the sandbox always runs the Homebrew version that was tested with the image.
+The wrapper also turns off Homebrew's own Linux sandbox, because it cannot start inside the OpenShell Landlock policy ([Homebrew/brew#24446](https://github.com/Homebrew/brew/issues/24446)).
+The OpenShell sandbox still confines formula installation.
+
 ## Model Pricing
 
 <AgentOnly variant="openclaw">

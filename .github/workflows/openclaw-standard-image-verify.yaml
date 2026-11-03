@@ -21,6 +21,8 @@ on:
       - scripts/lib/patch-bundled-npm-*.mts
       - scripts/upgrade-bundled-npm.mts
       - scripts/security/**
+      - scripts/check-brew-nested-landlock.sh
+      - scripts/lib/landlock-no-root-readdir.pl
   workflow_dispatch:
 
 permissions:
@@ -130,6 +132,15 @@ jobs:
             echo "ERROR: the standard image has fixable CRITICAL or HIGH findings" >&2
             exit 1
           fi
+
+      # Homebrew inside OpenShell runs under an outer Landlock policy that does
+      # not grant read on "/". Install a formula with post-install dependencies
+      # under an equivalent sandbox, so a Homebrew bump that breaks in-sandbox
+      # installs fails the pull request (Homebrew/brew#24446,
+      # HOMEBREW_NO_SANDBOX_LINUX deprecation). Needs formulae.brew.sh and
+      # ghcr.io, so it runs here and not on the release path.
+      - name: Check brew install under nested Landlock
+        run: scripts/check-brew-nested-landlock.sh "$STANDARD_IMAGE"
 
       - name: Upload Trivy evidence
         if: always()

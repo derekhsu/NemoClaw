@@ -676,13 +676,31 @@ RUN if [ "$OPENCLAW_VERSION" = "2026.7.1" ]; then \
 # in nemoclaw-blueprint/policies/openclaw-sandbox.yaml so brew can write
 # formulae under the prefix at runtime.
 #
-# Cost: ~80 to 150 MB (Homebrew core only; formulae download on demand).
+# Cost: ~80 to 150 MB (Homebrew core only; formulae download on demand),
+# plus Homebrew's portable Ruby, which is installed here so the first
+# `brew install` in a sandbox does not have to download it.
 #
 # HOMEBREW_VERSION pins the upstream Homebrew tag we ship, so the
-# base image layer is reproducible across rebuilds. Bump on demand; the
-# base-image workflow re-runs on push to main. Latest stable tags are
-# at https://github.com/Homebrew/brew/releases.
-ARG HOMEBREW_VERSION=5.1.12
+# base image layer is reproducible across rebuilds. Latest stable tags are
+# at https://github.com/Homebrew/brew/releases. Bump it regularly: the
+# formula API that `brew install` reads keeps moving, and an old Homebrew
+# fails post-install steps it does not understand (5.1.12 failed on
+# `post_install_steps` for ca-certificates and openssl@4).
+#
+# The wrapper exports three more settings:
+# - HOMEBREW_NO_AUTO_UPDATE: the clone is a shallow tag clone that `brew update`
+#   cannot move (`Not a valid ref: refs/remotes/origin/main`), and when git
+#   egress is allowed an update would silently replace the tested version.
+# - HOMEBREW_NO_SANDBOX_LINUX: Homebrew 7 wraps package processing in its own
+#   Landlock sandbox and lists `/` to build its read allow-list. The OpenShell
+#   Landlock policy does not grant read on `/`, so every bottle fails with
+#   `Permission denied @ dir_initialize - /` (Homebrew/brew#24446). The outer
+#   OpenShell sandbox still confines package processing. Homebrew marks this
+#   variable deprecated; scripts/check-brew-nested-landlock.sh fails the
+#   OpenClaw Standard Verify pull-request check when a Homebrew bump stops
+#   honouring it.
+# - HOMEBREW_NO_ENV_HINTS: keeps install output short.
+ARG HOMEBREW_VERSION=7.0.12
 RUN mkdir -p /home/linuxbrew/.linuxbrew/bin \
     && chown -R sandbox:sandbox /home/linuxbrew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
@@ -695,18 +713,29 @@ RUN mkdir -p /home/linuxbrew/.linuxbrew/bin \
         printf '%s\n' '#!/bin/sh'; \
         printf '%s\n' 'export HOMEBREW_TEMP=/tmp'; \
         printf '%s\n' 'export TMPDIR=/tmp'; \
+        printf '%s\n' 'export HOMEBREW_NO_AUTO_UPDATE=1'; \
+        printf '%s\n' 'export HOMEBREW_NO_SANDBOX_LINUX=1'; \
+        printf '%s\n' 'export HOMEBREW_NO_ENV_HINTS=1'; \
         printf '%s\n' 'exec /home/linuxbrew/.linuxbrew/bin/brew "$@"'; \
     } > /usr/local/bin/brew \
     && chmod 755 /usr/local/bin/brew \
     && grep -qx 'export HOMEBREW_TEMP=/tmp' /usr/local/bin/brew \
     && grep -qx 'export TMPDIR=/tmp' /usr/local/bin/brew \
+    && grep -qx 'export HOMEBREW_NO_AUTO_UPDATE=1' /usr/local/bin/brew \
+    && grep -qx 'export HOMEBREW_NO_SANDBOX_LINUX=1' /usr/local/bin/brew \
+    && grep -qx 'export HOMEBREW_NO_ENV_HINTS=1' /usr/local/bin/brew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
         env HOME=/sandbox HOMEBREW_TEMP=/var/tmp TMPDIR=/var/tmp /usr/local/bin/brew --prefix \
         | grep -qx /home/linuxbrew/.linuxbrew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
         env HOME=/sandbox /usr/local/bin/brew --prefix | grep -qx /home/linuxbrew/.linuxbrew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
-        env HOME=/sandbox /usr/local/bin/brew --version
+        env HOME=/sandbox /usr/local/bin/brew --version \
+    && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+        env HOME=/sandbox /usr/local/bin/brew vendor-install ruby \
+    && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+        env HOME=/sandbox /home/linuxbrew/.linuxbrew/Homebrew/Library/Homebrew/vendor/portable-ruby/current/bin/ruby --version \
+    && rm -rf /sandbox/.cache/Homebrew
 RUN { \
         printf '%s\n' "if [ \"\$(/usr/bin/id -un 2>/dev/null || true)\" = sandbox ]; then"; \
         printf '%s\n' "  export PATH=\"\${PATH}:/home/linuxbrew/.linuxbrew/bin\""; \

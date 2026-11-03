@@ -205,7 +205,16 @@ pnpm exec html-inline bundle/index.html > bundle.html
 - 映像在 `/sandbox/.openclaw/skills/himalaya` 放一份 v2 版的 skill。OpenClaw 狀態目錄的 skill 優先於內建 skill,所以 agent 看到的是 v2 版。內容在 `tools/openclaw-tools-image/skills/himalaya/`。
 - 上游內建 skill 改成 v2 之後,移除這份副本。
 - 這份 skill 的擁有者與權限和 `/sandbox/.openclaw` 其他內容相同(`sandbox:sandbox`,目錄 2770、檔案 660)。NemoClaw 啟動時只補建目錄、修正擁有者,不會刪除它。如果沙箱還原的是舊映像留下的 `/sandbox/.openclaw`,這份 skill 可能不在,agent 會改用內建的 v1 版;執行檔不受影響。
-- 弱點掃描:官方執行檔沒有內嵌 Rust 依賴清單(cargo-auditable),Trivy 看不到 himalaya 用的 Rust 套件。掃描通過不代表這個執行檔沒有已知弱點,發布簽核需要另外涵蓋它。更新版本時,對照上游 release 的 `Cargo.lock` 檢查依賴。
+- 弱點掃描:官方執行檔沒有內嵌 Rust 依賴清單(cargo-auditable),Trivy 看不到 himalaya 用的 Rust 套件,也看不到它靜態連結的 SQLite。Trivy 掃描通過不代表這個執行檔沒有已知弱點,所以要另外做依賴稽核。
+- 2026-11-03 對 v2.2.1 的依賴稽核:
+  - 方法:官方 release 以 nix 和預設 feature 建置。以 v2.2.1 原始碼的 `Cargo.lock` 和 `cargo tree` 算出實際編進執行檔的 crate(amd64 234 個、arm64 233 個),再查 OSV(含 RustSec)。兩個架構的執行檔內的 crate 版本字串都與 `Cargo.lock` 相同。
+  - 適用:`rustls-webpki` 0.103.15 的 CVE-2026-111943(RUSTSEC-2026-0382,MEDIUM)。himalaya 使用系統 CA 憑證庫,映像的 `ca-certificates 20250419` 含 emSign 根憑證。私鑰已外流的 emSign 中繼憑證出現在憑證鏈中時,驗證仍可能通過。攻擊者需要取得該中繼憑證私鑰並位於網路路徑上,才能冒充 IMAP/SMTP 伺服器。
+  - 影響很小:`rustls` 0.23.45 的 RUSTSEC-2026-0349(後續連線降級為只用 X25519),以及 `ctutils` 0.4.2 的 RUSTSEC-2026-0385(SCRAM 雜湊的時序旁通道)。
+  - 不適用:`rustls` 的 RUSTSEC-2026-0346(沒有以 `Debug` 輸出 TLS session)、RUSTSEC-2026-0347(沒有設定 ECH)、RUSTSEC-2026-0348(沒有啟用 brotli)。`libz-sys` 的 RUSTSEC-2026-0418 只影響建置過程。`webpki-root-certs` 沒有編進執行檔。
+  - SQLite:官方建置沒有傳入 `vendored` feature,所以靜態連結的是 nixpkgs 的 SQLite 3.50.4,不是 `libsqlite3-sys` 內附的版本。3.50.4 有 FTS5 的 CVE-2026-11824(HIGH)、CVE-2026-119373(HIGH)、CVE-2026-11822(MEDIUM),以及 COLLATE 遞迴的 CVE-2026-119376(MEDIUM)。這些都需要偽造的資料庫或可控的 SQL。只有 pimdir 帳號會用到 SQLite,而 pimdir 的 schema 沒有 FTS 表,查詢也不用 `MATCH`。
+  - 維護者已於 2026-11-03 簽核兩個 HIGH 與 CVE-2026-111943,記錄在 `phase5-review.md`。
+  - 上游 master 已升級到 `rustls` 0.23.46、`rustls-webpki` 0.103.16、`ctutils` 0.4.7,但還沒有新的 release。上游發布新版後,升級 himalaya。
+- 更新 himalaya 版本時,重做上述稽核,並確認官方建置用的 SQLite 版本。
 - Phase 2 以離線 Maildir 帳號驗證預設設定路徑、搜尋、讀信、複製,並以 `openclaw skills info himalaya --json` 確認 OpenClaw 解析到的是 `/sandbox/.openclaw/skills/himalaya/SKILL.md`。
 
 ## 5. 離線限制
@@ -351,10 +360,10 @@ tools 驗證把它算成 base 原有的弱點,不算 tools 層新增。
 
 - tools 層沒有新增可修補的 CRITICAL 或 HIGH 弱點。唯一可修補的弱點是 base 原有的 CVE-2026-33210。
 - tools 層新增 3 個不在上述清單中的尚無修補 HIGH 弱點:`imagemagick` 的 CVE-2026-119123,以及 `libxi6` 的 CVE-2026-109089、CVE-2026-109090。維護者已於 2026-11-03 在 [PR #37](https://github.com/derekhsu/NemoClaw/pull/37#issuecomment-6596033545) 簽核。
-- Trivy 掃不到 himalaya 的 Rust 依賴(4.9 節)。維護者已在同一則留言接受,依賴稽核尚未進行。
+- Trivy 掃不到 himalaya 的 Rust 依賴與靜態連結的 SQLite(4.9 節)。維護者已在同一則留言接受。2026-11-03 的依賴稽核找到兩個 HIGH(SQLite 的 CVE-2026-11824、CVE-2026-119373)和一個實際適用的 MEDIUM(`rustls-webpki` 的 CVE-2026-111943),維護者已於同日簽核。
 
-之後的 tools 版本仍要以發布 workflow 的掃描結果重新比對。
-tools 層新增的尚無修補 CVE 如果不在 `phase5-review.md` 或 PR #37 的簽核清單中,維護者要先簽核才能發布。
+之後的 tools 版本仍要以發布 workflow 的掃描結果重新比對,並對 Trivy 掃不到的執行檔做依賴稽核。
+所有已簽核的 CVE 都列在 `phase5-review.md`。tools 層新增的尚無修補 CRITICAL 或 HIGH 弱點如果不在其中,維護者要先簽核才能發布。
 
 ## 9. 驗證方式
 

@@ -6,6 +6,7 @@
 The image results below come from verify run
 [41261560595](https://github.com/derekhsu/NemoClaw/actions/runs/41261560595)
 (commit `994d434`) on native amd64 and arm64 runners. No image was pushed.
+The "Later sign-offs" subsection names its own sources.
 
 ## Package inventory
 
@@ -42,8 +43,8 @@ The 11 fixable findings come from the base and are tracked in
 because the tools layer adds no fixable finding.
 
 The decision for group 6 requires the maintainer to sign off each unfixed
-CRITICAL or HIGH finding by name. The tools layer adds the 67 CVEs below; the
-set is the same on amd64 and arm64.
+CRITICAL or HIGH finding by name. For `2026.9.2-tools.1`, the tools layer adds
+the 67 CVEs in the next table; the set is the same on amd64 and arm64.
 
 Sign-off status: **signed off**. The maintainer (`derekhsu`) accepted all 67
 CVEs below by name on 2026-11-01. A later tools release re-resolves the
@@ -118,6 +119,40 @@ Debian versions and picks up any fix that Debian publishes.
 | Other | CVE-2026-88806 | HIGH | `libx11-6`, `libx11-data`, `libx11-xcb1` | `affected` |
 | Other | CVE-2026-88807 | HIGH | `libxrender1` | `affected` |
 | Other | CVE-2026-94286 | HIGH | `libxtst6` | `affected` |
+
+### Later sign-offs
+
+A tools release must not add an unfixed CRITICAL or HIGH finding that is
+missing from this file. Each later sign-off below names the maintainer
+(`derekhsu`) and its date.
+
+`2026.9.2-tools.3`: the Trivy scan in release run
+[41605644091](https://github.com/derekhsu/NemoClaw/actions/runs/41605644091)
+reported 3 more unfixed HIGH CVEs from the tools layer. The maintainer signed
+them off in a
+[PR #37 comment](https://github.com/derekhsu/NemoClaw/pull/37#issuecomment-6596033545)
+on 2026-11-03. The same comment accepts that Trivy cannot scan the himalaya
+binary.
+
+| Source | CVE | Severity | Packages | Debian status |
+| --- | --- | --- | --- | --- |
+| Other | CVE-2026-109089 | HIGH | `libxi6` | `affected` |
+| Other | CVE-2026-109090 | HIGH | `libxi6` | `affected` |
+| Other | CVE-2026-119123 | HIGH | `imagemagick`, `imagemagick-7-common`, `imagemagick-7.q16`, `libmagickcore-7.q16-10`, `libmagickwand-7.q16-10` | `affected` |
+
+himalaya 2.2.1: Trivy cannot scan the binary. A manual dependency audit of
+the v2.2.1 `Cargo.lock` and the release binary found the HIGH CVEs and the
+applicable MEDIUM CVE below. Section 4.9 of
+`docs/modification/2026-10-31-openclaw-tools-image.md` records the method and
+the full result. The maintainer accepted them on 2026-11-03. After upstream
+publishes a release with a fixed `rustls-webpki`, check the SQLite version in
+its binary, then upgrade himalaya.
+
+| Component | CVE | Severity | Why accepted |
+| --- | --- | --- | --- |
+| SQLite 3.50.4 (static) | CVE-2026-11824 | HIGH | Needs a crafted FTS5 database. himalaya uses SQLite only for pimdir accounts, and the pimdir schema has no FTS table. |
+| SQLite 3.50.4 (static) | CVE-2026-119373 | HIGH | Needs a `detail=none` FTS5 table and a prefix `MATCH` query. pimdir runs no `MATCH`. |
+| `rustls-webpki` 0.103.15 | CVE-2026-111943 | MEDIUM | Applies: the system CA store includes emSign roots. An attack needs a leaked emSign intermediate key and a network position. Listed because the finding applies to this image; the rule requires sign-off only for CRITICAL and HIGH. |
 
 ## Documentation
 

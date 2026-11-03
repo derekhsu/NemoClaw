@@ -14,9 +14,10 @@ const patcher = path.join(root, "agents", "hermes", "patch-hermes-sqlite-temp-st
 const dockerfile = fs.readFileSync(path.join(root, "agents", "hermes", "Dockerfile"), "utf8");
 const fixtures: string[] = [];
 
-const databasePragmas = 'apply_database_pragmas(self._conn, db_label="state.db")';
-const tempStore = '                self._conn.execute("PRAGMA temp_store=MEMORY")';
-const foreignKeys = '                self._conn.execute("PRAGMA foreign_keys=ON")';
+// Hermes v0.21.3 configures a local writer connection in SessionDB._open_writer_conn.
+const databasePragmas = '            apply_database_pragmas(conn, db_label="state.db")';
+const tempStore = '            conn.execute("PRAGMA temp_store=MEMORY")';
+const foreignKeys = '            conn.execute("PRAGMA foreign_keys=ON")';
 const unpatchedSource = `${databasePragmas}\n${foreignKeys}\n`;
 const patchedSource = `${databasePragmas}\n${tempStore}\n${foreignKeys}\n`;
 

@@ -18,7 +18,7 @@ const imageBuildProbes = fs.readFileSync(
 );
 const fixtures: string[] = [];
 
-// Hermes v2026.8.27 / 0.20.6 resolves the ledger lazily inside _connect;
+// Hermes v2026.9.14 / 0.21.3 resolves the ledger lazily inside _connect;
 // EXECUTIONS_FILE is an optional test override, not the production path.
 const upstreamExecutions = `\
 from typing import Optional
@@ -33,7 +33,7 @@ def _connect():
     path.parent.mkdir(parents=True, exist_ok=True)
 `;
 
-// v2026.8.27 shares the executions database with cron/incidents.py; its
+// v2026.9.14 shares the executions database with cron/incidents.py; its
 // fallback branch resolves the same upstream path.
 const upstreamIncidents = `\
 from hermes_constants import get_hermes_home
@@ -136,15 +136,15 @@ describe("Hermes cron execution runtime patch", () => {
     expect(dockerfile).toContain(`ARG NEMOCLAW_HERMES_CRON_RUNTIME_PATCHER_SHA256=${digest}`);
     expect(dockerfile).toContain(
       "ARG NEMOCLAW_HERMES_CRON_EXECUTIONS_SOURCE_SHA256=" +
-        "b4a685a901abdffe2d1232099b3c27391775775a7011d52c90276cb15d3fd75d",
+        "1c7af4651cece5cdd8995464ba5d18c88a3b9c23cfceed757626b73c01e06535",
     );
     expect(dockerfile).toContain(
       "ARG NEMOCLAW_HERMES_CRON_INCIDENTS_SOURCE_SHA256=" +
-        "5d6072ad70df780978af520095c23e502d61354c550477365a48023bb0063c4b",
+        "5f614becfe4dac5a468988bc643724caf89c6a9bb978b2dd6c5590049b24a0d1",
     );
     expect(dockerfile).toContain(
       "ARG NEMOCLAW_HERMES_BACKUP_SOURCE_SHA256=" +
-        "b0838c1f2e120d8f97076c6321297077edc1f150dc6d4b84ba3d13327fcbb156",
+        "1a48cbde16552268d796bcf22fdaa8231c924c76a4af24f9f391bf12ca1b37c0",
     );
     expect(dockerfile).toContain(
       "COPY agents/hermes/patch-cron-execution-runtime.py " +

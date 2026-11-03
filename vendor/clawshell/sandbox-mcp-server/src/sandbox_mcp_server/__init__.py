@@ -1,3 +1,3 @@
 """Sandbox MCP Server package."""
 
-__version__ = "0.1.1+nemoclaw.1"
+__version__ = "0.1.2+nemoclaw.1"

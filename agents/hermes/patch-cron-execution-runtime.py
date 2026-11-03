@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Relocate the pinned Hermes cron execution ledger into writable runtime state.
 
-Hermes v2026.8.27 / 0.20.6 resolves ``cron/executions.db`` lazily inside
-``cron/executions.py:_connect`` (``EXECUTIONS_FILE`` is now an optional test
-override) and shares the same database with ``cron/incidents.py``. When
+Hermes v2026.9.14 / 0.21.3 resolves ``cron/executions.db`` lazily inside
+``cron/executions.py:_connect`` (``EXECUTIONS_FILE`` is an optional test
+override) and shares the same database with ``cron/incidents.py``, whose
+``_db_path`` falls back to the same sealed ``cron`` location unless an override
+is installed. When
 Shields up is active, NemoClaw correctly seals ``cron`` as the high-risk
 location for cron job definitions, so a managed gateway restart cannot reopen
 that database.
@@ -42,8 +44,10 @@ NEW_INCIDENTS_PATH = (
 )
 INCIDENTS_CONTEXT = "def _db_path"
 
-OLD_BACKUP_PATH = '    "cron/executions.db",'
-NEW_BACKUP_PATH = '    "runtime/cron-executions.db",'
+# v0.21.3 collapsed ``_QUICK_STATE_FILES`` onto one line, so anchor on the
+# quoted entry instead of the indented list item.
+OLD_BACKUP_PATH = '"cron/executions.db",'
+NEW_BACKUP_PATH = '"runtime/cron-executions.db",'
 BACKUP_CONTEXT = "_QUICK_STATE_FILES = ("
 
 

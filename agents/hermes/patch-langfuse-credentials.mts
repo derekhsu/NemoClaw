@@ -7,7 +7,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 /**
- * Patch the Langfuse validator bundled with pinned Hermes v2026.8.27 / 0.20.6.
+ * Patch the Langfuse validator bundled with pinned Hermes v2026.9.14 / 0.21.3.
  *
  * Hermes rejects OpenShell resolver placeholders before the Langfuse SDK can
  * turn them into outbound authentication headers. NemoClaw keeps the real
@@ -44,12 +44,12 @@ _LANGFUSE_OPENSHELL_KEYS: Dict[str, str] = {
   {
     name: "credential validation",
     old: `\
-    if value.startswith(expected):
+    if not expected or value.startswith(expected):
         return None
-    return (
+    preview = "<empty>" if not value else repr(value) if len(value) <= 12 else repr(value[:6] + "...")
 `,
     patched: `\
-    if value.startswith(expected):
+    if not expected or value.startswith(expected):
         return None
     openshell_key = _LANGFUSE_OPENSHELL_KEYS.get(env_name)
     # Keep the revision bound aligned with NemoClaw's OpenShell credential
@@ -59,7 +59,7 @@ _LANGFUSE_OPENSHELL_KEYS: Dict[str, str] = {
         value,
     ):
         return None
-    return (
+    preview = "<empty>" if not value else repr(value) if len(value) <= 12 else repr(value[:6] + "...")
 `,
   },
 ] as const;

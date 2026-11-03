@@ -24,6 +24,7 @@ class GatewayClient:
     def __init__(self, base_url: str, api_key: str, sandbox_id: str, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.sandbox_id = sandbox_id
+        self._api_key = api_key
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
@@ -74,6 +75,61 @@ class GatewayClient:
             raise GatewayError(f"Request failed: {error}") from error
 
         result = response.json()
+        data = result.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("download_url"), str):
+            raise GatewayError("Gateway error: Missing download_url in response")
+        return data
+
+    def whoami(self) -> dict[str, Any]:
+        """Return the resolved identity for the configured gateway API key."""
+        try:
+            response = self._client.get(
+                "/api/v1/identity",
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            response.raise_for_status()
+            result = response.json()
+        except httpx.HTTPStatusError as error:
+            raise GatewayError(
+                f"Gateway error: {error.response.status_code}",
+                status_code=error.response.status_code,
+            ) from error
+        except httpx.RequestError as error:
+            raise GatewayError(f"Request failed: {error}") from error
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise GatewayError("Gateway error: Missing identity in response")
+        return data
+
+    def publish_artifact(
+        self, file_path: str, *, expires_in_seconds: int = 300, max_uses: int = 1
+    ) -> dict[str, Any]:
+        """Return a signed download link without checking the local filesystem.
+
+        Existence and eligibility are enforced Gateway-side, matching the
+        remote ``publish_sandbox_artifact`` MCP tool contract.
+        """
+        try:
+            response = self._client.post(
+                f"/api/sandboxes/{self.sandbox_id}/files/generate-download-url",
+                json={
+                    "path": file_path,
+                    "expires_in_seconds": expires_in_seconds,
+                    "max_uses": max_uses,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        except httpx.HTTPStatusError as error:
+            try:
+                detail = error.response.json().get("detail", str(error))
+            except Exception:
+                detail = str(error)
+            raise GatewayError(
+                f"Gateway error: {detail}", status_code=error.response.status_code
+            ) from error
+        except httpx.RequestError as error:
+            raise GatewayError(f"Request failed: {error}") from error
         data = result.get("data")
         if not isinstance(data, dict) or not isinstance(data.get("download_url"), str):
             raise GatewayError("Gateway error: Missing download_url in response")

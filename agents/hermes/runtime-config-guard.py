@@ -5229,10 +5229,30 @@ HERMES_API_POLICY_BYTES = (
     + "\n"
 ).encode("utf-8")
 # The stock Hermes default soul (hermes_cli/default_soul.py DEFAULT_SOUL_MD),
-# the same bytes the image writes to /sandbox/.hermes/SOUL.md. Duplicated here
+# the same text the image writes to /sandbox/.hermes/SOUL.md. Duplicated here
 # because the guard seals the api profile before the gateway ever runs — and
 # the runtime must never own it, or the api agent could rewrite its own soul.
+# The image build asserts these bytes equal the installed DEFAULT_SOUL_MD.
 HERMES_API_SOUL_BYTES = (
+    "You are Hermes Agent, built by Nous Research. Be direct: match the length "
+    "of your reply to the weight of the ask \u2014 a one-line question gets a "
+    "one-line answer, and finished work gets a short report of what changed, "
+    "what's verified, and what's left, never a replay of the process. No "
+    "filler (\"Great question,\" \"I'd be happy to\"), no restating the "
+    "request back, no re-summarizing what you already said, no narrating tool "
+    "calls the user can see. Plain claims over adjectives; when unsure, say so "
+    "plainly. Agree because it's right, not because the user said it. Depth is "
+    "earned \u2014 give it when the user asks for detail, teaches, or the "
+    "stakes demand it, not by default.\n"
+).encode("utf-8")
+# Earlier generations of the auto-seeded default soul that NemoClaw images
+# sealed into api profiles. Hermes >= 0.21 treats them as legacy templates and
+# rewrites SOUL.md in place on every home init; the api runtime cannot write
+# the admin-owned file, so home init fails and every api request errors. The
+# guard (admin side) upgrades only these exact texts; anything else is
+# operator content and is never touched. The image build asserts Hermes still
+# classifies each of them as a legacy template.
+HERMES_API_LEGACY_SOUL_TEXTS = (
     "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
     "You are helpful, knowledgeable, and direct. You assist users with a wide "
     "range of tasks including answering questions, writing and editing code, "
@@ -5240,8 +5260,23 @@ HERMES_API_SOUL_BYTES = (
     "tools. You communicate clearly, admit uncertainty when appropriate, and "
     "prioritize being genuinely useful over being verbose unless otherwise "
     "directed below. Be targeted and efficient in your exploration and "
-    "investigations.\n"
-).encode("utf-8")
+    "investigations.",
+)
+HERMES_API_SOUL_MIGRATION_MAX_BYTES = 4096
+
+
+def _api_soul_is_legacy_default(data: bytes) -> bool:
+    """Mirror Hermes' legacy-template normalization for the known seeds."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    normalized = (
+        text.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff").strip()
+    )
+    return normalized in HERMES_API_LEGACY_SOUL_TEXTS
+
+
 HERMES_API_CONFIG_TEMPLATE = (
     "# Managed by NemoClaw — Hermes api profile (image-owned contract)\n"
     "platforms:\n"
@@ -5532,8 +5567,31 @@ def _api_ensure_design_surface(admin_uid: int, api_gid: int) -> None:
             # The API gid can read SOUL.md, but only the admin uid can write it.
             # codeql[py/overly-permissive-file]
             os.fchmod(fd, 0o640)
+            # Snapshot the exact bytes that are classified. The replacement
+            # checks this snapshot, so any edit after the read, including an
+            # in-place write that keeps the inode, is refused rather than
+            # overwritten.
+            read_stat = os.fstat(fd)
+            legacy_default = (
+                read_stat.st_size <= HERMES_API_SOUL_MIGRATION_MAX_BYTES
+                and _api_soul_is_legacy_default(
+                    os.read(fd, HERMES_API_SOUL_MIGRATION_MAX_BYTES + 1)
+                )
+            )
+            classified = FileSnapshot.from_stat(read_stat)
+            if legacy_default and not _same_snapshot(os.fstat(fd), classified):
+                raise UnsafePathError("api profile SOUL.md changed during legacy default migration")
         finally:
             os.close(fd)
+        if legacy_default:
+            _atomic_replace(
+                soul_path,
+                HERMES_API_SOUL_BYTES,
+                expected=classified,
+                mode=0o640,
+                uid=admin_uid,
+                gid=api_gid,
+            )
     _api_ensure_dir(skills_dir, 0o2750, admin_uid, api_gid)
     # Skills installed before the contract change remain runtime-owned inside
     # the now admin-owned dir; re-own the whole tree so installed skill

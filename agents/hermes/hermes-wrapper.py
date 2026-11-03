@@ -638,16 +638,19 @@ def _translate_resumed_oneshot(
     if _occurrences(parsed, "usage_file"):
         raise _UnsupportedResumedOneshotUsageFile
 
+    # Emit every value in equals form: a separate value token that starts with
+    # "-" (`--oneshot=--help`) would otherwise parse as an option in Hermes.
     translated: list[str] = []
     profiles = _occurrences(parsed, "profile")
     if profiles:
-        translated.extend([profiles[0]["canonical"], profiles[0]["value"]])
-    translated.extend(["chat", "--query", oneshots[0]["value"], "--quiet"])
+        translated.append(_bound_option(profiles[0]["canonical"], profiles[0]["value"]))
+    translated.extend(["chat", _bound_option("--query", oneshots[0]["value"]), "--quiet"])
 
     session = resumes[0] if resumes else continues[0]
-    translated.append(session["canonical"])
-    if session["value"] is not None:
-        translated.append(session["value"])
+    if session["value"] is None:
+        translated.append(session["canonical"])
+    else:
+        translated.append(_bound_option(session["canonical"], session["value"]))
 
     provider_occurrence = composition[0] if composition else None
     model_occurrence = composition[1] if composition else None
@@ -657,12 +660,16 @@ def _translate_resumed_oneshot(
         if occurrence["id"] in excluded or occurrence is provider_occurrence:
             continue
         if occurrence is model_occurrence:
-            translated.extend([occurrence["canonical"], merged_model])
+            translated.append(_bound_option(occurrence["canonical"], merged_model))
         elif occurrence["value"] is None:
             translated.append(occurrence["name"])
         else:
-            translated.extend([occurrence["canonical"], occurrence["value"]])
+            translated.append(_bound_option(occurrence["canonical"], occurrence["value"]))
     return translated
+
+
+def _bound_option(canonical: str, value: str) -> str:
+    return f"{canonical}={value}"
 
 
 class _UnsupportedResumedOneshotUsageFile(Exception):
@@ -765,10 +772,10 @@ def main(argv: list[str]) -> int:
             return _report_cli_adapter_error(exc)
         print(
             "[COMPATIBILITY] Refusing resumed one-shot with --usage-file: "
-            "Hermes 0.19 writes usage reports only on its native one-shot path, "
-            "while NemoClaw routes this form through chat --query to append to "
-            "the selected or most recent session. Run the resumed turn without "
-            "--usage-file.",
+            "Hermes 0.21.3 writes usage reports only on its native one-shot path, "
+            "which bypasses the managed approval policy, while NemoClaw routes "
+            "this form through chat --query to keep that policy. Run the resumed "
+            "turn without --usage-file.",
             file=sys.stderr,
         )
         return 2

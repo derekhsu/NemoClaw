@@ -33,7 +33,7 @@ on:
           - standard
           - tools
       tag:
-        description: "Release tag: standard 2026.9.2-r3, tools 2026.9.2-tools.1"
+        description: "Release tag: standard 2026.9.2-r4, tools 2026.9.2-tools.3"
         required: true
         type: string
 

@@ -24,9 +24,9 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | 額外工具 | 無 | 第 3 節列出的套件 |
 | 映像大小 | 約 2.3 GB | 約 5.6 GB(amd64 增加 3.36 GB,arm64 增加 3.26 GB) |
 
-目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r2`,
+目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r4`,
 index digest 為
-`sha256:8f951046eaf0de9f2e00fb7ff7d8d33de62e5c5890758289e27ec405fb5c1d02`。
+`sha256:e654a0695522944ec43c7eeabb6aca9472f385c117a206e5000f8a61b1b96056`。
 `Dockerfile.tools` 以這個 digest 作為預設 `BASE_IMAGE`。
 不使用 `2026.9.2` tag,因為它指向較舊的發布產物。
 
@@ -67,7 +67,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | PDF 與轉檔 | `pandoc 3.1.11.1+ds-2`、`poppler-utils 25.03.0-5+deb13u4`、`qpdf 12.2.0-1`、`ghostscript 10.05.1~dfsg-1+deb13u3` |
 | OCR | `tesseract-ocr 5.5.0-1+b1`;語言資料 `eng`、`chi-tra`、`chi-sim` `1:4.1.0-2` |
 | 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u13`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |
-| 瀏覽器 | `chromium 156.0.8078.73-1~deb13u1`,固定在 `apt-packages-browser.txt` |
+| 瀏覽器 | `chromium 156.0.8078.79-1~deb13u1`,固定在 `apt-packages-browser.txt` |
 | 字型 | `fontconfig 2.15.0-2.3`、`fonts-noto-cjk 1:20240730+repack1-1`、`fonts-liberation 1:2.1.5-3`、`fonts-dejavu-core 2.37-8` |
 | Workspace | `zip 3.0-15+deb13u1`、`unzip 6.0-29+deb13u1`、`ripgrep 14.1.1-1+b4`、`sqlite3 3.46.1-7+deb13u2` |
 | 執行期函式庫 | `libicu76 76.1-4`(officecli 需要) |
@@ -313,13 +313,20 @@ docker buildx imagetools inspect docker.io/derekhsu/openshell-openclaw:2026.9.2-
 - `Dockerfile.tools` 以 apt hold 鎖住 base 的受控套件,安裝後再確認版本。
 - `base_security_checks` fixture 在 tools 映像中重跑 base 的安全檢查。
 
-目前的掃描結果(兩個架構相同):
+`2026.9.2-tools.1`(base `2026.9.2-r2`)的掃描結果(兩個架構相同):
 
 - tools 層沒有新增可修補的 CRITICAL 或 HIGH 弱點。
-- base 原有 11 個可修補的弱點,由 [#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建標準映像處理。
+- base 原有 11 個可修補的弱點。[#19](https://github.com/derekhsu/NemoClaw/issues/19) 重建的 `2026.9.2-r3` 已修補這 11 個弱點,r3 沒有可修補的 CRITICAL 或 HIGH 弱點。
 - tools 層新增 67 個尚無修補的 CVE,其中 1 個是 CRITICAL(`libxml2` CVE-2026-6653)。
   主要來自 Chromium、FFmpeg、libxml2 與 Tesseract。
   維護者已於 2026-11-01 逐一具名簽核這 67 個 CVE,清單在 track 的 `phase5-review.md`。
+
+`2026.9.2-r4` 加入 Homebrew 7.0.12 與 Homebrew 的 portable Ruby。
+其中的 json 2.18.0 有一個可修補的 CRITICAL 弱點 CVE-2026-33210。標準映像把它判定為不受影響(Homebrew 不使用受影響的參數),並設了到 2026-12-03 為止的例外。
+tools 驗證把它算成 base 原有的弱點,不算 tools 層新增。
+
+以 `2026.9.2-r4` 為 base 的 tools 映像,發布前以驗證 workflow 的掃描結果重新比對。
+tools 層新增的尚無修補 CVE 如果不在上述簽核清單中,維護者要先簽核才能發布。
 
 ## 9. 驗證方式
 

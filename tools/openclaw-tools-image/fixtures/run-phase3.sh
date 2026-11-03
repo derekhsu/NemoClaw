@@ -56,7 +56,7 @@ PY
 
 chromium_cli() {
   write_page
-  chromium --version | grep -F 156.0.8078.73
+  chromium --version | grep -F 156.0.8078.79
   chromium --headless --no-sandbox --disable-gpu --disable-dev-shm-usage \
     --user-data-dir="$WORK/chromium-profile" --window-size=800,600 \
     --screenshot="$WORK/chromium-cli.png" "file://$WORK/page.html"

@@ -153,7 +153,7 @@ _api_verify_contract() {
 # cannot signal another UID. Retry as the target's own real UID, which root
 # assumes with CAP_SETUID; that grants no authority beyond the target (#47).
 _api_signal() {
-  local signal="$1" pid="$2" status uid gid
+  local signal="$1" pid="$2" start="$3" status uid gid
   kill -s "$signal" "$pid" 2>/dev/null && return 0
   status="$(gateway_control_proc_root)/${pid}/status"
   uid="$(awk '$1 == "Uid:" { print $2; exit }' "$status" 2>/dev/null || true)"
@@ -161,6 +161,8 @@ _api_signal() {
   case "${uid}:${gid}" in
     *[!0-9:]* | :* | *: | 0:*) return 1 ;;
   esac
+  # Ownership reads can race with PID reuse after the denied signal.
+  gateway_control_pid_matches_start_identity "$pid" "$start" || return 1
   setpriv --reuid="$uid" --regid="$gid" --clear-groups -- kill -s "$signal" "$pid" 2>/dev/null
 }
 
@@ -179,7 +181,7 @@ _api_stop_child() {
   local attempts=0
   [ -n "$pid" ] || return 0
   if gateway_control_pid_matches_start_identity "$pid" "$start" 2>/dev/null; then
-    _api_signal TERM "$pid" || true
+    _api_signal TERM "$pid" "$start" || true
     while [ "$attempts" -lt 20 ]; do
       gateway_control_pid_is_live "$pid" || break
       sleep 0.25
@@ -188,7 +190,7 @@ _api_stop_child() {
     if gateway_control_pid_is_live "$pid" \
       && gateway_control_pid_matches_start_identity "$pid" "$start"; then
       log "force-killing ${label} pid ${pid} after SIGTERM grace"
-      _api_signal KILL "$pid" || true
+      _api_signal KILL "$pid" "$start" || true
     fi
   fi
 }
@@ -221,23 +223,24 @@ _api_kill_stale_children() {
   # Remove leftover api processes from a previous supervisor (container reused,
   # supervisor died, children orphaned). Match on the exact api-profile identity
   # so a default-profile gateway is never touched.
-  local proc_root cmdline_file pid cmdline
+  local proc_root cmdline_file pid start cmdline
   proc_root="$(gateway_control_proc_root)"
   for cmdline_file in "${proc_root}"/[0-9]*/cmdline; do
     [ -r "$cmdline_file" ] || continue
     pid="$(basename "$(dirname "$cmdline_file")")"
     [ "$pid" != "$$" ] || continue
+    start="$(gateway_control_pid_start_identity "$pid")" || continue
     cmdline="$(tr '\0' ' ' <"$cmdline_file" 2>/dev/null || true)"
     case "$cmdline" in
       *api-prefix-proxy*)
         log "removing stale api prefix proxy (pid ${pid})"
-        _api_signal TERM "$pid" || true
+        _api_signal TERM "$pid" "$start" || true
         ;;
       *hermes*gateway*run*)
         if tr '\0' '\n' <"${proc_root}/${pid}/environ" 2>/dev/null \
           | grep -qxF "HERMES_HOME=${API_PROFILE_HOME}"; then
           log "removing stale api profile gateway (pid ${pid})"
-          _api_signal TERM "$pid" || true
+          _api_signal TERM "$pid" "$start" || true
         fi
         ;;
     esac

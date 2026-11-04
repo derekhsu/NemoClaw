@@ -43,7 +43,10 @@ function fakeProc(entries: Record<string, FakeProcess>): string {
   for (const [pid, entry] of Object.entries(entries)) {
     const dir = path.join(root, pid);
     fs.mkdirSync(dir);
-    fs.writeFileSync(path.join(dir, "stat"), `${pid} (python3) S 1 1 1 0 -1\n`);
+    fs.writeFileSync(
+      path.join(dir, "stat"),
+      `${pid} (python3) S ${Array(18).fill("0").join(" ")} 100\n`,
+    );
     fs.writeFileSync(
       path.join(dir, "status"),
       `Name:\tpython3\nUid:\t${entry.uid}\t${entry.uid}\t${entry.uid}\t${entry.uid}\n` +
@@ -69,6 +72,13 @@ function traceLines(trace: string): string[] {
 // Root without CAP_KILL: every signal to another UID fails with EPERM.
 const killDenied = 'kill() { printf "kill %s\\n" "$*" >>"$TRACE"; return 1; }';
 const procRootFn = extractShellFunction(supervisor, "gateway_control_proc_root");
+const identityFns = [
+  "gateway_control_proc_root_is_explicit",
+  "gateway_control_pid_start_identity",
+  "gateway_control_pid_matches_start_identity",
+]
+  .map((name) => extractShellFunction(supervisor, name))
+  .join("\n");
 
 describe("Hermes api runtime without CAP_KILL (#47)", () => {
   it("treats an EPERM kill -0 as live when the pid exists in /proc", () => {
@@ -106,8 +116,9 @@ describe("Hermes api runtime without CAP_KILL (#47)", () => {
           killDenied,
           'setpriv() { printf "setpriv %s\\n" "$*" >>"$TRACE"; return 0; }',
           procRootFn,
+          identityFns,
           extractShellFunction(apiRuntime, "_api_signal"),
-          `if _api_signal TERM ${pid}; then echo rc=0; else echo rc=1; fi`,
+          `if _api_signal TERM ${pid} 100; then echo rc=0; else echo rc=1; fi`,
         ],
         procRoot,
         trace,
@@ -136,8 +147,9 @@ describe("Hermes api runtime without CAP_KILL (#47)", () => {
         "kill() { return 0; }",
         "setpriv() { echo unexpected-setpriv; return 1; }",
         procRootFn,
+        identityFns,
         extractShellFunction(apiRuntime, "_api_signal"),
-        "_api_signal TERM 5001 && echo rc=0",
+        "_api_signal TERM 5001 100 && echo rc=0",
       ],
       procRoot,
       "/dev/null",
@@ -152,14 +164,14 @@ describe("Hermes api runtime without CAP_KILL (#47)", () => {
       [
         killDenied,
         'setpriv() { printf "setpriv %s\\n" "$*" >>"$TRACE"; return 0; }',
-        "gateway_control_pid_matches_start_identity() { return 0; }",
+        identityFns,
         "gateway_control_pid_is_live() { return 0; }",
         "sleep() { :; }",
         "log() { :; }",
         procRootFn,
         extractShellFunction(apiRuntime, "_api_signal"),
         extractShellFunction(apiRuntime, "_api_stop_child"),
-        '_api_stop_child 6001 "start-6001" "api profile gateway"',
+        '_api_stop_child 6001 100 "api profile gateway"',
       ],
       procRoot,
       trace,
@@ -171,6 +183,75 @@ describe("Hermes api runtime without CAP_KILL (#47)", () => {
       "kill -s KILL 6001",
       "setpriv --reuid=994 --regid=993 --clear-groups -- kill -s KILL 6001",
     ]);
+  });
+
+  it.each([
+    "TERM",
+    "KILL",
+  ])("does not retry %s for a child PID reused after the denied signal", (signal) => {
+    const procRoot = fakeProc({ "6001": { uid: 994, gid: 993 } });
+    const trace = path.join(procRoot, "reuse.trace");
+    const stopped = runBash(
+      [
+        `kill() {
+            printf 'kill %s\\n' "$*" >>"$TRACE"
+            if [ "$2" = ${signal} ]; then
+              sed 's/ 100$/ 200/' "$_NEMOCLAW_PROC_ROOT/6001/stat" >"$_NEMOCLAW_PROC_ROOT/replacement"
+              mv "$_NEMOCLAW_PROC_ROOT/replacement" "$_NEMOCLAW_PROC_ROOT/6001/stat"
+            fi
+            return 1
+          }`,
+        'setpriv() { printf "setpriv %s\\n" "$*" >>"$TRACE"; }',
+        "gateway_control_pid_is_live() { return 0; }",
+        "sleep() { :; }",
+        "log() { :; }",
+        procRootFn,
+        identityFns,
+        extractShellFunction(apiRuntime, "_api_signal"),
+        extractShellFunction(apiRuntime, "_api_stop_child"),
+        '_api_stop_child 6001 100 "api profile gateway"',
+      ],
+      procRoot,
+      trace,
+    );
+    expect(stopped.status, stopped.stderr).toBe(0);
+    expect(traceLines(trace)).not.toContain(
+      `setpriv --reuid=994 --regid=993 --clear-groups -- kill -s ${signal} 6001`,
+    );
+    expect(traceLines(trace)).toContain(`kill -s ${signal} 6001`);
+  });
+
+  it.each([
+    [
+      "is reused",
+      `sed 's/ 100$/ 200/' "$_NEMOCLAW_PROC_ROOT/5001/stat" >"$_NEMOCLAW_PROC_ROOT/replacement"
+      mv "$_NEMOCLAW_PROC_ROOT/replacement" "$_NEMOCLAW_PROC_ROOT/5001/stat"`,
+    ],
+    ["vanishes", 'rm "$_NEMOCLAW_PROC_ROOT/5001/stat"'],
+  ])("does not retry a signal when the PID %s during ownership reads", (_state, mutation) => {
+    const procRoot = fakeProc({ "5001": { uid: 994, gid: 993 } });
+    const trace = path.join(procRoot, "ownership.trace");
+    const result = runBash(
+      [
+        killDenied,
+        `awk() {
+            command awk "$@"
+            case "$1" in *Gid:*)
+              ${mutation}
+            ;; esac
+          }`,
+        'setpriv() { printf "unexpected retry\\n" >>"$TRACE"; }',
+        procRootFn,
+        identityFns,
+        extractShellFunction(apiRuntime, "_api_signal"),
+        "if _api_signal TERM 5001 100; then echo rc=0; else echo rc=1; fi",
+      ],
+      procRoot,
+      trace,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("rc=1");
+    expect(traceLines(trace)).toEqual(["kill -s TERM 5001"]);
   });
 
   it("removes stale hermesapi children of a previous supervisor and leaves others alone", () => {
@@ -206,6 +287,7 @@ describe("Hermes api runtime without CAP_KILL (#47)", () => {
         "log() { :; }",
         `API_PROFILE_HOME=${apiHome}`,
         procRootFn,
+        identityFns,
         extractShellFunction(apiRuntime, "_api_signal"),
         extractShellFunction(apiRuntime, "_api_kill_stale_children"),
         "_api_kill_stale_children",

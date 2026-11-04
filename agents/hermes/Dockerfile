@@ -1142,23 +1142,32 @@ RUN set -eu; \
 # writable runtime boundary, sandbox reads and online-copies it before
 # atomically restoring a sandbox-owned replacement, and gateway then reopens
 # that replacement through the upstream ledger API.
+#
+# HERMES_CONTAINER=1: Hermes' _secure_dir() chmods cron/ to 0700 unless it
+# detects a container, and neither a build step nor an OpenShell podman sandbox
+# matches its markers (/.dockerenv, docker/lxc/kubepods in /proc/1/cgroup). As
+# the owner of cron/, the gateway probe would bake 0700 into the image, and a
+# same-UID runtime (OpenShell 0.0.92: Hermes runs as sandbox) then cannot enter
+# it (NemoClaw #45). The cron/ mode is checked before and after the probes.
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/runtime)" = "gateway:sandbox 2770" \
+    && test "$(stat -c '%U:%G %a' /sandbox/.hermes/cron)" = "gateway:sandbox 2770" \
     && test ! -e /sandbox/.hermes/cron/executions.db \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py cron-create
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/runtime/cron-executions.db)" = "gateway:sandbox 640" \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py cron-backup
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/runtime/cron-executions.db)" = "sandbox:sandbox 660" \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py cron-reopen
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/runtime/cron-executions.db)" = "sandbox:sandbox 660" \
+    && test "$(stat -c '%U:%G %a' /sandbox/.hermes/cron)" = "gateway:sandbox 2770" \
     && rm -f /sandbox/.hermes/runtime/cron-executions.db \
         /sandbox/.hermes/runtime/cron-executions.db-wal \
         /sandbox/.hermes/runtime/cron-executions.db-shm
@@ -1169,20 +1178,22 @@ RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/runtime/cron-executions.db)" = "
 # reopens that replacement for a write.
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway)" = "gateway:sandbox 2770" \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py discord-create
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway/discord_message_recovery.db)" = "gateway:sandbox 660" \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py discord-backup
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway/discord_message_recovery.db)" = "sandbox:sandbox 660" \
     && umask 0007 \
-    && HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
+    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=gateway --regid=gateway --init-groups -- /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py discord-reopen
 
 RUN test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway/discord_message_recovery.db)" = "sandbox:sandbox 660" \
+    && test "$(stat -c '%U:%G %a' /sandbox/.hermes/gateway)" = "gateway:sandbox 2770" \
+    && test "$(stat -c '%U:%G %a' /sandbox/.hermes/cron)" = "gateway:sandbox 2770" \
     && rm -f /sandbox/.hermes/gateway/discord_message_recovery.db \
         /sandbox/.hermes/gateway/discord_message_recovery.db-wal \
         /sandbox/.hermes/gateway/discord_message_recovery.db-shm
@@ -1288,6 +1299,8 @@ RUN check_metadata() { \
     && check_absent /sandbox/.hermes-api/profiles/api \
     && check_absent /sandbox/.nemoclaw/hermes-api.config-hash \
     && check_absent /sandbox/.nemoclaw/hermes-api-profile.json \
+    && { [ "$NEMOCLAW_DARWIN_VM_COMPAT" = "1" ] \
+        || check_metadata /sandbox/.hermes/cron 'gateway:sandbox 2770'; } \
     && check_metadata /scripts/patch-bundled-npm-brace-expansion.mts 'root:root 444' \
     && check_metadata /scripts/lib/patch-bundled-npm-ip-address.mts 'root:root 444' \
     && check_metadata /scripts/patch-bundled-npm-tar.mts 'root:root 444' \

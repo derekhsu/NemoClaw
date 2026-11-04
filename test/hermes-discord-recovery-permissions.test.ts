@@ -176,6 +176,46 @@ describe("Hermes cross-UID ledger permissions", () => {
     expect(imageBuildProbes).toContain('for suffix in ("-wal", "-shm"):');
   });
 
+  it("keeps cron/ group-accessible through the cross-identity build probes (#45)", () => {
+    // Hermes' _secure_dir() chmods cron/ to 0700 unless it detects a container. A
+    // build step and an OpenShell podman sandbox match none of its markers, so the
+    // gateway-run probe baked 0700 and the same-UID runtime (Hermes as sandbox)
+    // could not enter cron/.
+    const lines = dockerfile.split("\n");
+    const probeLaunches = lines.filter(
+      (line, index) =>
+        /\/usr\/bin\/setpriv --reuid=(?:gateway|sandbox) /u.test(line) &&
+        /image-build-probes\.py (?:cron|discord)-/u.test(lines[index + 1] ?? ""),
+    );
+    expect(probeLaunches).toHaveLength(6);
+    for (const launch of probeLaunches) {
+      expect(launch).toContain(
+        "    && HERMES_CONTAINER=1 HERMES_HOME=/sandbox/.hermes /usr/bin/setpriv --reuid=",
+      );
+    }
+
+    const cronMode = `test "$(stat -c '%U:%G %a' /sandbox/.hermes/cron)" = "gateway:sandbox 2770"`;
+    const cronCreate = dockerfile.indexOf("image-build-probes.py cron-create");
+    const cronReopen = dockerfile.indexOf("image-build-probes.py cron-reopen");
+    const discordCreate = dockerfile.indexOf("image-build-probes.py discord-create");
+    const discordReopen = dockerfile.indexOf("image-build-probes.py discord-reopen");
+    // Same RUN as cron-create, before the probe runs.
+    expect(dockerfile.lastIndexOf(cronMode, cronCreate)).toBeGreaterThan(
+      dockerfile.lastIndexOf("RUN ", cronCreate),
+    );
+    const afterCron = dockerfile.indexOf(cronMode, cronReopen);
+    expect(afterCron).toBeGreaterThan(cronReopen);
+    expect(afterCron).toBeLessThan(discordCreate);
+    expect(dockerfile.indexOf(cronMode, discordReopen)).toBeGreaterThan(discordReopen);
+
+    // The Darwin VM compatibility layer widens /sandbox/.hermes on purpose.
+    const finalGate = dockerfile.slice(dockerfile.indexOf("RUN check_metadata()"));
+    expect(finalGate).toContain(
+      `    && { [ "$NEMOCLAW_DARWIN_VM_COMPAT" = "1" ] \\\n` +
+        `        || check_metadata /sandbox/.hermes/cron 'gateway:sandbox 2770'; } \\\n`,
+    );
+  });
+
   it("build-probes Discord gateway creation, sandbox backup and replacement, then reopen", () => {
     expect(dockerfile).toContain(
       `stat -c '%U:%G %a' /sandbox/.hermes/gateway)" = "gateway:sandbox 2770"`,

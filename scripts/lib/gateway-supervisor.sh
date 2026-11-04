@@ -101,7 +101,12 @@ gateway_control_pid_is_live() {
   case "$pid" in
     '' | 0 | 1 | *[!0-9]*) return 1 ;;
   esac
-  kill -0 "$pid" 2>/dev/null || return 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    # kill -0 also needs permission to signal. Root without CAP_KILL (OpenShell
+    # 0.0.92 with podman drops it) gets EPERM for another UID's live process,
+    # so take existence from /proc instead; a gone pid has no entry (#47).
+    [ -e "$(gateway_control_proc_root)/${pid}/stat" ] || return 1
+  fi
   # kill -0 succeeds for an unreaped zombie. Do not record or trust a process
   # that can no longer own a listener or handle a termination signal.
   if command -v ps >/dev/null 2>&1; then

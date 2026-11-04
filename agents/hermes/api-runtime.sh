@@ -148,6 +148,24 @@ _api_verify_contract() {
   "$_HERMES_PYTHON" -I "$_GUARD" normalize-api-profile >/dev/null 2>>"$RUNTIME_LOG"
 }
 
+# Signal an api stack process. The api gateway and prefix proxy run as
+# hermesapi, and root without CAP_KILL (OpenShell 0.0.92 with podman drops it)
+# cannot signal another UID. Retry as the target's own real UID, which root
+# assumes with CAP_SETUID; that grants no authority beyond the target (#47).
+_api_signal() {
+  local signal="$1" pid="$2" start="$3" status uid gid
+  kill -s "$signal" "$pid" 2>/dev/null && return 0
+  status="$(gateway_control_proc_root)/${pid}/status"
+  uid="$(awk '$1 == "Uid:" { print $2; exit }' "$status" 2>/dev/null || true)"
+  gid="$(awk '$1 == "Gid:" { print $2; exit }' "$status" 2>/dev/null || true)"
+  case "${uid}:${gid}" in
+    *[!0-9:]* | :* | *: | 0:*) return 1 ;;
+  esac
+  # Ownership reads can race with PID reuse after the denied signal.
+  gateway_control_pid_matches_start_identity "$pid" "$start" || return 1
+  setpriv --reuid="$uid" --regid="$gid" --clear-groups -- kill -s "$signal" "$pid" 2>/dev/null
+}
+
 # A child is only reaped or signaled after its /proc start identity matches the
 # value captured at spawn, so a recycled PID can never be mistaken for ours.
 _api_child_current() {
@@ -163,7 +181,7 @@ _api_stop_child() {
   local attempts=0
   [ -n "$pid" ] || return 0
   if gateway_control_pid_matches_start_identity "$pid" "$start" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
+    _api_signal TERM "$pid" "$start" || true
     while [ "$attempts" -lt 20 ]; do
       gateway_control_pid_is_live "$pid" || break
       sleep 0.25
@@ -172,7 +190,7 @@ _api_stop_child() {
     if gateway_control_pid_is_live "$pid" \
       && gateway_control_pid_matches_start_identity "$pid" "$start"; then
       log "force-killing ${label} pid ${pid} after SIGTERM grace"
-      kill -9 "$pid" 2>/dev/null || true
+      _api_signal KILL "$pid" "$start" || true
     fi
   fi
 }
@@ -205,22 +223,24 @@ _api_kill_stale_children() {
   # Remove leftover api processes from a previous supervisor (container reused,
   # supervisor died, children orphaned). Match on the exact api-profile identity
   # so a default-profile gateway is never touched.
-  local proc_root="/proc" cmdline_file pid cmdline
+  local proc_root cmdline_file pid start cmdline
+  proc_root="$(gateway_control_proc_root)"
   for cmdline_file in "${proc_root}"/[0-9]*/cmdline; do
     [ -r "$cmdline_file" ] || continue
     pid="$(basename "$(dirname "$cmdline_file")")"
     [ "$pid" != "$$" ] || continue
+    start="$(gateway_control_pid_start_identity "$pid")" || continue
     cmdline="$(tr '\0' ' ' <"$cmdline_file" 2>/dev/null || true)"
     case "$cmdline" in
       *api-prefix-proxy*)
         log "removing stale api prefix proxy (pid ${pid})"
-        kill "$pid" 2>/dev/null || true
+        _api_signal TERM "$pid" "$start" || true
         ;;
       *hermes*gateway*run*)
         if tr '\0' '\n' <"${proc_root}/${pid}/environ" 2>/dev/null \
           | grep -qxF "HERMES_HOME=${API_PROFILE_HOME}"; then
           log "removing stale api profile gateway (pid ${pid})"
-          kill "$pid" 2>/dev/null || true
+          _api_signal TERM "$pid" "$start" || true
         fi
         ;;
     esac
@@ -356,12 +376,19 @@ _api_spawn_gateway() {
   _api_prepare_log "$GATEWAY_LOG" || return 1
   _api_apply_proxy_env
   # The profile dir is sandbox:api 3770; hermesapi creates runtime state there
-  # through the api group. Clean its stale pid/lock files as root first.
-  rm -f "${API_PROFILE_HOME}/runtime/gateway.pid" "${API_PROFILE_HOME}/runtime/gateway.lock"
+  # through the api group. Clean its stale pid/lock files first, as hermesapi:
+  # the sticky profile dir and hermesapi-owned runtime/ refuse root without
+  # CAP_DAC_OVERRIDE (OpenShell 0.0.92 with podman), and so does the
+  # hermesapi-owned log. Open the log after the step-down for the same reason;
+  # the step-down's own errors stay in the root runtime log (#47).
+  "${STEP_DOWN_PREFIX_API[@]}" rm -f \
+    "${API_PROFILE_HOME}/runtime/gateway.pid" "${API_PROFILE_HOME}/runtime/gateway.lock" \
+    >>"$RUNTIME_LOG" 2>&1 || true
+  # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
   HOME="$API_PROFILE_HOME" HERMES_HOME="$API_PROFILE_HOME" \
     nohup "${STEP_DOWN_PREFIX_API[@]}" sh -c \
-    'umask 0007; exec "$@"' sh "$_HERMES" gateway run \
-    >>"$GATEWAY_LOG" 2>&1 &
+    'umask 0007; exec >>"$1" 2>&1; shift; exec "$@"' sh "$GATEWAY_LOG" "$_HERMES" gateway run \
+    >>"$RUNTIME_LOG" 2>&1 &
   API_GATEWAY_PID=$!
   API_GATEWAY_START="$(gateway_control_pid_start_identity "$API_GATEWAY_PID" || true)"
   [ -n "$API_GATEWAY_START" ] || {
@@ -373,11 +400,13 @@ _api_spawn_gateway() {
 
 _api_spawn_proxy() {
   _api_prepare_log "$PROXY_LOG" || return 1
+  # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
   NEMOCLAW_PROXY_LISTEN_PORT="$PUBLIC_PORT" \
     NEMOCLAW_PROXY_MAIN_PORT="$MAIN_INTERNAL_PORT" \
     NEMOCLAW_PROXY_API_PORT="$API_INTERNAL_PORT" \
-    nohup "${STEP_DOWN_PREFIX_API[@]}" "$_HERMES_PYTHON" -I "$_PROXY" \
-    >>"$PROXY_LOG" 2>&1 &
+    nohup "${STEP_DOWN_PREFIX_API[@]}" sh -c \
+    'exec >>"$1" 2>&1; shift; exec "$@"' sh "$PROXY_LOG" "$_HERMES_PYTHON" -I "$_PROXY" \
+    >>"$RUNTIME_LOG" 2>&1 &
   API_PROXY_PID=$!
   API_PROXY_START="$(gateway_control_pid_start_identity "$API_PROXY_PID" || true)"
   [ -n "$API_PROXY_START" ] || {

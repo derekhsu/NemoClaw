@@ -126,6 +126,34 @@ describe("Hermes MCP HTTP proxy patch", () => {
     }
   });
 
+  it("honors port-specific no_proxy entries (#53)", () => {
+    const module = fixtureFile(unpatchedSource);
+    const portEnv = {
+      http_proxy: "http://10.200.0.1:3128",
+      no_proxy: "127.0.0.1:8642",
+    };
+
+    const patched = runPatcher(module);
+    const matching = transportKwargs(module, "http://127.0.0.1:8642/mcp", portEnv);
+    const otherPort = transportKwargs(module, "http://127.0.0.1:9999/mcp", portEnv);
+
+    expect(patched.status, patched.stderr).toBe(0);
+    expect(matching.status, matching.stderr).toBe(0);
+    expect(JSON.parse(matching.stdout)).toEqual({
+      sse: { verify: true },
+      streamable: { verify: true, cert: "/c.pem" },
+    });
+    expect(otherPort.status, otherPort.stderr).toBe(0);
+    expect(JSON.parse(otherPort.stdout)).toEqual({
+      sse: { verify: true, proxy: "http://10.200.0.1:3128" },
+      streamable: {
+        verify: true,
+        cert: "/c.pem",
+        proxy: "http://10.200.0.1:3128",
+      },
+    });
+  });
+
   it("accepts its own patched output unchanged (#53)", () => {
     const module = fixtureFile(unpatchedSource);
     const first = runPatcher(module);

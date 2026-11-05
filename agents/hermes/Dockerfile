@@ -601,7 +601,7 @@ RUN /usr/bin/python3 -I /usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.p
 # have no DNS and egress only through the proxy, so every remote MCP server
 # failed with "Temporary failure in name resolution" (#53). Pass the
 # environment proxy to the inner transport. Remove when upstream keeps it.
-ARG NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256=1e5f4f588f6a8726c38563d2ab33beb508f687b225090ed0a98eae1570aab788
+ARG NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256=732e369940d4a23c5886615d7d3ebb13b045f5fe4a95c59dc431930dbc359acf
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256" /usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py \

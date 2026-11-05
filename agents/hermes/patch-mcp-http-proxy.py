@@ -55,7 +55,15 @@ def {HELPER_NAME}(url) -> dict:
 
     parts = urllib.parse.urlsplit(str(url))
     host = parts.hostname or ""
-    if not host or urllib.request.proxy_bypass_environment(host):
+    if not host:
+        return {{}}
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    # no_proxy entries may name a port (host:port); IPv6 keeps the bare host.
+    target = host if port is None or ":" in host else f"{{host}}:{{port}}"
+    if urllib.request.proxy_bypass_environment(target):
         return {{}}
     proxies = urllib.request.getproxies_environment()
     proxy = proxies.get(parts.scheme.lower()) or proxies.get("all")

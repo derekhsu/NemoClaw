@@ -85,6 +85,20 @@ if [ -f /opt/hermes/ui-tui/dist/entry.js ]; then
   export HERMES_TUI_DIR="/opt/hermes/ui-tui"
 fi
 
+# Hermes' _secure_dir()/_secure_file() chmod HERMES_HOME to 0700 and its files
+# to 0600 unless it detects a container. It finds Docker (/.dockerenv or the
+# cgroup) but not an OpenShell podman sandbox, so the gateway turns the baked
+# sandbox:sandbox 3770 .hermes into 0700. Root without CAP_DAC_OVERRIDE
+# (OpenShell 0.0.92 with podman) then cannot create files there and every guard
+# write-config fails. Mark the container the way the image build probes do
+# (#45). hermesapi is outside the sandbox group, so 3770 still keeps the API
+# profile out of the default one. Exported here so every Hermes process this
+# entrypoint starts inherits it; connect shells get it from the proxy env file.
+mark_hermes_container_runtime() {
+  export HERMES_CONTAINER=1
+}
+mark_hermes_container_runtime
+
 # ── Early stderr/stdout capture ──────────────────────────────────
 # Capture all entrypoint output to /tmp/nemoclaw-start.log so startup
 # failures before /tmp/gateway.log exists are still diagnosable.
@@ -1821,6 +1835,7 @@ export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
 export HERMES_HOME="\${HERMES_HOME:-${HERMES_DIR}}"
+export HERMES_CONTAINER=1
 PROXYEOF
     cat <<'TUIENVEOF'
 if [ -f /opt/hermes/ui-tui/dist/entry.js ]; then

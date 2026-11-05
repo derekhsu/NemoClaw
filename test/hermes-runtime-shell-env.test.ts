@@ -81,6 +81,14 @@ function runRuntimeShellEnvBootstrap() {
       ["-c", `unset HERMES_HOME; . ${shellQuote(envFile)}; printf '%s' "$HERMES_HOME"`],
       { encoding: "utf-8", timeout: 5000 },
     );
+    const containerMarkerResult = spawnSync(
+      "bash",
+      [
+        "-c",
+        `unset HERMES_CONTAINER; . ${shellQuote(envFile)}; sh -c 'printf "%s" "$HERMES_CONTAINER"'`,
+      ],
+      { encoding: "utf-8", timeout: 5000 },
+    );
 
     return {
       src,
@@ -90,6 +98,7 @@ function runRuntimeShellEnvBootstrap() {
       guardResult,
       preservedHomeResult,
       defaultHomeResult,
+      containerMarkerResult,
       hermesHome,
       caFile,
     };
@@ -122,5 +131,13 @@ describe("agents/hermes/start.sh runtime shell env", () => {
     expect(run.guardResult.stderr).toContain(
       "Error: 'hermes setup' cannot modify config inside the sandbox.",
     );
+  });
+
+  it("marks connect shells as a container so Hermes keeps the shared .hermes mode", () => {
+    const run = runRuntimeShellEnvBootstrap();
+
+    expect(run.result.status).toBe(0);
+    expect(run.containerMarkerResult.status).toBe(0);
+    expect(run.containerMarkerResult.stdout).toBe("1");
   });
 });

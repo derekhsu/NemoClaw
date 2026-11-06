@@ -84,6 +84,7 @@ COPY agents/hermes-01x/generate-config.ts /opt/nemoclaw-hermes-config/generate-c
 COPY agents/hermes-01x/config/ /opt/nemoclaw-hermes-config/config/
 COPY agents/hermes-01x/image-build-probes.py /opt/nemoclaw-hermes-config/image-build-probes.py
 COPY agents/hermes-01x/patch-gateway-runtime-metadata.py /opt/nemoclaw-hermes-config/patch-gateway-runtime-metadata.py
+COPY agents/hermes-01x/patch-atomic-write-symlink-target.py /opt/nemoclaw-hermes-config/patch-atomic-write-symlink-target.py
 COPY agents/hermes-01x/patch-gateway-process-identity.py /opt/nemoclaw-hermes-config/patch-gateway-process-identity.py
 COPY agents/hermes-01x/patch-cron-execution-runtime.py /opt/nemoclaw-hermes-config/patch-cron-execution-runtime.py
 COPY agents/hermes-01x/patch-cron-restore-drain.py /opt/nemoclaw-hermes-config/patch-cron-restore-drain.py
@@ -125,6 +126,7 @@ COPY agents/hermes-01x/seed-dashboard-config.py /usr/local/lib/nemoclaw/seed-her
 COPY agents/hermes-01x/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py
 COPY agents/hermes-01x/api-runtime.sh /usr/local/bin/nemoclaw-api-runtime
 COPY agents/hermes-01x/api-prefix-proxy.py /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py
+COPY agents/hermes-01x/api-landlock-exec.py /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py
 COPY agents/hermes-01x/finalize-tirith-marker.py /usr/local/lib/nemoclaw/finalize-tirith-marker.py
 COPY agents/hermes-01x/build-mcp-digest.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py
 COPY agents/hermes-01x/mcp-config-transaction.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py
@@ -509,6 +511,26 @@ RUN /usr/bin/python3 -I \
     && HERMES_HOME="$(mktemp -d)" /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py gateway-runtime-metadata
 
+# OpenShell 0.1.x api profile (#52): HERMES_HOME is read-only under Landlock and
+# top-level state files are symlinks into state/. Create atomic-write temp
+# files beside the symlink target so the write stays inside the state tree.
+ARG NEMOCLAW_HERMES_ATOMIC_WRITE_PATCHER_SHA256=4fb382b79319c6c254cf0a7c4dd406a9704d72d3c76efabe526cc57db7ad74f6
+# hadolint ignore=DL4006
+RUN printf '%s  %s\n' \
+        "$NEMOCLAW_HERMES_ATOMIC_WRITE_PATCHER_SHA256" /opt/nemoclaw-hermes-config/patch-atomic-write-symlink-target.py \
+    | sha256sum -c - \
+    || { echo "ERROR: patch-atomic-write-symlink-target.py hash mismatch (update NEMOCLAW_HERMES_ATOMIC_WRITE_PATCHER_SHA256)" >&2; exit 1; }
+RUN /usr/bin/python3 -I \
+        /opt/nemoclaw-hermes-config/patch-atomic-write-symlink-target.py /opt/hermes/utils.py \
+    && probe="$(mktemp -d)" \
+    && mkdir "$probe/home" "$probe/home/state" \
+    && ln -s state/probe.json "$probe/home/probe.json" \
+    && chmod 555 "$probe/home" \
+    && /opt/hermes/.venv/bin/python -I -c 'import sys; sys.path.insert(0, "/opt/hermes"); from utils import atomic_json_write; atomic_json_write(sys.argv[1], {"ok": 1})' "$probe/home/probe.json" \
+    && test -L "$probe/home/probe.json" \
+    && grep -q '"ok": 1' "$probe/home/state/probe.json" \
+    && chmod 755 "$probe/home" && rm -rf "$probe"
+
 # NemoClaw installs its wrapper as `hermes` and moves the real entrypoint to
 # `hermes.real`, so every managed gateway command line carries that basename.
 # Hermes only accepts `hermes`/`hermes.exe` as the entry token, which defeats
@@ -655,6 +677,14 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
+ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=d59ecacb1f36c31967fa9730aaf3f82f20b16df79048eb9454c2a3d89587bbe8
+# hadolint ignore=DL4006
+RUN printf '%s  %s\n' \
+        "$NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256" /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \
+    | sha256sum -c - \
+    || { echo "ERROR: hermes-api-landlock-exec.py hash mismatch (update NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256)" >&2; exit 1; } \
+    && chown root:root /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \
+    && chmod 444 /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py
 ARG NEMOCLAW_HERMES_VALIDATOR_SHA256=edd0426d9765cf25bd0c90c9666aeae194f4c162caeec5cb2c6e4a18ca6edb18
 ARG NEMOCLAW_HERMES_TIRITH_FINALIZER_SHA256=a1e6b1c53ab297569abb87c29d15c294d729e46005bfd022136b4c447a791819
 ARG NEMOCLAW_HERMES_CRON_RESTORE_CONTROLLER_SHA256=e8593cf1580bffa4663e91c079ba0ce31c3d26391f5b1718872701138ce250b0
@@ -1360,14 +1390,11 @@ RUN set -eu; \
     rm -rf /opt/nemoclaw-security
 # End completed-image security package verification.
 
-# The Landlock POC patched these two files in a separate image lineage. Keep
-# the local-uploader release independent even if a cached or caller-supplied
-# base image accidentally contains those POC changes.
+# The Landlock POC patched the config guard in a separate image lineage. Keep
+# this image independent even if a cached or caller-supplied base image
+# accidentally contains that change. (Its utils.py atomic-write change is
+# applied deliberately above by patch-atomic-write-symlink-target.py, #52.)
 RUN set -eu; \
-    if grep -Fq 'tmp_dir = Path(os.path.realpath(str(path))).parent' /opt/hermes/utils.py; then \
-        echo 'ERROR: Landlock POC atomic JSON patch leaked into the Hermes image' >&2; \
-        exit 1; \
-    fi; \
     if grep -Fq 'compat hash anchor refresh skipped without write access' /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py; then \
         echo 'ERROR: Landlock POC config guard patch leaked into the Hermes image' >&2; \
         exit 1; \

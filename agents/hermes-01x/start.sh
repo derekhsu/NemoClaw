@@ -320,6 +320,35 @@ if truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"; then
   HERMES_DASHBOARD_SOURCE_ENV="/sandbox/.hermes-api/profiles/api/.env"
 fi
 
+# OpenShell 0.1.x (#52): with the api profile enabled, the api side shares this
+# UID and can reach every loopback listener (OpenShell brokers connect/bind, so
+# Landlock cannot restrict TCP). The native Hermes dashboard embeds its session
+# token in the page it serves on 127.0.0.1, which would hand admin access to
+# the api side, so it does not run then; ClawShell's Private Dashboard (mTLS)
+# replaces it.
+hermes_native_dashboard_enabled() {
+  ! truthy_env "${NEMOCLAW_REQUIRE_API_PROFILE:-}"
+}
+
+# OpenShell 0.1.x (#52): the default gateway's control socket
+# ($HERMES_DIR/gateway.sock) answers pause-for-update and rescan-profiles to any
+# same-UID caller, and Landlock ABI 5 does not mediate Unix socket connect, so
+# the api side could pause the default gateway. Hermes cannot disable the
+# socket, but a failed bind is non-fatal and it falls back to its state files.
+# Hold the path with a directory: Hermes' best-effort unlink cannot remove it,
+# so the bind fails and no socket exists for the api side to reach.
+block_default_gateway_control_socket() {
+  local path="${HERMES_DIR}/gateway.sock"
+  if [ -d "$path" ] && [ ! -L "$path" ]; then
+    return 0
+  fi
+  rm -f -- "$path" 2>/dev/null || true
+  if ! mkdir -m 0500 -- "$path" 2>/dev/null; then
+    echo "[SECURITY] cannot hold ${path} against the Hermes control socket" >&2
+    return 1
+  fi
+}
+
 validate_tcp_port() {
   local name="$1"
   local value="$2"
@@ -394,7 +423,9 @@ print_dashboard_urls() {
   local api_url dashboard_url
   api_url="http://127.0.0.1:${PUBLIC_PORT}/v1"
   dashboard_url="http://127.0.0.1:${DASHBOARD_PUBLIC_PORT}/"
-  echo "[gateway] Hermes Dashboard: ${dashboard_url}" >&2
+  if hermes_native_dashboard_enabled; then
+    echo "[gateway] Hermes Dashboard: ${dashboard_url}" >&2
+  fi
   echo "[gateway] Hermes API:       ${api_url}" >&2
   echo "[gateway] Health:           ${api_url%/v1}/health" >&2
   echo "[gateway] Connect any OpenAI-compatible frontend to this endpoint." >&2
@@ -2613,8 +2644,10 @@ hermes_auxiliaries_need_recovery() {
   else
     hermes_api_socat_bridge_healthy "${SOCAT_PID:-}" "$PUBLIC_PORT" || return 0
   fi
-  hermes_dashboard_healthy "${DASHBOARD_PID:-}" || return 0
-  hermes_socat_bridge_healthy dashboard-socat "${DASHBOARD_SOCAT_PID:-}" "$DASHBOARD_PUBLIC_PORT" || return 0
+  if hermes_native_dashboard_enabled; then
+    hermes_dashboard_healthy "${DASHBOARD_PID:-}" || return 0
+    hermes_socat_bridge_healthy dashboard-socat "${DASHBOARD_SOCAT_PID:-}" "$DASHBOARD_PUBLIC_PORT" || return 0
+  fi
   return 1
 }
 
@@ -2633,6 +2666,7 @@ launch_hermes_gateway() {
   if [ "$HERMES_RESTART_SEALED" -ne 1 ]; then
     cleanup_stale_hermes_gateway_runtime || return 1
   fi
+  block_default_gateway_control_socket || return 1
   HERMES_HOME="${HERMES_DIR}" \
     nohup "${STEP_DOWN_PREFIX_GATEWAY[@]}" sh -c \
     'umask 0007; exec "$@" >>/tmp/gateway.log 2>&1' sh "$HERMES" gateway run &
@@ -2674,7 +2708,9 @@ ensure_hermes_supervised_auxiliaries() {
     fi
     hermes_api_socat_bridge_healthy "$SOCAT_PID" "$PUBLIC_PORT" || return 1
   fi
-  if ! hermes_dashboard_healthy "${DASHBOARD_PID:-}"; then
+  if ! hermes_native_dashboard_enabled; then
+    :
+  elif ! hermes_dashboard_healthy "${DASHBOARD_PID:-}"; then
     # A live PID is not sufficient: it may be reused, alive without the exact
     # dashboard listener, or serving a wedged HTTP process. Stop both tracked
     # children before relaunch so the replacement cannot lose either bind race.
@@ -2696,7 +2732,9 @@ ensure_hermes_supervised_auxiliaries() {
       "$DASHBOARD_PUBLIC_PORT" "$DASHBOARD_INTERNAL_PORT" "dashboard" DASHBOARD_SOCAT_PID \
       "$DASHBOARD_PID" "$dashboard_user" || return 1
   fi
-  ensure_dashboard_log_stream || return 1
+  if hermes_native_dashboard_enabled; then
+    ensure_dashboard_log_stream || return 1
+  fi
   ensure_gateway_log_stream || return 1
 }
 
@@ -3000,6 +3038,7 @@ prepare_hermes_root_runtime() {
 
 launch_hermes_gateway_current_user() {
   cleanup_stale_hermes_gateway_runtime || return 1
+  block_default_gateway_control_socket || return 1
   HERMES_HOME="${HERMES_DIR}" \
     nohup "$HERMES" gateway run >>/tmp/gateway.log 2>&1 &
   GATEWAY_PID=$!

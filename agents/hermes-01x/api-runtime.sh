@@ -2,14 +2,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# nemoclaw-api-runtime — privileged supervisor for the dedicated api-profile
-# gateway and the public-port prefix proxy.
+# nemoclaw-api-runtime — supervisor for the api-profile gateway and the
+# public-port prefix proxy (OpenShell 0.1.x, derekhsu/NemoClaw#52).
 #
-# ClawShell launches this through the container-runtime privileged exec path
-# (docker exec --user root). nemoclaw-start runs as the sandbox uid under the
-# OpenShell-managed topology and cannot step down to the dedicated hermesapi
-# uid, so the api profile's processes are owned by this supervisor instead of
-# the managed entrypoint.
+# ClawShell launches this through OpenShell exec as the sandbox user, the same
+# identity as nemoclaw-start; root has no capabilities on 0.1.x and is never
+# used. The api gateway runs under hermes-api-landlock-exec.py (Landlock +
+# seccomp), so it cannot read the default profile or modify its own design
+# files; the prefix proxy stays on the admin side.
 #
 #   nemoclaw-api-runtime start    — ensure the api runtime is running
 #   nemoclaw-api-runtime stop     — wait for the supervisor and API listeners to stop
@@ -17,17 +17,15 @@
 #   nemoclaw-api-runtime replace  — stop the current supervisor and children,
 #                                   then start fresh (post-config-write restart)
 #
-# The supervisor verifies the root-sealed api profile contract before launch
-# and before every respawn; a drifted anchor, replaced path, missing key, or
-# interrupted config-write journal fails closed. It also fingerprints the
-# admin-owned design surface (config.yaml, .env, SOUL.md, skills/) each poll
-# and restarts the gateway once an edit burst settles, so dashboard-side
-# changes take effect without a manual replace.
+# The supervisor verifies the api profile layout (hermes-api-profile.py verify)
+# before launch and before every respawn, and fingerprints the admin-edited
+# design surface (config.yaml, .env, SOUL.md, skills/) each poll, restarting
+# the gateway once an edit burst settles.
 
 set -euo pipefail
 
-if [ "$(id -u)" -ne 0 ]; then
-  echo "[api-runtime] requires the privileged executor identity" >&2
+if [ "$(id -u)" -eq 0 ]; then
+  echo "[api-runtime] run as the sandbox user, not root (OpenShell 0.1.x)" >&2
   exit 1
 fi
 
@@ -89,21 +87,27 @@ API_PROFILE_HOME="/sandbox/.hermes-api/profiles/api"
 API_INTERNAL_PORT=18699
 PUBLIC_PORT=8642
 MAIN_INTERNAL_PORT=18642
-RUNTIME_STATE_DIR="/run/nemoclaw"
+# Admin-only runtime state. The api side has no access to /tmp under its
+# Landlock domain, so its gateway cannot plant symlinks here; the gateway's
+# stdout log lives here too, opened by this supervisor (#52).
+RUNTIME_STATE_DIR="/tmp/nemoclaw-api-runtime"
 SUPERVISOR_PID_FILE="${RUNTIME_STATE_DIR}/api-runtime.pid"
 SUPERVISOR_LOCK_FILE="${RUNTIME_STATE_DIR}/api-runtime.lock"
-RUNTIME_LOG="/tmp/api-runtime.log"
-GATEWAY_LOG="/tmp/api-gateway.log"
-PROXY_LOG="/tmp/api-proxy.log"
+RUNTIME_LOG="${RUNTIME_STATE_DIR}/api-runtime.log"
+GATEWAY_LOG="${RUNTIME_STATE_DIR}/api-gateway.log"
+PROXY_LOG="${RUNTIME_STATE_DIR}/api-proxy.log"
 
-_GUARD="/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py"
-_PROXY="/usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py"
-if [ ! -f "$_GUARD" ]; then
-  _GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime-config-guard.py"
-fi
-if [ ! -f "$_PROXY" ]; then
-  _PROXY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/api-prefix-proxy.py"
-fi
+_lib_path() {
+  local installed="/usr/local/lib/nemoclaw/$1" source_name="$2"
+  if [ -f "$installed" ]; then
+    printf '%s\n' "$installed"
+  else
+    printf '%s/%s\n' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "$source_name"
+  fi
+}
+_PROFILE_TOOL="$(_lib_path hermes-api-profile.py api-profile.py)"
+_LANDLOCK_EXEC="$(_lib_path hermes-api-landlock-exec.py api-landlock-exec.py)"
+_PROXY="$(_lib_path hermes-api-prefix-proxy.py api-prefix-proxy.py)"
 
 _HERMES="$(command -v hermes || true)"
 [ -n "$_HERMES" ] || {
@@ -129,10 +133,13 @@ API_PROXY_PID=""
 API_PROXY_START=""
 DESIGN_FP_APPLIED=""
 
-install -d -m 0755 -o root -g root "$RUNTIME_STATE_DIR"
-if [ ! -f "$RUNTIME_LOG" ]; then
-  install -o root -g root -m 0600 /dev/null "$RUNTIME_LOG"
+umask 0077
+if [ -L "$RUNTIME_STATE_DIR" ] || { [ -e "$RUNTIME_STATE_DIR" ] && [ ! -O "$RUNTIME_STATE_DIR" ]; }; then
+  echo "[api-runtime] ${RUNTIME_STATE_DIR} is not a directory owned by $(id -un)" >&2
+  exit 1
 fi
+install -d -m 0700 "$RUNTIME_STATE_DIR"
+[ -f "$RUNTIME_LOG" ] || install -m 0600 /dev/null "$RUNTIME_LOG"
 
 log() {
   printf '%s [api-runtime] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$RUNTIME_LOG"
@@ -140,30 +147,17 @@ log() {
 }
 
 _api_verify_contract() {
-  # normalize-api-profile repairs the admin-owned design surface (SOUL.md,
-  # skills/) before asserting the sealed contract: operator edits arrive via
-  # ordinary file writes and can drop the pinned mode/owner, and a respawn
-  # must heal that drift rather than refuse to launch over it. Sealed bytes
-  # (policy, anchor, record) are still verified, never rewritten.
-  "$_HERMES_PYTHON" -I "$_GUARD" normalize-api-profile >/dev/null 2>>"$RUNTIME_LOG"
+  # The admin side owns and may edit the whole profile; verify only that the
+  # layout the Landlock launcher relies on is intact (no root-sealed anchor on
+  # 0.1.x, #52).
+  "$_HERMES_PYTHON" -I "$_PROFILE_TOOL" verify >>"$RUNTIME_LOG" 2>&1
 }
 
-# Signal an api stack process. The api gateway and prefix proxy run as
-# hermesapi, and root without CAP_KILL (OpenShell 0.0.92 with podman drops it)
-# cannot signal another UID. Retry as the target's own real UID, which root
-# assumes with CAP_SETUID; that grants no authority beyond the target (#47).
+# Every api stack process runs as the sandbox user, so a plain signal reaches
+# it. Callers check the /proc start identity first (PID reuse).
 _api_signal() {
-  local signal="$1" pid="$2" start="$3" status uid gid
-  kill -s "$signal" "$pid" 2>/dev/null && return 0
-  status="$(gateway_control_proc_root)/${pid}/status"
-  uid="$(awk '$1 == "Uid:" { print $2; exit }' "$status" 2>/dev/null || true)"
-  gid="$(awk '$1 == "Gid:" { print $2; exit }' "$status" 2>/dev/null || true)"
-  case "${uid}:${gid}" in
-    *[!0-9:]* | :* | *: | 0:*) return 1 ;;
-  esac
-  # Ownership reads can race with PID reuse after the denied signal.
-  gateway_control_pid_matches_start_identity "$pid" "$start" || return 1
-  setpriv --reuid="$uid" --regid="$gid" --clear-groups -- kill -s "$signal" "$pid" 2>/dev/null
+  local signal="$1" pid="$2"
+  kill -s "$signal" "$pid" 2>/dev/null
 }
 
 # A child is only reaped or signaled after its /proc start identity matches the
@@ -237,8 +231,10 @@ _api_kill_stale_children() {
         _api_signal TERM "$pid" "$start" || true
         ;;
       *hermes*gateway*run*)
-        if tr '\0' '\n' <"${proc_root}/${pid}/environ" 2>/dev/null \
-          | grep -qxF "HERMES_HOME=${API_PROFILE_HOME}"; then
+        # The Landlock launcher starts the api gateway in its workspace; the
+        # default gateway never runs there. (environ is not readable across
+        # the api Landlock domain.)
+        if [ "$(readlink "${proc_root}/${pid}/cwd" 2>/dev/null)" = "${API_PROFILE_HOME}/workspace" ]; then
           log "removing stale api profile gateway (pid ${pid})"
           _api_signal TERM "$pid" "$start" || true
         fi
@@ -306,7 +302,10 @@ _api_wait_backend_listener() {
   # worth keeping then.
   local port="$1" label="$2" attempts=0
   while [ "$attempts" -lt 1200 ]; do
-    _api_port_owner_pid "$port" >/dev/null 2>&1 && return 0
+    # Presence only: on OpenShell 0.1.x each exec session has its own Landlock
+    # domain, so this supervisor cannot read the main gateway's /proc/<pid>/fd
+    # (it was started by nemoclaw-start in another session, #52).
+    _api_listener_present "$port" && return 0
     if ! gateway_control_pid_matches_start_identity \
       "$API_GATEWAY_PID" "$API_GATEWAY_START"; then
       log "api gateway exited while waiting for ${label} on ${port}"
@@ -321,7 +320,7 @@ _api_wait_backend_listener() {
 
 _api_prepare_log() {
   local path="$1"
-  install -o hermesapi -g api -m 0640 /dev/null "$path"
+  [ -f "$path" ] && [ ! -L "$path" ] || install -m 0600 /dev/null "$path"
 }
 
 _api_design_fingerprint() {
@@ -332,88 +331,38 @@ _api_design_fingerprint() {
     "$API_PROFILE_HOME/SOUL.md" "$API_PROFILE_HOME/skills"
 }
 
-_api_apply_proxy_env() {
-  # inference.local resolves only through the OpenShell egress proxy and its
-  # L7 CA. nemoclaw-start publishes the same values for connect sessions in
-  # the proxy-env file; read only the whitelisted export lines and never eval
-  # the file — it is owned by the sandbox user while this script runs as root.
-  local file="/tmp/nemoclaw-proxy-env.sh" name value
-  if [ -f "$file" ]; then
-    while IFS='=' read -r name value; do
-      name="${name#export }"
-      case "$name" in
-        HTTP_PROXY | HTTPS_PROXY | NO_PROXY | http_proxy | https_proxy | no_proxy | \
-          SSL_CERT_FILE | CURL_CA_BUNDLE | REQUESTS_CA_BUNDLE | GIT_SSL_CAINFO | \
-          NODE_EXTRA_CA_CERTS)
-          value="${value%\"}"
-          value="${value#\"}"
-          value="${value%\'}"
-          value="${value#\'}"
-          printf -v "$name" '%s' "$value"
-          export "${name?}"
-          ;;
-      esac
-    done <"$file"
-  fi
-  local proxy_host="${NEMOCLAW_PROXY_HOST:-10.200.0.1}"
-  local proxy_port="${NEMOCLAW_PROXY_PORT:-3128}"
-  : "${HTTP_PROXY:=http://${proxy_host}:${proxy_port}}"
-  : "${HTTPS_PROXY:=$HTTP_PROXY}"
-  : "${NO_PROXY:=localhost,127.0.0.1,::1,${proxy_host}}"
-  : "${http_proxy:=$HTTP_PROXY}" "${https_proxy:=$HTTPS_PROXY}" "${no_proxy:=$NO_PROXY}"
-  local ca_bundle="/etc/openshell-tls/ca-bundle.pem"
-  if [ -f "$ca_bundle" ]; then
-    : "${SSL_CERT_FILE:=$ca_bundle}" "${CURL_CA_BUNDLE:=$ca_bundle}"
-    : "${REQUESTS_CA_BUNDLE:=$ca_bundle}" "${GIT_SSL_CAINFO:=$ca_bundle}"
-    : "${NODE_EXTRA_CA_CERTS:=$ca_bundle}"
-  fi
-  export HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
-  export SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE GIT_SSL_CAINFO \
-    NODE_EXTRA_CA_CERTS
-}
-
 _api_spawn_gateway() {
   _api_prepare_log "$GATEWAY_LOG" || return 1
-  _api_apply_proxy_env
-  # The profile dir is sandbox:api 3770; hermesapi creates runtime state there
-  # through the api group. Clean its stale pid/lock files first, as hermesapi:
-  # the sticky profile dir and hermesapi-owned runtime/ refuse root without
-  # CAP_DAC_OVERRIDE (OpenShell 0.0.92 with podman), and so does the
-  # hermesapi-owned log. Open the log after the step-down for the same reason;
-  # the step-down's own errors stay in the root runtime log (#47).
-  "${STEP_DOWN_PREFIX_API[@]}" rm -f \
-    "${API_PROFILE_HOME}/runtime/gateway.pid" "${API_PROFILE_HOME}/runtime/gateway.lock" \
+  # Stale pid/lock files from a previous gateway. rm does not follow a symlink
+  # the api side may have planted in its own runtime/ directory.
+  rm -f "${API_PROFILE_HOME}/runtime/gateway.pid" "${API_PROFILE_HOME}/runtime/gateway.lock" \
     >>"$RUNTIME_LOG" 2>&1 || true
-  # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
-  HOME="$API_PROFILE_HOME" HERMES_HOME="$API_PROFILE_HOME" \
-    nohup "${STEP_DOWN_PREFIX_API[@]}" sh -c \
-    'umask 0007; exec >>"$1" 2>&1; shift; exec "$@"' sh "$GATEWAY_LOG" "$_HERMES" gateway run \
-    >>"$RUNTIME_LOG" 2>&1 &
+  # The launcher sanitizes the environment, closes inherited fds (including
+  # the supervisor lock on fd 9), confines with Landlock + seccomp, then execs.
+  nohup "$_HERMES_PYTHON" -I "$_LANDLOCK_EXEC" "$API_PROFILE_HOME" -- \
+    "$_HERMES" gateway run >>"$GATEWAY_LOG" 2>&1 9>&- &
   API_GATEWAY_PID=$!
   API_GATEWAY_START="$(gateway_control_pid_start_identity "$API_GATEWAY_PID" || true)"
   [ -n "$API_GATEWAY_START" ] || {
     log "api gateway pid ${API_GATEWAY_PID} failed identity capture"
     return 1
   }
-  log "api profile gateway launched as 'hermesapi' (pid $API_GATEWAY_PID)"
+  log "api profile gateway launched under Landlock (pid $API_GATEWAY_PID)"
 }
 
 _api_spawn_proxy() {
   _api_prepare_log "$PROXY_LOG" || return 1
-  # shellcheck disable=SC2016  # positional args expand in the stepped-down shell
   NEMOCLAW_PROXY_LISTEN_PORT="$PUBLIC_PORT" \
     NEMOCLAW_PROXY_MAIN_PORT="$MAIN_INTERNAL_PORT" \
     NEMOCLAW_PROXY_API_PORT="$API_INTERNAL_PORT" \
-    nohup "${STEP_DOWN_PREFIX_API[@]}" sh -c \
-    'exec >>"$1" 2>&1; shift; exec "$@"' sh "$PROXY_LOG" "$_HERMES_PYTHON" -I "$_PROXY" \
-    >>"$RUNTIME_LOG" 2>&1 &
+    nohup "$_HERMES_PYTHON" -I "$_PROXY" >>"$PROXY_LOG" 2>&1 9>&- &
   API_PROXY_PID=$!
   API_PROXY_START="$(gateway_control_pid_start_identity "$API_PROXY_PID" || true)"
   [ -n "$API_PROXY_START" ] || {
     log "api prefix proxy pid ${API_PROXY_PID} failed identity capture"
     return 1
   }
-  log "api prefix proxy launched as 'hermesapi' (pid $API_PROXY_PID)"
+  log "api prefix proxy launched (pid $API_PROXY_PID)"
 }
 
 _api_launch_stack() {
@@ -514,7 +463,7 @@ _api_supervise() {
       API_PROXY_PID="" API_PROXY_START=""
     fi
     if [ -z "$API_GATEWAY_PID" ] || [ -z "$API_PROXY_PID" ]; then
-      # Respawn only while the root-sealed contract still verifies.
+      # Respawn only while the api profile layout still verifies.
       _api_verify_contract || {
         log "api profile contract verification failed during supervision; stopping"
         _api_shutdown
@@ -561,45 +510,6 @@ _api_supervise() {
     sleep 2 || true
   done
 }
-
-# ── Payload network namespace ────────────────────────────────────
-# docker exec lands in the OpenShell supervisor's network namespace (PID 1's),
-# whose loopback cannot see payload listeners: sandbox payload processes —
-# nemoclaw-start, the main gateway, and everything OpenShell exec spawns —
-# run in a dedicated netns. The api stack must live there too: the prefix
-# proxy fallthrough targets the main gateway's 127.0.0.1:18642, and
-# ClawShell's readiness probes arrive through OpenShell exec, which joins
-# the payload netns. Re-exec into it once before any listener work so every
-# /proc/net/tcp check and spawned child resolves the right loopback.
-#
-# The anchor is the pinned nemoclaw-start pid — the same supervised process
-# the guard requires for bootstrap — verified live and by cmdline before its
-# namespace is borrowed. In non-OpenShell topologies nemoclaw-start already
-# shares the only netns, and the self-comparison skips the re-exec.
-_api_resolve_payload_ns_pid() {
-  local pid_file="/sandbox/.hermes/runtime/nemoclaw-start.pid" pid cmdline
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
-  gateway_control_pid_is_live "$pid" || return 1
-  cmdline="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
-  case "$cmdline" in
-    *nemoclaw-start*) ;;
-    *) return 1 ;;
-  esac
-  PAYLOAD_NS_PID="$pid"
-}
-PAYLOAD_NS_PID=""
-if ! _api_resolve_payload_ns_pid; then
-  echo "[api-runtime] cannot resolve the payload network namespace anchor (nemoclaw-start pid)" >&2
-  exit 1
-fi
-if [ "$(readlink /proc/self/ns/net)" != "$(readlink "/proc/${PAYLOAD_NS_PID}/ns/net")" ]; then
-  command -v nsenter >/dev/null 2>&1 || {
-    echo "[api-runtime] nsenter is required to join the payload network namespace" >&2
-    exit 1
-  }
-  exec nsenter -t "$PAYLOAD_NS_PID" -n -- "$0" "$ACTION"
-fi
 
 # ── Supervisor singleton ─────────────────────────────────────────
 # The lock serializes start/replace across concurrent privileged exec calls.

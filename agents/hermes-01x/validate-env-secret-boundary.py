@@ -170,6 +170,9 @@ def _validate_directory_descriptor(path: str, fd: int) -> tuple[int, int, int, i
                 sandbox_uid, sandbox_gid = sandbox_identity
                 allowed.update(
                     {
+                        # OpenShell 0.1.x mounts the workspace volume at
+                        # /sandbox as sandbox:sandbox 0700 (#52).
+                        (sandbox_uid, sandbox_gid, 0o700),
                         (sandbox_uid, sandbox_gid, 0o755),
                         (sandbox_uid, sandbox_gid, 0o770),
                         (0, sandbox_gid, 0o1775),

@@ -666,11 +666,14 @@ def _pinned_process_matches_supervised_nonroot_start(
 
 
 def _openshell_supervised_nonroot_start_is_live(
-    expected_root_uid: int,
+    expected_supervisor_uid: int,
     expected_sandbox_uid: int,
     required_pid: int | None = None,
 ) -> bool:
-    supervisor_identity = _openshell_supervisor_identity(expected_root_uid)
+    # OpenShell 0.1.x runs the PID 1 supervisor (openshell-sandbox) as the
+    # sandbox identity with no capabilities, so callers in this image pass the
+    # sandbox UID for both arguments (#52).
+    supervisor_identity = _openshell_supervisor_identity(expected_supervisor_uid)
     if supervisor_identity is None:
         return False
     proc_root_fd = -1
@@ -699,7 +702,7 @@ def _openshell_supervised_nonroot_start_is_live(
         return bool(
             matches == 1
             and (required_pid is None or matched_pid == required_pid)
-            and _openshell_supervisor_identity(expected_root_uid)
+            and _openshell_supervisor_identity(expected_supervisor_uid)
             == supervisor_identity
         )
     except OSError:
@@ -792,7 +795,7 @@ def _attested_shields_runtime_topology() -> str:
         return "unknown"
     if sandbox_uid <= 0:
         return "unknown"
-    if _openshell_supervised_nonroot_start_is_live(0, sandbox_uid):
+    if _openshell_supervised_nonroot_start_is_live(sandbox_uid, sandbox_uid):
         if (
             _root_lifecycle_marker_state() != marker_state
             or not _startup_ready_marker_absent()
@@ -827,7 +830,7 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
                 and sandbox_uid >= 0
                 and _startup_ready_marker_absent()
                 and _openshell_supervised_nonroot_start_is_live(
-                    0, sandbox_uid, os.getppid()
+                    sandbox_uid, sandbox_uid, os.getppid()
                 )
             ):
                 return
@@ -872,7 +875,7 @@ def _validate_action_readiness(action: str, startup_owner: bool) -> None:
             and action in host_actions
             and sandbox_uid >= 0
             and _startup_ready_marker_absent()
-            and _openshell_supervised_nonroot_start_is_live(0, sandbox_uid)
+            and _openshell_supervised_nonroot_start_is_live(sandbox_uid, sandbox_uid)
         ):
             return
         # Local source fixtures retain the explicit compatibility path. The
@@ -1752,7 +1755,7 @@ def _managed_nonroot_reconciliation_is_allowed() -> bool:
     except KeyError:
         return False
     return _startup_ready_marker_absent() and _openshell_supervised_nonroot_start_is_live(
-        0, sandbox_uid
+        sandbox_uid, sandbox_uid
     )
 
 
@@ -6531,7 +6534,7 @@ def main() -> int:
                 sandbox_uid, _sandbox_gid = _sandbox_identity()
                 if (
                     not _startup_ready_marker_absent()
-                    or not _openshell_supervised_nonroot_start_is_live(0, sandbox_uid)
+                    or not _openshell_supervised_nonroot_start_is_live(sandbox_uid, sandbox_uid)
                 ):
                     raise UnsafePathError(
                         "managed default reload requires supported OpenShell non-root supervisor topology"

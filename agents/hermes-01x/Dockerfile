@@ -655,7 +655,7 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
-ARG NEMOCLAW_HERMES_VALIDATOR_SHA256=7e3c356447c01750594ab2c2be9711e1ba62ee9d6a38b25c49f60655d3dec24c
+ARG NEMOCLAW_HERMES_VALIDATOR_SHA256=edd0426d9765cf25bd0c90c9666aeae194f4c162caeec5cb2c6e4a18ca6edb18
 ARG NEMOCLAW_HERMES_TIRITH_FINALIZER_SHA256=a1e6b1c53ab297569abb87c29d15c294d729e46005bfd022136b4c447a791819
 ARG NEMOCLAW_HERMES_CRON_RESTORE_CONTROLLER_SHA256=e8593cf1580bffa4663e91c079ba0ce31c3d26391f5b1718872701138ce250b0
 # hadolint ignore=DL4006
@@ -1373,7 +1373,11 @@ RUN set -eu; \
         exit 1; \
     fi
 
-# start.sh handles privilege separation: runs as root initially, then drops
-# to the 'gateway' user via setpriv for the agent process. See start.sh.
+# OpenShell 0.1.x rejects a workload identity with UID or GID 0, and root has
+# no capabilities there. Every process in this image runs as `sandbox`; the
+# API profile is confined with Landlock instead of a separate UID (#52).
+# The base image verifies the named runtime user IDs (998:999).
+# hadolint ignore=DL3066
+USER sandbox
 ENTRYPOINT ["/usr/local/bin/nemoclaw-start"]
 CMD ["/bin/bash"]

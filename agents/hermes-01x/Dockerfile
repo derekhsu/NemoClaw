@@ -127,6 +127,7 @@ COPY agents/hermes-01x/runtime-config-guard.py /usr/local/lib/nemoclaw/hermes-ru
 COPY agents/hermes-01x/api-runtime.sh /usr/local/bin/nemoclaw-api-runtime
 COPY agents/hermes-01x/api-prefix-proxy.py /usr/local/lib/nemoclaw/hermes-api-prefix-proxy.py
 COPY agents/hermes-01x/api-landlock-exec.py /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py
+COPY agents/hermes-01x/api-profile.py /usr/local/lib/nemoclaw/hermes-api-profile.py
 COPY agents/hermes-01x/finalize-tirith-marker.py /usr/local/lib/nemoclaw/finalize-tirith-marker.py
 COPY agents/hermes-01x/build-mcp-digest.py /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py
 COPY agents/hermes-01x/mcp-config-transaction.py /usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py
@@ -677,6 +678,14 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
+ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=f1d1340378ff7a4f1a792de3f85f7200383dd10009d50c48485ab23ee3f94e5a
+# hadolint ignore=DL4006
+RUN printf '%s  %s\n' \
+        "$NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256" /usr/local/lib/nemoclaw/hermes-api-profile.py \
+    | sha256sum -c - \
+    || { echo "ERROR: hermes-api-profile.py hash mismatch (update NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256)" >&2; exit 1; } \
+    && chown root:root /usr/local/lib/nemoclaw/hermes-api-profile.py \
+    && chmod 444 /usr/local/lib/nemoclaw/hermes-api-profile.py
 ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=d59ecacb1f36c31967fa9730aaf3f82f20b16df79048eb9454c2a3d89587bbe8
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
@@ -1275,17 +1284,18 @@ RUN chown root:root /sandbox/.nemoclaw \
     && printf '%s' '{}' > /sandbox/.nemoclaw/config.json \
     && chown sandbox:sandbox /sandbox/.nemoclaw/config.json
 
-# /sandbox belongs to the sandbox user, so root can create the api profile
-# chain there only while it holds CAP_DAC_OVERRIDE. OpenShell 0.0.92 with
-# podman drops it (and CAP_FSETID) from every sandbox, so pre-create the
-# root-owned traverse-only chain here and let the volume copy-up supply it.
-RUN install -d -o root -g root -m 0711 /sandbox/.hermes-api /sandbox/.hermes-api/profiles
+# OpenShell 0.1.x (#52): the admin side (sandbox UID) owns and creates the api
+# profile with hermes-api-profile.py; the api side is kept out by Landlock.
+RUN install -d -o sandbox -g sandbox -m 0700 /sandbox/.hermes-api /sandbox/.hermes-api/profiles
 
-# Prove the root guard's api profile bootstrap, normalize, write-config and
-# verify, and a default-profile write-config, work without CAP_DAC_OVERRIDE
-# and CAP_FSETID, as ClawShell runs them on such runtimes (NemoClaw #21).
-RUN /usr/bin/setpriv --bounding-set -dac_override,-fsetid -- /opt/hermes/.venv/bin/python -I \
-        /opt/nemoclaw-hermes-config/image-build-probes.py guard-without-dac-override \
+# Prove the admin side (sandbox UID, no root) can create and verify the api
+# profile layout the Landlock launcher expects, then leave no profile behind:
+# each sandbox creates its own at first start (#52).
+RUN /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+        /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/hermes-api-profile.py bootstrap \
+    && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+        /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/hermes-api-profile.py verify \
+    && rm -rf /sandbox/.hermes-api/profiles/api /sandbox/.hermes-api/shared-state.db \
     && rm -f /opt/nemoclaw-hermes-config/image-build-probes.py
 
 # OpenShell's macOS VM backend currently remaps extracted rootfs ownership to
@@ -1339,8 +1349,8 @@ RUN check_metadata() { \
     && test -s /sandbox/.hermes/.config-hash \
     && grep -q '^# nemoclaw-hermes-mcp-state-v1 intended=[0-9a-f]' /sandbox/.hermes/.config-hash \
     && check_metadata /sandbox/.nemoclaw 'root:root 755' \
-    && check_metadata /sandbox/.hermes-api 'root:root 711' \
-    && check_metadata /sandbox/.hermes-api/profiles 'root:root 711' \
+    && check_metadata /sandbox/.hermes-api 'sandbox:sandbox 700' \
+    && check_metadata /sandbox/.hermes-api/profiles 'sandbox:sandbox 700' \
     && check_absent /sandbox/.hermes-api/profiles/api \
     && check_absent /sandbox/.nemoclaw/hermes-api.config-hash \
     && check_absent /sandbox/.nemoclaw/hermes-api-profile.json \

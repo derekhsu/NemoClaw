@@ -213,6 +213,32 @@ def verify_session_delete() -> None:
     assert not any(r["id"] == session_id for r in rows), "session still present after delete"
 
 
+def verify_mcp_http_proxy() -> None:
+    import os
+
+    from tools import mcp_tool_transport as transport
+
+    source = Path(transport.__file__).read_text(encoding="utf-8")
+    assert source.count("**_nemoclaw_env_proxy(url))") == 2, "MCP HTTP transports lack the proxy"
+    names = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+    saved = {name: os.environ.get(name) for variant in names for name in (variant, variant.upper())}
+    try:
+        for name in saved:
+            os.environ.pop(name, None)
+        assert transport._nemoclaw_env_proxy("https://gateway.example/mcp/") == {}
+        os.environ["https_proxy"] = "http://10.200.0.1:3128"
+        os.environ["no_proxy"] = "localhost,127.0.0.1"
+        proxied = transport._nemoclaw_env_proxy("https://gateway.example/mcp/")
+        assert proxied == {"proxy": "http://10.200.0.1:3128"}, proxied
+        assert transport._nemoclaw_env_proxy("http://127.0.0.1:8642/mcp") == {}
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def verify_discord_recovery_source() -> None:
     source = Path("/opt/hermes/plugins/platforms/discord/recovery.py").read_text(
         encoding="utf-8"
@@ -563,6 +589,7 @@ COMMANDS: dict[str, Callable[[], None]] = {
     "gateway-runtime-metadata": verify_gateway_runtime_metadata,
     "guard-without-dac-override": verify_guard_without_dac_override,
     "langfuse-credentials": verify_langfuse_credentials,
+    "mcp-http-proxy": verify_mcp_http_proxy,
     "neutral-platform-inertness": verify_neutral_platform_inertness,
     "profile-policy": verify_profile_policy,
     "session-delete": verify_session_delete,

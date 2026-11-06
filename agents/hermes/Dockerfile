@@ -116,6 +116,7 @@ COPY scripts/managed-gateway-control.py /usr/local/lib/nemoclaw/managed-gateway-
 COPY agents/hermes/validate-env-secret-boundary.py /usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py
 COPY agents/hermes/patch-session-list-preview.py /usr/local/lib/nemoclaw/patch-hermes-session-list-preview.py
 COPY agents/hermes/patch-hermes-sqlite-temp-store.py /usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.py
+COPY agents/hermes/patch-mcp-http-proxy.py /usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py
 COPY agents/hermes/patch-discord-recovery-permissions.py /usr/local/lib/nemoclaw/patch-hermes-discord-recovery-permissions.py
 COPY agents/hermes/patch-profile-policy-defaults.py /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defaults.py
 COPY agents/hermes/managed_policy.py /usr/local/lib/nemoclaw/managed_policy.py
@@ -375,7 +376,7 @@ RUN find /opt/nemoclaw-hermes-config -type d -exec chmod 755 {} + \
         /scripts/patch-bundled-npm-tar.mts \
     && chmod -R a+rX /src/lib/messaging
 
-ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=dcba6900be67a1e01931b0212b2e89ba63c667a6b7d15787752078f2d523e6b5
+ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=5747b15a868b513484dd6c88cf42e7a4501fee92d687ad99ff001b590c7e78da
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256" /opt/nemoclaw-hermes-config/image-build-probes.py \
@@ -594,6 +595,20 @@ RUN /usr/bin/python3 -I /usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.p
     && grep -q 'PRAGMA temp_store=MEMORY' /opt/hermes/hermes_state.py \
     && HERMES_HOME="$(mktemp -d)" /opt/hermes/.venv/bin/python -I \
         /opt/nemoclaw-hermes-config/image-build-probes.py session-delete
+
+# Hermes v0.21.3 passes a custom transport= to its Streamable HTTP and SSE MCP
+# clients, which makes httpx ignore HTTP(S)_PROXY/NO_PROXY. OpenShell sandboxes
+# have no DNS and egress only through the proxy, so every remote MCP server
+# failed with "Temporary failure in name resolution" (#53). Pass the
+# environment proxy to the inner transport. Remove when upstream keeps it.
+ARG NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256=732e369940d4a23c5886615d7d3ebb13b045f5fe4a95c59dc431930dbc359acf
+# hadolint ignore=DL4006
+RUN printf '%s  %s\n' \
+        "$NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256" /usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py \
+    | sha256sum -c - \
+    || { echo "ERROR: patch-hermes-mcp-http-proxy.py hash mismatch (update NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256)" >&2; exit 1; }
+RUN /usr/bin/python3 -I /usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py \
+    && /opt/hermes/.venv/bin/python -I /opt/nemoclaw-hermes-config/image-build-probes.py mcp-http-proxy
 
 # Hermes v0.21.3 forces the gateway-created Discord recovery ledger to 0600,
 # which prevents sandbox-owned online backup and makes a sandbox-restored

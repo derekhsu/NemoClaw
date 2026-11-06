@@ -25,6 +25,11 @@ const HERMES_INTEGRITY_FILES = [
     target: "/usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.py",
   },
   {
+    arg: "NEMOCLAW_HERMES_MCP_HTTP_PROXY_PATCHER_SHA256",
+    source: "agents/hermes/patch-mcp-http-proxy.py",
+    target: "/usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py",
+  },
+  {
     arg: "NEMOCLAW_HERMES_WRAPPER_SHA256",
     source: "agents/hermes/hermes-wrapper.py",
     target: "/usr/local/lib/nemoclaw/hermes-wrapper.py",
@@ -292,6 +297,7 @@ describe("Hermes final image layout", () => {
           "COPY agents/hermes/validate-env-secret-boundary.py /usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py",
           "COPY agents/hermes/patch-session-list-preview.py /usr/local/lib/nemoclaw/patch-hermes-session-list-preview.py",
           "COPY agents/hermes/patch-hermes-sqlite-temp-store.py /usr/local/lib/nemoclaw/patch-hermes-sqlite-temp-store.py",
+          "COPY agents/hermes/patch-mcp-http-proxy.py /usr/local/lib/nemoclaw/patch-hermes-mcp-http-proxy.py",
           "COPY agents/hermes/patch-discord-recovery-permissions.py /usr/local/lib/nemoclaw/patch-hermes-discord-recovery-permissions.py",
           "COPY agents/hermes/patch-profile-policy-defaults.py /usr/local/lib/nemoclaw/patch-hermes-profile-policy-defaults.py",
           "COPY agents/hermes/managed_policy.py /usr/local/lib/nemoclaw/managed_policy.py",

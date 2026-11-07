@@ -1728,16 +1728,31 @@ restore_hermes_config_permissions_after_dashboard_start() {
 # Each code path below sets these before registering the trap.
 
 # ── Proxy environment ────────────────────────────────────────────
-PROXY_HOST="${NEMOCLAW_PROXY_HOST:-10.200.0.1}"
-PROXY_PORT="${NEMOCLAW_PROXY_PORT:-3128}"
-_PROXY_URL="http://${PROXY_HOST}:${PROXY_PORT}"
-_NO_PROXY_VAL="localhost,127.0.0.1,::1,${PROXY_HOST}"
-export HTTP_PROXY="$_PROXY_URL"
-export HTTPS_PROXY="$_PROXY_URL"
-export NO_PROXY="$_NO_PROXY_VAL"
-export http_proxy="$_PROXY_URL"
-export https_proxy="$_PROXY_URL"
-export no_proxy="$_NO_PROXY_VAL"
+# OpenShell 0.1.x mediates egress transparently: every outbound connection is
+# intercepted and policy-checked by the supervisor, which strips ambient proxy
+# variables from the children it starts. The 0.0.x explicit proxy address
+# (10.200.0.1:3128) is not reachable there; a client that honours it is denied
+# with transparent_tcp_policy_denied (derekhsu/NemoClaw#52, #34). Clear any
+# inherited proxy routing so the gateways and every later OpenShell exec (which
+# sources /tmp/nemoclaw-proxy-env.sh through .bashrc) connect directly. An
+# operator who really needs an explicit proxy can still set NEMOCLAW_PROXY_HOST.
+_PROXY_ENV_NAMES="HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy grpc_proxy NODE_USE_ENV_PROXY"
+_PROXY_URL=""
+_NO_PROXY_VAL=""
+# shellcheck disable=SC2086  # intentional word splitting of the fixed name list
+unset $_PROXY_ENV_NAMES
+if [ -n "${NEMOCLAW_PROXY_HOST:-}" ]; then
+  PROXY_HOST="$NEMOCLAW_PROXY_HOST"
+  PROXY_PORT="${NEMOCLAW_PROXY_PORT:-3128}"
+  _PROXY_URL="http://${PROXY_HOST}:${PROXY_PORT}"
+  _NO_PROXY_VAL="localhost,127.0.0.1,::1,${PROXY_HOST}"
+  export HTTP_PROXY="$_PROXY_URL"
+  export HTTPS_PROXY="$_PROXY_URL"
+  export NO_PROXY="$_NO_PROXY_VAL"
+  export http_proxy="$_PROXY_URL"
+  export https_proxy="$_PROXY_URL"
+  export no_proxy="$_NO_PROXY_VAL"
+fi
 
 # Corporate proxy CA merge (NemoClaw#6210).
 # OpenShell injects SSL_CERT_FILE for its own L7 proxy CA at runtime. When a
@@ -1857,14 +1872,20 @@ fi
 _PROXY_ENV_FILE="/tmp/nemoclaw-proxy-env.sh"
 write_runtime_shell_env() {
   {
-    cat <<PROXYEOF
-# Proxy configuration (overrides narrow OpenShell defaults on connect)
+    if [ -n "$_PROXY_URL" ]; then
+      cat <<PROXYEOF
+# Explicit proxy configured through NEMOCLAW_PROXY_HOST
 export HTTP_PROXY="$_PROXY_URL"
 export HTTPS_PROXY="$_PROXY_URL"
 export NO_PROXY="$_NO_PROXY_VAL"
 export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
+PROXYEOF
+    else
+      printf '# OpenShell 0.1.x mediates egress transparently; drop explicit proxy routing\nunset %s\n' "$_PROXY_ENV_NAMES"
+    fi
+    cat <<PROXYEOF
 export HERMES_HOME="\${HERMES_HOME:-${HERMES_DIR}}"
 export HERMES_CONTAINER=1
 PROXYEOF

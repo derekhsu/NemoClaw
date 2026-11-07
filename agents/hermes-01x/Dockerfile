@@ -328,8 +328,10 @@ RUN set -eu; \
 # root, which has write perms on the venv) because at runtime root doesn't
 # see SSL_CERT_FILE and the gateway user can't write the venv.
 # The target doesn't need to exist at build time — OpenShell mounts it at
-# sandbox start; the forward-referencing symlink resolves then.
-ARG SSL_CERT_FILE=/etc/openshell-tls/ca-bundle.pem
+# sandbox start; the forward-referencing symlink resolves then. OpenShell 0.1.x
+# mounts its supervisor CA under /run/openshell-supervisor-ca/material (the
+# 0.0.x /etc/openshell-tls path no longer exists, derekhsu/NemoClaw#52).
+ARG SSL_CERT_FILE=/run/openshell-supervisor-ca/material/ca-bundle.crt
 # hadolint ignore=DL3059
 RUN _hermes_certifi=$(/opt/hermes/.venv/bin/python -c 'import certifi; print(certifi.where())') \
     && ln -sf "$SSL_CERT_FILE" "$_hermes_certifi"
@@ -679,7 +681,7 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
-ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=f1d1340378ff7a4f1a792de3f85f7200383dd10009d50c48485ab23ee3f94e5a
+ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=8564b1d1db9684afadb934c393d0caaa78a6ae590592c1bcdf6a807b33e6295a
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256" /usr/local/lib/nemoclaw/hermes-api-profile.py \
@@ -687,7 +689,7 @@ RUN printf '%s  %s\n' \
     || { echo "ERROR: hermes-api-profile.py hash mismatch (update NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256)" >&2; exit 1; } \
     && chown root:root /usr/local/lib/nemoclaw/hermes-api-profile.py \
     && chmod 444 /usr/local/lib/nemoclaw/hermes-api-profile.py
-ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=d59ecacb1f36c31967fa9730aaf3f82f20b16df79048eb9454c2a3d89587bbe8
+ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=fd7dedcce9b93467cdf304ef685ebbea031947b74ab9307f5d38c4f8026c01d3
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256" /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \
@@ -1290,14 +1292,28 @@ RUN chown root:root /sandbox/.nemoclaw \
 RUN install -d -o sandbox -g sandbox -m 0700 /sandbox/.hermes-api /sandbox/.hermes-api/profiles
 
 # Prove the admin side (sandbox UID, no root) can create and verify the api
-# profile layout the Landlock launcher expects, then leave no profile behind:
-# each sandbox creates its own at first start (#52).
-RUN /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
-        /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/hermes-api-profile.py bootstrap \
-    && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
-        /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/hermes-api-profile.py verify \
-    && rm -rf /sandbox/.hermes-api/profiles/api /sandbox/.hermes-api/shared-state.db \
-    && rm -f /opt/nemoclaw-hermes-config/image-build-probes.py
+# profile layout the Landlock launcher expects, and that ClawShell's CAS config
+# write pins the listener and rejects a stale digest. Then leave no profile
+# behind: each sandbox creates its own at first start (#52).
+RUN set -eu; \
+    tool=/usr/local/lib/nemoclaw/hermes-api-profile.py; \
+    config=/sandbox/.hermes-api/profiles/api/config.yaml; \
+    probe=/tmp/hermes-api-write-config-probe.yaml; \
+    as_sandbox() { /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I "$tool" "$@"; }; \
+    as_sandbox bootstrap >/dev/null; \
+    as_sandbox verify >/dev/null; \
+    digest="$(/opt/hermes/.venv/bin/python -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$config")"; \
+    printf 'model: {default: probe-model}\nplatforms: {api_server: {extra: {host: 0.0.0.0}}}\n' >"$probe"; \
+    as_sandbox write-config --expected-config-sha256 "$digest" <"$probe" >/dev/null; \
+    grep -q '^  default: probe-model$' "$config"; \
+    grep -q '^      host: 127.0.0.1$' "$config"; \
+    if as_sandbox write-config --expected-config-sha256 "$digest" <"$probe" >/dev/null; then \
+        echo 'ERROR: hermes-api-profile.py write-config accepted a stale digest' >&2; exit 1; \
+    fi; \
+    as_sandbox verify >/dev/null; \
+    rm -rf /sandbox/.hermes-api/profiles/api /sandbox/.hermes-api/shared-state.db \
+        /sandbox/.hermes-api/.write-config.lock "$probe" \
+        /opt/nemoclaw-hermes-config/image-build-probes.py
 
 # OpenShell's macOS VM backend currently remaps extracted rootfs ownership to
 # the host uid/gid before startup. Hermes uses /sandbox as a read_write path, so

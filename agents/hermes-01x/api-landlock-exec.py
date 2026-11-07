@@ -109,6 +109,11 @@ ETC_READ_ONLY = (
     "/etc/openshell-tls",
     "/etc/python3",
 )
+# OpenShell 0.1.x terminates TLS at its L7 proxy and mounts the matching CA
+# bundle here (SSL_CERT_FILE and the image's certifi symlink point into it).
+# Public CA material only; without it every HTTPS call from the api side fails
+# certificate verification.
+OPENSHELL_CA_READ_ONLY = ("/run/openshell-supervisor-ca/material",)
 DEVICE_RULES = (
     ("/dev/null", READ_FILE | WRITE_FILE),
     ("/dev/zero", READ_FILE),
@@ -263,7 +268,7 @@ def _apply_landlock(machine: str, home: str) -> None:
     try:
         for path in SYSTEM_READ_EXEC:
             _add_path_rule(sys_add, ruleset, path, READ_EXEC, required=path in ("/usr", "/opt/hermes"))
-        for path in ETC_READ_ONLY:
+        for path in ETC_READ_ONLY + OPENSHELL_CA_READ_ONLY:
             _add_path_rule(sys_add, ruleset, path, READ_ONLY, required=False)
         for path, access in DEVICE_RULES:
             _add_path_rule(sys_add, ruleset, path, access, required=path == "/dev/null")

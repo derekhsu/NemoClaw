@@ -85,6 +85,10 @@ MODEL_CONFIG_SECTIONS = frozenset({"model", "providers", "custom_providers"})
 # it no longer describes the route and would steer the dashboard seeder wrong.
 MODEL_CONFIG_REMOVABLE_SECTIONS = frozenset({"_nemoclaw_upstream"})
 MODEL_CONFIG_PAYLOAD_FIELDS = frozenset({"expected_config_sha256", "config"})
+# The `hermes model` wrapper submits the whole file Hermes rewrote: Hermes'
+# save_config may renormalize unrelated sections, so only the model sections of
+# that file are adopted and every other section keeps the current value.
+MODEL_CONFIG_SECTIONS_ONLY_FIELD = "model_sections_only"
 MAX_MODEL_CONFIG_BYTES = 256 * 1024
 MODEL_CONFIG_CONFLICT_EXIT = 3
 CONFIG_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -494,8 +498,11 @@ class ModelConfigConflict(RuntimeError):
 
 
 def _validate_model_config_payload(payload: dict[str, object]) -> None:
-    if set(payload) != MODEL_CONFIG_PAYLOAD_FIELDS:
+    fields = set(payload)
+    if fields - {MODEL_CONFIG_SECTIONS_ONLY_FIELD} != MODEL_CONFIG_PAYLOAD_FIELDS:
         raise ValueError("write-model-config payload has invalid fields")
+    if MODEL_CONFIG_SECTIONS_ONLY_FIELD in fields and payload[MODEL_CONFIG_SECTIONS_ONLY_FIELD] is not True:
+        raise ValueError("write-model-config model_sections_only must be true when present")
     expected = payload.get("expected_config_sha256")
     if not isinstance(expected, str) or not CONFIG_SHA256_RE.fullmatch(expected):
         raise ValueError("write-model-config requires a lowercase SHA-256 of the config it read")
@@ -537,6 +544,16 @@ def _model_config_candidate(data: dict, payload: dict[str, object]) -> dict:
     replacement = yaml.safe_load(str(payload["config"]))
     if not isinstance(replacement, dict):
         raise ValueError("Invalid Hermes config: expected a YAML object")
+    if payload.get(MODEL_CONFIG_SECTIONS_ONLY_FIELD) is True:
+        submitted = replacement
+        replacement = {
+            key: submitted[key] if key in MODEL_CONFIG_SECTIONS else value
+            for key, value in data.items()
+            if key not in MODEL_CONFIG_SECTIONS or key in submitted
+        }
+        for key in sorted(MODEL_CONFIG_SECTIONS - set(data)):
+            if key in submitted:
+                replacement[key] = submitted[key]
     missing = object()
     changed = {
         key for key in set(data) | set(replacement)

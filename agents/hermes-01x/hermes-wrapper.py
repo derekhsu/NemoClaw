@@ -78,11 +78,22 @@
 # launches receive the local API bearer token through process environment after
 # a descriptor-safe read, so the isolated dashboard home does not need a second
 # credential-bearing dotenv file. Other subcommands pass through unchanged.
+#
+# OpenShell 0.1.x (#52): `hermes model` on the default profile rewrites
+# config.yaml directly, but that file is pinned by .config-hash and the next
+# startup refuses a config the hash does not match. The wrapper therefore runs
+# the picker, puts the original bytes back, and submits Hermes' result through
+# the image's write-model-config transaction, which adopts only the model
+# sections, accepts only OpenShell credential placeholders as new keys, compares
+# against the config the picker started from, refreshes the hash and reloads the
+# gateway. Images without that transaction keep the plain pass-through.
 
 import ast
+import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -108,6 +119,13 @@ _HERMES_MAIN_DEV_FILENAME = "hermes-main.py"
 # Venv first matches the security principle of preferring the most controlled
 # environment; fall back to system python3 when the sandbox image has no venv
 # yet.
+# `hermes model` reconciliation (OpenShell 0.1.x default profile).
+_MODEL_HERMES_HOME = "/sandbox/.hermes"
+_MODEL_TRANSACTION = "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py"
+_MODEL_TRANSACTION_PYTHON = "/opt/hermes/.venv/bin/python3"
+_MODEL_TRANSACTION_MARKER = b"model_sections_only"
+_MODEL_TRANSACTION_TIMEOUT = 360
+_MODEL_CONFIG_MAX_BYTES = 256 * 1024
 _TRUSTED_PYTHON3 = (
     "/opt/hermes/.venv/bin/python3",
     "/usr/local/bin/python3",
@@ -749,9 +767,184 @@ def _report_cli_adapter_error(exc: _CliAdapterError) -> int:
     return 2
 
 
+def _read_regular(path: str) -> bytes | None:
+    """Read a regular file without following symlinks; None when absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path} is not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def _model_reconcile_home(argv: list[str]) -> str | None:
+    """Return the integrity-pinned Hermes home `hermes model` would rewrite."""
+    if argv[:1] != ["model"] or any(arg in ("-h", "--help") for arg in argv[1:]):
+        return None
+    home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+    if os.path.realpath(home) != os.path.realpath(_MODEL_HERMES_HOME):
+        return None
+    for name in ("config.yaml", ".config-hash"):
+        if not os.path.isfile(os.path.join(_MODEL_HERMES_HOME, name)):
+            return None
+    try:
+        transaction = _read_regular(_MODEL_TRANSACTION)
+    except OSError:
+        return None
+    if not transaction or _MODEL_TRANSACTION_MARKER not in transaction:
+        return None
+    if not os.access(_MODEL_TRANSACTION_PYTHON, os.X_OK):
+        return None
+    return _MODEL_HERMES_HOME
+
+
+def _restore_bytes(path: str, content: bytes, expected_current: bytes | None) -> bool:
+    """Atomically put `content` back unless someone else wrote `path` meanwhile."""
+    if _read_regular(path) != expected_current:
+        return False
+    mode = stat.S_IMODE(os.stat(path, follow_symlinks=False).st_mode) if expected_current is not None else 0o640
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".nemoclaw-model-")
+    try:
+        os.write(fd, content)
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+    return True
+
+
+def _report(message: str) -> None:
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _run_model_picker(real_hermes: str, argv: list[str], home: str) -> int:
+    config_path = os.path.join(home, "config.yaml")
+    env_path = os.path.join(home, ".env")
+    config_before = _read_regular(config_path)
+    env_before = _read_regular(env_path)
+    if config_before is None:
+        return 1
+    # A closed terminal (SIGHUP) or a stop request (SIGTERM) must not kill the
+    # wrapper between Hermes' direct write and the restore below: forward it to
+    # the picker, then finish reconciling with those signals ignored.
+    children: list[subprocess.Popen] = []
+
+    def forward(signum, _frame):
+        for child in children:
+            try:
+                child.send_signal(signum)
+            except OSError:
+                pass
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, forward)
+    try:
+        child = subprocess.Popen([real_hermes, *argv])
+    except OSError as exc:
+        print(
+            f"[SECURITY] Refusing to run hermes: failed to exec Hermes binary at {real_hermes}: {exc}",
+            file=sys.stderr,
+        )
+        return 126
+    children.append(child)
+    # The picker shares the terminal and receives Ctrl-C itself.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    rc = child.wait()
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, signal.SIG_IGN)
+    if rc < 0:
+        rc = 128 - rc
+
+    env_after = _read_regular(env_path)
+    if env_after != env_before:
+        # .env is pinned by the same hash and holds credential names only; a key
+        # typed into the picker belongs in an OpenShell provider instead.
+        if env_before is None:
+            os.unlink(env_path)
+        else:
+            _restore_bytes(env_path, env_before, env_after)
+        _report(
+            "[SECURITY] hermes model tried to change ~/.hermes/.env; the change was "
+            "reverted. Attach provider credentials through OpenShell providers.",
+        )
+    config_after = _read_regular(config_path)
+    if config_after == config_before:
+        return rc if env_after == env_before else 1
+    try:
+        config_text = config_after.decode("utf-8") if config_after is not None else None
+    except UnicodeDecodeError:
+        config_text = None
+    if config_text is None or len(config_after) > _MODEL_CONFIG_MAX_BYTES:
+        _report("[SECURITY] hermes model left an unusable config.yaml")
+        if config_after is None:
+            _restore_bytes(config_path, config_before, None)
+        else:
+            _restore_bytes(config_path, config_before, config_after)
+        return 1
+    if not _restore_bytes(config_path, config_before, config_after):
+        _report(
+            "[SECURITY] config.yaml changed again while saving the model choice; "
+            "run `hermes model` again.",
+        )
+        return 1
+    payload = json.dumps({
+        "expected_config_sha256": hashlib.sha256(config_before).hexdigest(),
+        "config": config_text,
+        "model_sections_only": True,
+    })
+    try:
+        result = subprocess.run(
+            [_MODEL_TRANSACTION_PYTHON, "-I", _MODEL_TRANSACTION, "write-model-config"],
+            input=payload,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=_MODEL_TRANSACTION_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _report(
+            f"[SECURITY] Model choice was not saved ({exc.__class__.__name__}); "
+            "the previous configuration is unchanged.",
+        )
+        return 1
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip().splitlines()
+        _report(
+            "[SECURITY] Model choice was not saved; the previous configuration is "
+            f"unchanged: {detail[-1] if detail else f'exit {result.returncode}'}",
+        )
+        return 1
+    _report("Model choice saved; the Hermes gateway reloaded with it.")
+    return rc if env_after == env_before else 1
+
+
 def main(argv: list[str]) -> int:
     real_hermes = _resolve_real_hermes()
     guard_path = _resolve_guard()
+    model_home = _model_reconcile_home(argv)
+    if model_home is not None:
+        return _run_model_picker(real_hermes, argv, model_home)
     if argv[:1] == ["dashboard"] and not _load_dashboard_api_server_key():
         return 1
     if argv[:2] == ["config", "show"]:

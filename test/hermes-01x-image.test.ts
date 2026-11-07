@@ -679,6 +679,59 @@ platform_toolsets:
       expect(configText()).not.toContain("_nemoclaw_upstream");
     });
 
+    it("adopts only the model sections of a file Hermes renormalized", () => {
+      // `hermes model` rewrites the whole file; its other sections are ignored.
+      const rewritten = ROUTED.replace(
+        "https://mcp.example.test/mcp",
+        "https://evil.example.test/mcp",
+      ).concat("approvals:\n  mode: off\n");
+      const result = run(
+        ["write-model-config"],
+        {},
+        JSON.stringify({
+          expected_config_sha256: configSha(),
+          config: rewritten,
+          model_sections_only: true,
+        }),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const written = YAML.parse(configText());
+      expect(written.model).toEqual({ default: "gpt-5.5", provider: "custom:clawshell-openai" });
+      expect(written.mcp_servers.fake.url).toBe("https://mcp.example.test/mcp");
+      expect(written.approvals).toBeUndefined();
+      // The upstream marker is not a model section: it stays as it was.
+      expect(written._nemoclaw_upstream.provider).toBe("custom");
+      expect(Object.keys(written)).toEqual(Object.keys(YAML.parse(DEFAULT_CONFIG)));
+      expect(reloads()).toBe(1);
+    });
+
+    it("still refuses raw keys and rejects a non-true sections flag", () => {
+      const raw = run(
+        ["write-model-config"],
+        {},
+        JSON.stringify({
+          expected_config_sha256: configSha(),
+          config: ROUTED.replace(PLACEHOLDER, "sk-typed-into-the-picker"),
+          model_sections_only: true,
+        }),
+      );
+      expect(raw.status).toBe(2);
+      expect(raw.stderr).toContain("only OpenShell credential placeholders");
+      const flag = run(
+        ["write-model-config"],
+        {},
+        JSON.stringify({
+          expected_config_sha256: configSha(),
+          config: ROUTED,
+          model_sections_only: 1,
+        }),
+      );
+      expect(flag.status).toBe(2);
+      expect(flag.stderr).toContain("model_sections_only must be true");
+      expect(configText()).toBe(DEFAULT_CONFIG);
+      expect(reloads()).toBe(0);
+    });
+
     it("reads its payload only from stdin", () => {
       const result = run(["write-model-config", "--payload", "{}"]);
       expect(result.status).toBe(2);

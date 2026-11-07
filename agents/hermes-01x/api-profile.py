@@ -17,20 +17,28 @@ confines the api side to:
   hermes-api-profile.py bootstrap   create missing pieces (idempotent; never
                                     overwrites existing config, .env, SOUL.md)
   hermes-api-profile.py verify      check the layout; exit 0 only when sound
+  hermes-api-profile.py write-config --expected-config-sha256 <hex>
+                                    replace config.yaml with stdin when its
+                                    current SHA-256 matches (compare-and-swap);
+                                    the image-owned policy sections are pinned
 
-Both print one JSON object on stdout. Unlike the 0.0.x root guard there is no
+All print one JSON object on stdout. Unlike the 0.0.x root guard there is no
 root-sealed anchor: the admin side owns and may edit the whole profile, and
 the api side is kept out of it by Landlock.
 """
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import importlib.util
 import json
 import os
+import re
 import secrets
 import stat
 import sys
+import tempfile
 
 API_ROOT = "/sandbox/.hermes-api"
 PROFILES_DIR = f"{API_ROOT}/profiles"
@@ -60,6 +68,9 @@ STATE_SYMLINKS = (
 DESIGN_FILES = ("config.yaml", ".env", "SOUL.md")
 DESIGN_DIRS = ("skills",)
 API_KEY_PREFIX = "API_SERVER_KEY="
+WRITE_LOCK = f"{API_ROOT}/.write-config.lock"
+MAX_CONFIG_BYTES = 1 << 20
+SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
 class LayoutError(Exception):
@@ -199,16 +210,124 @@ def verify() -> dict:
     return {"ok": not problems, "profile_dir": API_HOME, "problems": problems}
 
 
+class ConfigConflict(LayoutError):
+    pass
+
+
+def _read_regular(path: str) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise LayoutError(f"{path} is not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            return handle.read(MAX_CONFIG_BYTES + 1)
+    finally:
+        os.close(fd)
+
+
+def _pin_api_server(guard, data: bytes) -> bytes:
+    """Keep the api_server listener the api runtime and prefix proxy expect."""
+    import yaml  # Hermes venv dependency; only the write path needs it
+
+    try:
+        document = yaml.safe_load(data.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise LayoutError(f"refusing malformed Hermes api config input: {exc}") from None
+    if not isinstance(document, dict):
+        raise LayoutError("refusing non-mapping Hermes api config input")
+    platforms = document.get("platforms")
+    platforms = dict(platforms) if isinstance(platforms, dict) else {}
+    api_server = platforms.get("api_server")
+    api_server = dict(api_server) if isinstance(api_server, dict) else {}
+    extra = api_server.get("extra")
+    extra = dict(extra) if isinstance(extra, dict) else {}
+    extra.update({"port": guard.HERMES_API_INTERNAL_PORT, "host": "127.0.0.1"})
+    api_server.update({"enabled": True, "extra": extra})
+    platforms["api_server"] = api_server
+    document["platforms"] = platforms
+    return yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode("utf-8")
+
+
+def write_config(expected_sha256: str, data: bytes) -> dict:
+    """Compare-and-swap the api config.yaml with the policy sections pinned.
+
+    The caller (ClawShell, through an ordinary OpenShell exec as the sandbox
+    user) owns model routing and providers; the image owns the managed policy
+    sections, which are overwritten here whatever the submitted document says.
+    The temp file lives in the admin-only API_ROOT so an interrupted write
+    never leaves a stray entry in the api HERMES_HOME. The api runtime must be
+    restarted afterwards for the gateway to load the new config.
+    """
+    if not SHA256_HEX.fullmatch(expected_sha256):
+        raise LayoutError("--expected-config-sha256 must be 64 lowercase hex digits")
+    if len(data) > MAX_CONFIG_BYTES:
+        raise LayoutError("config input is too large")
+    guard = _load("hermes_runtime_config_guard", GUARD_PATH)
+    try:
+        rendered = guard._api_overlay_managed_sections(_pin_api_server(guard, data))
+    except Exception as exc:  # noqa: BLE001 - the guard raises its own error type
+        raise LayoutError(str(exc)) from None
+    lock_fd = os.open(WRITE_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        state = verify()
+        if not state["ok"]:
+            raise LayoutError("; ".join(state["problems"]))
+        config_path = os.path.join(API_HOME, "config.yaml")
+        current = hashlib.sha256(_read_regular(config_path)).hexdigest()
+        if current != expected_sha256:
+            raise ConfigConflict("api config changed after it was read; read it again and retry")
+        fd, tmp_path = tempfile.mkstemp(dir=API_ROOT, prefix=".config.yaml.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, config_path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
+            raise
+        dir_fd = os.open(API_HOME, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        os.close(lock_fd)
+    return {"ok": True, "profile_dir": API_HOME, "config_sha256": hashlib.sha256(rendered).hexdigest()}
+
+
+USAGE = (
+    "usage: hermes-api-profile.py bootstrap|verify|"
+    "write-config --expected-config-sha256 <hex> (config on stdin)"
+)
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 1 or argv[0] not in ("bootstrap", "verify"):
-        print(json.dumps({"ok": False, "problems": ["usage: hermes-api-profile.py bootstrap|verify"]}))
+    is_write = (
+        len(argv) == 3 and argv[0] == "write-config" and argv[1] == "--expected-config-sha256"
+    )
+    if not is_write and (len(argv) != 1 or argv[0] not in ("bootstrap", "verify")):
+        print(json.dumps({"ok": False, "problems": [USAGE]}))
         return 2
     if os.geteuid() == 0:
         print(json.dumps({"ok": False, "problems": ["run as the sandbox user, not root"]}))
         return 2
     os.umask(0o077)
     try:
-        result = bootstrap() if argv[0] == "bootstrap" else verify()
+        if is_write:
+            result = write_config(argv[2], sys.stdin.buffer.read(MAX_CONFIG_BYTES + 1))
+        elif argv[0] == "bootstrap":
+            result = bootstrap()
+        else:
+            result = verify()
+    except ConfigConflict as exc:
+        print(json.dumps({"ok": False, "conflict": True, "problems": [str(exc)]}, sort_keys=True))
+        return 3
     except (LayoutError, OSError) as exc:
         result = {"ok": False, "problems": [str(exc)]}
     print(json.dumps(result, sort_keys=True))

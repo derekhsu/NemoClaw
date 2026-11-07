@@ -681,7 +681,7 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
-ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=8564b1d1db9684afadb934c393d0caaa78a6ae590592c1bcdf6a807b33e6295a
+ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=cc4c3dc7f31bb8c524b0a62a01914cb85e0629c577310f6ab699b80f7c8ed55c
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256" /usr/local/lib/nemoclaw/hermes-api-profile.py \
@@ -689,7 +689,7 @@ RUN printf '%s  %s\n' \
     || { echo "ERROR: hermes-api-profile.py hash mismatch (update NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256)" >&2; exit 1; } \
     && chown root:root /usr/local/lib/nemoclaw/hermes-api-profile.py \
     && chmod 444 /usr/local/lib/nemoclaw/hermes-api-profile.py
-ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=fd7dedcce9b93467cdf304ef685ebbea031947b74ab9307f5d38c4f8026c01d3
+ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=cf9eb9d5badc8292d10592ea1744879ca770bb724e9c5509f2081099a51fc57e
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256" /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \
@@ -1310,9 +1310,16 @@ RUN set -eu; \
     if as_sandbox write-config --expected-config-sha256 "$digest" <"$probe" >/dev/null; then \
         echo 'ERROR: hermes-api-profile.py write-config accepted a stale digest' >&2; exit 1; \
     fi; \
+    grep -q '^  dispatch_in_gateway: false$' "$config"; \
+    printf '%s' '{"gateway_url":"https://gateway.example.com","sandbox_id":"probe.0123456789abcdef0123456789abcdef","replace_existing":true}' >"$probe"; \
+    as_sandbox register-uploader <"$probe" >/dev/null; \
+    grep -q '^  sandbox-file-uploader:$' "$config"; \
+    grep -q '^  - mcp-sandbox-file-uploader$' "$config"; \
+    as_sandbox inspect-uploader <"$probe" >"$probe.out"; \
+    grep -q '"state": "matched"' "$probe.out"; \
     as_sandbox verify >/dev/null; \
     rm -rf /sandbox/.hermes-api/profiles/api /sandbox/.hermes-api/shared-state.db \
-        /sandbox/.hermes-api/.write-config.lock "$probe" \
+        /sandbox/.hermes-api/.write-config.lock "$probe" "$probe.out" \
         /opt/nemoclaw-hermes-config/image-build-probes.py
 
 # OpenShell's macOS VM backend currently remaps extracted rootfs ownership to

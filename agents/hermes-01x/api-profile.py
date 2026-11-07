@@ -21,6 +21,10 @@ confines the api side to:
                                     replace config.yaml with stdin when its
                                     current SHA-256 matches (compare-and-swap);
                                     the image-owned policy sections are pinned
+  hermes-api-profile.py register-uploader | inspect-uploader
+                                    add (or check) the fixed local uploader MCP
+                                    entry; stdin is {"gateway_url", "sandbox_id",
+                                    "replace_existing": true}
 
 All print one JSON object on stdout. Unlike the 0.0.x root guard there is no
 root-sealed anchor: the admin side owns and may edit the whole profile, and
@@ -47,6 +51,7 @@ SHARED_STATE_LINK = f"{API_ROOT}/shared-state.db"
 SHARED_STATE_TARGET = "profiles/api/state/shared-state.db"
 
 GUARD_PATH = "/usr/local/lib/nemoclaw/hermes-runtime-config-guard.py"
+MCP_TRANSACTION_PATH = "/usr/local/lib/nemoclaw/hermes-mcp-config-transaction.py"
 LAUNCHER_PATH = "/usr/local/lib/nemoclaw/hermes-api-landlock-exec.py"
 
 # Every top-level file Hermes v0.21.3 writes in the api HERMES_HOME (measured
@@ -69,6 +74,14 @@ DESIGN_FILES = ("config.yaml", ".env", "SOUL.md")
 DESIGN_DIRS = ("skills",)
 API_KEY_PREFIX = "API_SERVER_KEY="
 WRITE_LOCK = f"{API_ROOT}/.write-config.lock"
+UPLOADER_SERVER = "sandbox-file-uploader"
+UPLOADER_TOOLSET = "mcp-sandbox-file-uploader"
+UPLOADER_GATEWAY_KEY = "openshell:resolve:env:GATEWAY_API_KEY"
+# CA variables the uploader's HTTP client may need. Hermes leaves an unresolved
+# ${VAR} verbatim, so each is written as a literal path, and only when it names
+# an existing file or directory at registration time.
+UPLOADER_CA_VARS = ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+MAX_PAYLOAD_BYTES = 8192
 MAX_CONFIG_BYTES = 1 << 20
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
@@ -144,7 +157,7 @@ def bootstrap() -> dict:
         if _lstat(path) is None:
             created.append(sub)
         _ensure_dir(path)
-    if _write_new(os.path.join(API_HOME, "config.yaml"), guard._api_config_bytes(), 0o600):
+    if _write_new(os.path.join(API_HOME, "config.yaml"), _render(guard, guard._api_config_bytes()), 0o600):
         created.append("config.yaml")
     key = secrets.token_urlsafe(32)
     if _write_new(os.path.join(API_HOME, ".env"), f"{API_KEY_PREFIX}{key}\n".encode(), 0o600):
@@ -225,8 +238,14 @@ def _read_regular(path: str) -> bytes:
         os.close(fd)
 
 
-def _pin_api_server(guard, data: bytes) -> bytes:
-    """Keep the api_server listener the api runtime and prefix proxy expect."""
+def _pin_runtime_contract(guard, data: bytes) -> bytes:
+    """Keep the settings the api runtime depends on, whatever the caller sent.
+
+    - ``platforms.api_server``: the listener the prefix proxy expects.
+    - ``kanban.dispatch_in_gateway: false``: the kanban dispatcher keeps its
+      board under the shared Hermes root (``/sandbox/.hermes-api/kanban*``),
+      outside the api side's Landlock domain; it would fail every tick.
+    """
     import yaml  # Hermes venv dependency; only the write path needs it
 
     try:
@@ -245,28 +264,30 @@ def _pin_api_server(guard, data: bytes) -> bytes:
     api_server.update({"enabled": True, "extra": extra})
     platforms["api_server"] = api_server
     document["platforms"] = platforms
+    kanban = document.get("kanban")
+    kanban = dict(kanban) if isinstance(kanban, dict) else {}
+    kanban["dispatch_in_gateway"] = False
+    document["kanban"] = kanban
     return yaml.safe_dump(document, sort_keys=False, allow_unicode=True).encode("utf-8")
 
 
-def write_config(expected_sha256: str, data: bytes) -> dict:
-    """Compare-and-swap the api config.yaml with the policy sections pinned.
-
-    The caller (ClawShell, through an ordinary OpenShell exec as the sandbox
-    user) owns model routing and providers; the image owns the managed policy
-    sections, which are overwritten here whatever the submitted document says.
-    The temp file lives in the admin-only API_ROOT so an interrupted write
-    never leaves a stray entry in the api HERMES_HOME. The api runtime must be
-    restarted afterwards for the gateway to load the new config.
-    """
-    if not SHA256_HEX.fullmatch(expected_sha256):
-        raise LayoutError("--expected-config-sha256 must be 64 lowercase hex digits")
-    if len(data) > MAX_CONFIG_BYTES:
-        raise LayoutError("config input is too large")
-    guard = _load("hermes_runtime_config_guard", GUARD_PATH)
+def _render(guard, document_bytes: bytes) -> bytes:
     try:
-        rendered = guard._api_overlay_managed_sections(_pin_api_server(guard, data))
+        return guard._api_overlay_managed_sections(_pin_runtime_contract(guard, document_bytes))
+    except LayoutError:
+        raise
     except Exception as exc:  # noqa: BLE001 - the guard raises its own error type
         raise LayoutError(str(exc)) from None
+
+
+def _locked_replace(transform) -> tuple[bytes, bool]:
+    """Replace config.yaml with transform(current_bytes) under the writer lock.
+
+    ``transform`` returns the new bytes, or None to leave the file unchanged.
+    The temp file lives in the admin-only API_ROOT so an interrupted write
+    never leaves a stray entry in the api HERMES_HOME. Returns the bytes now
+    on disk and whether they changed.
+    """
     lock_fd = os.open(WRITE_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
@@ -274,9 +295,12 @@ def write_config(expected_sha256: str, data: bytes) -> dict:
         if not state["ok"]:
             raise LayoutError("; ".join(state["problems"]))
         config_path = os.path.join(API_HOME, "config.yaml")
-        current = hashlib.sha256(_read_regular(config_path)).hexdigest()
-        if current != expected_sha256:
-            raise ConfigConflict("api config changed after it was read; read it again and retry")
+        current = _read_regular(config_path)
+        if len(current) > MAX_CONFIG_BYTES:
+            raise LayoutError("current api config is too large")
+        rendered = transform(current)
+        if rendered is None or rendered == current:
+            return current, False
         fd, tmp_path = tempfile.mkstemp(dir=API_ROOT, prefix=".config.yaml.", suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as handle:
@@ -296,14 +320,142 @@ def write_config(expected_sha256: str, data: bytes) -> dict:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
+        return rendered, True
     finally:
         os.close(lock_fd)
-    return {"ok": True, "profile_dir": API_HOME, "config_sha256": hashlib.sha256(rendered).hexdigest()}
+
+
+def write_config(expected_sha256: str, data: bytes) -> dict:
+    """Compare-and-swap the api config.yaml with the policy sections pinned.
+
+    The caller (ClawShell, through an ordinary OpenShell exec as the sandbox
+    user) owns model routing and providers; the image owns the managed policy
+    sections, which are overwritten here whatever the submitted document says.
+    The api runtime must be restarted afterwards for the gateway to load the
+    new config.
+    """
+    if not SHA256_HEX.fullmatch(expected_sha256):
+        raise LayoutError("--expected-config-sha256 must be 64 lowercase hex digits")
+    if len(data) > MAX_CONFIG_BYTES:
+        raise LayoutError("config input is too large")
+    guard = _load("hermes_runtime_config_guard", GUARD_PATH)
+    rendered = _render(guard, data)
+
+    def transform(current: bytes) -> bytes:
+        if hashlib.sha256(current).hexdigest() != expected_sha256:
+            raise ConfigConflict("api config changed after it was read; read it again and retry")
+        return rendered
+
+    written, _ = _locked_replace(transform)
+    return {"ok": True, "profile_dir": API_HOME, "config_sha256": hashlib.sha256(written).hexdigest()}
+
+
+def _uploader_entry(payload: dict) -> dict:
+    """Build the fixed uploader MCP entry from the image's reviewed builder."""
+    helper = _load("hermes_mcp_config_transaction", MCP_TRANSACTION_PATH)
+    try:
+        helper._validate_local_uploader_payload("add-local-uploader", payload)
+        if helper.CLAW_SHELL_SCOPE_RE.fullmatch(payload["sandbox_id"]) is None:
+            raise ValueError("the uploader requires a signed sandbox scope")
+        entry = helper._managed_local_uploader_candidate(payload)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise LayoutError(f"invalid uploader payload: {exc}") from None
+    env = {
+        key: value
+        for key, value in entry["env"].items()
+        if key in ("GATEWAY_URL", "SANDBOX_ID")
+    }
+    # OpenShell 0.1.x mediates egress transparently: no proxy variables. The
+    # gateway credential is the placeholder OpenShell swaps at egress.
+    env["GATEWAY_API_KEY"] = UPLOADER_GATEWAY_KEY
+    for name in UPLOADER_CA_VARS:
+        value = os.environ.get(name, "")
+        if value.startswith("/") and os.path.exists(value) and "$" not in value:
+            env[name] = value
+    env["CLAWSHELL_UPLOADER_PROFILE"] = "api"
+    env["HERMES_HOME"] = API_HOME
+    entry["env"] = env
+    return entry
+
+
+def _with_uploader(document: dict, entry: dict) -> dict:
+    updated = dict(document)
+    servers = updated.get("mcp_servers")
+    servers = dict(servers) if isinstance(servers, dict) else {}
+    servers[UPLOADER_SERVER] = entry
+    updated["mcp_servers"] = servers
+    toolsets = updated.get("platform_toolsets")
+    toolsets = dict(toolsets) if isinstance(toolsets, dict) else {}
+    api_tools = toolsets.get("api_server")
+    # Keep every tool the admin granted; only make sure the uploader is there.
+    api_tools = list(api_tools) if isinstance(api_tools, list) else ["file"]
+    if UPLOADER_TOOLSET not in api_tools:
+        api_tools.append(UPLOADER_TOOLSET)
+    toolsets["api_server"] = api_tools
+    updated["platform_toolsets"] = toolsets
+    return updated
+
+
+def _uploader_matched(document: object, entry: dict) -> bool:
+    if not isinstance(document, dict):
+        return False
+    servers = document.get("mcp_servers")
+    toolsets = document.get("platform_toolsets")
+    api_tools = toolsets.get("api_server") if isinstance(toolsets, dict) else None
+    return (
+        isinstance(servers, dict)
+        and servers.get(UPLOADER_SERVER) == entry
+        and isinstance(api_tools, list)
+        and UPLOADER_TOOLSET in api_tools
+    )
+
+
+def uploader(action: str, payload_bytes: bytes) -> dict:
+    """Register or inspect the api profile's fixed local uploader.
+
+    The uploader is an MCP child of the Landlock-confined api gateway, so it
+    runs inside the api side's domain. Registration is a read-modify-write
+    under the same lock as write-config, so a concurrent writer cannot be lost.
+    """
+    import yaml  # Hermes venv dependency
+
+    if len(payload_bytes) > MAX_PAYLOAD_BYTES:
+        raise LayoutError("uploader payload is too large")
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise LayoutError(f"uploader payload is not JSON: {exc}") from None
+    if not isinstance(payload, dict):
+        raise LayoutError("uploader payload must be a JSON object")
+    entry = _uploader_entry(payload)
+    if action == "inspect-uploader":
+        state = verify()
+        if not state["ok"]:
+            raise LayoutError("; ".join(state["problems"]))
+        document = yaml.safe_load(_read_regular(os.path.join(API_HOME, "config.yaml")).decode("utf-8"))
+        matched = _uploader_matched(document, entry)
+        return {"ok": True, "state": "matched" if matched else "missing"}
+    guard = _load("hermes_runtime_config_guard", GUARD_PATH)
+
+    def transform(current: bytes) -> bytes | None:
+        try:
+            document = yaml.safe_load(current.decode("utf-8"))
+        except (UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise LayoutError(f"current api config is malformed: {exc}") from None
+        if not isinstance(document, dict):
+            raise LayoutError("current api config is not a mapping")
+        if _uploader_matched(document, entry):
+            return None
+        updated = _with_uploader(document, entry)
+        return _render(guard, yaml.safe_dump(updated, sort_keys=False, allow_unicode=True).encode("utf-8"))
+
+    _, changed = _locked_replace(transform)
+    return {"ok": True, "state": "matched", "changed": changed}
 
 
 USAGE = (
-    "usage: hermes-api-profile.py bootstrap|verify|"
-    "write-config --expected-config-sha256 <hex> (config on stdin)"
+    "usage: hermes-api-profile.py bootstrap|verify|register-uploader|inspect-uploader|"
+    "write-config --expected-config-sha256 <hex> (config or uploader payload on stdin)"
 )
 
 
@@ -311,7 +463,8 @@ def main(argv: list[str]) -> int:
     is_write = (
         len(argv) == 3 and argv[0] == "write-config" and argv[1] == "--expected-config-sha256"
     )
-    if not is_write and (len(argv) != 1 or argv[0] not in ("bootstrap", "verify")):
+    simple = ("bootstrap", "verify", "register-uploader", "inspect-uploader")
+    if not is_write and (len(argv) != 1 or argv[0] not in simple):
         print(json.dumps({"ok": False, "problems": [USAGE]}))
         return 2
     if os.geteuid() == 0:
@@ -321,6 +474,8 @@ def main(argv: list[str]) -> int:
     try:
         if is_write:
             result = write_config(argv[2], sys.stdin.buffer.read(MAX_CONFIG_BYTES + 1))
+        elif argv[0] in ("register-uploader", "inspect-uploader"):
+            result = uploader(argv[0], sys.stdin.buffer.read(MAX_PAYLOAD_BYTES + 1))
         elif argv[0] == "bootstrap":
             result = bootstrap()
         else:

@@ -83,6 +83,9 @@ SYSTEM_READ_EXEC = (
     "/opt/hermes",
     "/opt/uv-python",
     "/proc",
+    # Root-owned venv of the api profile's local uploader (an MCP child of the
+    # api gateway, so it runs inside this domain); the api side cannot modify it.
+    "/sandbox/.venvs/sandbox-mcp-server",
 )
 # /etc is granted entry by entry so admin material under /etc (for example
 # /etc/nemoclaw) stays unreadable to the api side.
@@ -145,6 +148,9 @@ WRITABLE_SUBDIRS = (
     "platforms",
     "tmp",
     "workspace",
+    # The local uploader stages each API delivery here (deliveries/<token>/<name>)
+    # and ClawShell snapshots it by descriptor without following symlinks.
+    "deliveries",
 )
 
 # ── seccomp ──────────────────────────────────────────────────────────────

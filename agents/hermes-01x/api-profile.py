@@ -33,6 +33,7 @@ the api side is kept out of it by Landlock.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import importlib.util
@@ -315,10 +316,10 @@ def _locked_replace(transform) -> tuple[bytes, bool]:
                 os.fsync(handle.fileno())
             os.replace(tmp_path, config_path)
         except BaseException:
-            try:
+            # The temp file is already gone when os.replace() moved it into place
+            # before the failure; only a leftover temp file needs removing.
+            with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_path)
-            except FileNotFoundError:
-                pass
             raise
         dir_fd = os.open(API_HOME, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         try:

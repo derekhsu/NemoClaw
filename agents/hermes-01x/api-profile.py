@@ -76,7 +76,12 @@ API_KEY_PREFIX = "API_SERVER_KEY="
 WRITE_LOCK = f"{API_ROOT}/.write-config.lock"
 UPLOADER_SERVER = "sandbox-file-uploader"
 UPLOADER_TOOLSET = "mcp-sandbox-file-uploader"
-UPLOADER_GATEWAY_KEY = "openshell:resolve:env:GATEWAY_API_KEY"
+# OpenShell 0.1.x credential placeholders are opaque per-provider tokens
+# (e.g. openshell:resolve:env:sb8f2f7d...), not the variable name, so the
+# uploader's GATEWAY_API_KEY is copied from this process's own environment:
+# ClawShell runs register-uploader through an OpenShell exec, which carries the
+# attached gateway provider's placeholder (stable across key rotation).
+PLACEHOLDER = re.compile(r"^openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
 # CA variables the uploader's HTTP client may need. Hermes leaves an unresolved
 # ${VAR} verbatim, so each is written as a literal path, and only when it names
 # an existing file or directory at registration time.
@@ -367,7 +372,12 @@ def _uploader_entry(payload: dict) -> dict:
     }
     # OpenShell 0.1.x mediates egress transparently: no proxy variables. The
     # gateway credential is the placeholder OpenShell swaps at egress.
-    env["GATEWAY_API_KEY"] = UPLOADER_GATEWAY_KEY
+    placeholder = os.environ.get("GATEWAY_API_KEY", "")
+    if not PLACEHOLDER.fullmatch(placeholder):
+        raise LayoutError(
+            "GATEWAY_API_KEY is not an OpenShell credential placeholder; attach the gateway provider"
+        )
+    env["GATEWAY_API_KEY"] = placeholder
     for name in UPLOADER_CA_VARS:
         value = os.environ.get(name, "")
         if value.startswith("/") and os.path.exists(value) and "$" not in value:

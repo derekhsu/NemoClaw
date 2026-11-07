@@ -681,7 +681,7 @@ RUN node --experimental-strip-types \
 ARG NEMOCLAW_HERMES_WRAPPER_SHA256=55a5194dbe0f8147261fcc202d6867506ce3ce32653f10386ca20d044d5cd472
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_SHA256=ba40826f79f72ba1e3cbc2582931e2df3baf07c1abce73256ba468a6384b960c
 ARG NEMOCLAW_HERMES_CLI_ADAPTER_VALIDATOR_SHA256=db4046e79e513eab67b069a8eda20167b8b65529cf26842531d2ad673c670330
-ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=cc4c3dc7f31bb8c524b0a62a01914cb85e0629c577310f6ab699b80f7c8ed55c
+ARG NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256=1b38d23a6cbd625684b62a99e0afdd4951edfbad85836751026cdb211242694f
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256" /usr/local/lib/nemoclaw/hermes-api-profile.py \
@@ -1300,6 +1300,7 @@ RUN set -eu; \
     config=/sandbox/.hermes-api/profiles/api/config.yaml; \
     probe=/tmp/hermes-api-write-config-probe.yaml; \
     as_sandbox() { /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I "$tool" "$@"; }; \
+    as_sandbox_gateway() { /usr/bin/env GATEWAY_API_KEY=openshell:resolve:env:probe0placeholder /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- /opt/hermes/.venv/bin/python -I "$tool" "$@"; }; \
     as_sandbox bootstrap >/dev/null; \
     as_sandbox verify >/dev/null; \
     digest="$(/opt/hermes/.venv/bin/python -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$config")"; \
@@ -1312,10 +1313,13 @@ RUN set -eu; \
     fi; \
     grep -q '^  dispatch_in_gateway: false$' "$config"; \
     printf '%s' '{"gateway_url":"https://gateway.example.com","sandbox_id":"probe.0123456789abcdef0123456789abcdef","replace_existing":true}' >"$probe"; \
-    as_sandbox register-uploader <"$probe" >/dev/null; \
+    if as_sandbox register-uploader <"$probe" >/dev/null 2>&1; then \
+        echo 'ERROR: register-uploader accepted a missing gateway placeholder' >&2; exit 1; \
+    fi; \
+    as_sandbox_gateway register-uploader <"$probe" >/dev/null; \
     grep -q '^  sandbox-file-uploader:$' "$config"; \
     grep -q '^  - mcp-sandbox-file-uploader$' "$config"; \
-    as_sandbox inspect-uploader <"$probe" >"$probe.out"; \
+    as_sandbox_gateway inspect-uploader <"$probe" >"$probe.out"; \
     grep -q '"state": "matched"' "$probe.out"; \
     as_sandbox verify >/dev/null; \
     rm -rf /sandbox/.hermes-api/profiles/api /sandbox/.hermes-api/shared-state.db \

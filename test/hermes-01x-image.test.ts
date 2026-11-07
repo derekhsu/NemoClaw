@@ -387,9 +387,8 @@ print(json.dumps({"rules": rules, "state": launcher.STATE_TREE, "ro": launcher.R
       ),
     ).toBe(false);
     // Write access exists only inside the home's writable subdirectories and /dev/null.
-    for (const [p, a] of rules) {
-      if (a & write) expect(p === "/dev/null" || p.startsWith(`${home}/`), p).toBe(true);
-    }
+    const writable = rules.filter(([, a]) => (a & write) !== 0).map(([p]) => p);
+    expect(writable.filter((p) => p !== "/dev/null" && !p.startsWith(`${home}/`))).toEqual([]);
   });
 
   it("passes only allowlisted environment variables plus fixed values", () => {

@@ -237,6 +237,11 @@
       "category": "security"
     },
     {
+      "file": "test/hermes-01x-image.test.ts",
+      "test": "keeps the 0.1.x security file hashes synchronized with the copied files",
+      "category": "security"
+    },
+    {
       "file": "test/hermes-final-image-layout.test.ts",
       "test": "keeps security entrypoint hashes synchronized with the copied files",
       "category": "security"

@@ -17,6 +17,8 @@ readonly -a production_dockerfiles=(
   "${repo_root}/Dockerfile.base"
   "${repo_root}/agents/hermes/Dockerfile"
   "${repo_root}/agents/hermes/Dockerfile.base"
+  "${repo_root}/agents/hermes-01x/Dockerfile"
+  "${repo_root}/agents/hermes-01x/Dockerfile.base"
   "${repo_root}/agents/langchain-deepagents-code/Dockerfile"
   "${repo_root}/agents/langchain-deepagents-code/Dockerfile.base"
 )

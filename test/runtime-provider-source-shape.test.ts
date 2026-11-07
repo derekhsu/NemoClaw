@@ -228,6 +228,8 @@ describe("runtime provider central source boundary", () => {
     expect(dockerfilePaths).toEqual([
       "Dockerfile",
       "Dockerfile.base",
+      "agents/hermes-01x/Dockerfile",
+      "agents/hermes-01x/Dockerfile.base",
       "agents/hermes/Dockerfile",
       "agents/hermes/Dockerfile.base",
       "agents/langchain-deepagents-code/Dockerfile",
@@ -348,6 +350,7 @@ describe("runtime provider central source boundary", () => {
     expect(startupRuntime).not.toMatch(/require\.main === module/u);
     for (const dockerfilePath of [
       "Dockerfile",
+      "agents/hermes-01x/Dockerfile",
       "agents/hermes/Dockerfile",
       "agents/langchain-deepagents-code/Dockerfile",
     ]) {
@@ -368,6 +371,7 @@ describe("runtime provider central source boundary", () => {
     ).toEqual([
       ".github/workflows/managed-images.yaml",
       "Dockerfile",
+      "agents/hermes-01x/Dockerfile",
       "agents/hermes/Dockerfile",
       "agents/langchain-deepagents-code/Dockerfile",
       "scripts/checks/run-managed-image-direct-e2e.ts",

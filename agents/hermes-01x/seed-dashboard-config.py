@@ -48,6 +48,7 @@ import errno
 import grp
 import os
 import pwd
+import re
 import stat
 import sys
 from copy import deepcopy
@@ -545,7 +546,59 @@ def _seed_dashboard_soul_note(soul_path: str, dashboard_fd: int | None) -> bool:
     )
 
 
+# OpenShell 0.1.x credential placeholder (opaque per-provider token).
+_CREDENTIAL_PLACEHOLDER = re.compile(r"^openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
+
+
+def _named_provider_routing(gateway: dict, routing_keys: list[str], policy: dict) -> dict:
+    """OpenShell 0.1.x routing: named providers called with credential placeholders.
+
+    ClawShell writes ``model.provider: custom:<key>`` plus one ``providers``
+    entry per attached provider (NemoClaw#52). There is no inference.local
+    upstream, so ``_nemoclaw_upstream`` and ``model.base_url`` are absent. A
+    credential must still be the policy sentinel or an OpenShell placeholder:
+    the dashboard never receives a raw key from the gateway config.
+    """
+    routing = {key: deepcopy(gateway[key]) for key in routing_keys if key in gateway}
+    model = routing.get("model")
+    providers = routing.get("providers")
+    custom_providers = routing.get("custom_providers", [])
+    if (
+        not isinstance(model, dict)
+        or not isinstance(model.get("provider"), str)
+        or not model.get("provider")
+        or not isinstance(providers, dict)
+        or not isinstance(custom_providers, list)
+    ):
+        raise InvalidDashboardSeedDocumentError("gateway config has invalid model routing")
+    selected = model["provider"]
+    if selected.startswith("custom:") and not isinstance(providers.get(selected[len("custom:"):]), dict):
+        raise InvalidDashboardSeedDocumentError("gateway config selects a missing provider")
+    sentinel = policy_value(policy["config"], "model.api_key")
+    for route in (model, *providers.values(), *custom_providers):
+        if not isinstance(route, dict):
+            raise InvalidDashboardSeedDocumentError("gateway config has invalid model routing")
+        key = route.get("api_key")
+        if key is not None and key != sentinel and not (
+            isinstance(key, str) and _CREDENTIAL_PLACEHOLDER.fullmatch(key)
+        ):
+            raise InvalidDashboardSeedDocumentError(
+                "gateway model routing contains a non-policy credential reference"
+            )
+    return routing
+
+
+def _apply_routing(dashboard: dict, routing: dict, routing_keys: list[str]) -> None:
+    """Mirror routing, dropping routing keys the gateway no longer has (0.0.x leftovers)."""
+    for key in routing_keys:
+        if key not in routing:
+            dashboard.pop(key, None)
+    dashboard.update(routing)
+
+
 def _normalized_routing(gateway: dict, routing_keys: list[str], policy: dict) -> dict:
+    if "_nemoclaw_upstream" not in gateway:
+        return _named_provider_routing(gateway, routing_keys, policy)
     if any(key not in gateway for key in routing_keys):
         raise InvalidDashboardSeedDocumentError("gateway config has incomplete model routing")
     routing = {key: deepcopy(gateway[key]) for key in routing_keys}
@@ -842,7 +895,7 @@ def _seed_dashboard(argv: list[str], dashboard_fd: int | None) -> int:
         dashboard["web"] = dashboard_web
     else:
         dashboard.pop("web", None)
-    dashboard.update(routing)
+    _apply_routing(dashboard, routing, policy["dashboard"]["routing_keys"])
     _merge_policy(dashboard, policy_sections)
 
     import yaml
@@ -889,7 +942,7 @@ def _seed_managed_default_routing(argv: list[str]) -> int:
             os.close(parent_fd)
             parent_fd = next_fd
         dashboard = _load_yaml(destination, "dashboard config", dir_fd=parent_fd)
-        dashboard.update(routing)
+        _apply_routing(dashboard, routing, policy["dashboard"]["routing_keys"])
         import yaml
         def write(handle: TextIO) -> None:
             yaml.safe_dump(dashboard, handle, sort_keys=False)

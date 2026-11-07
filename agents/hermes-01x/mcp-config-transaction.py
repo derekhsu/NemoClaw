@@ -25,6 +25,7 @@ and acknowledged reload guarantees.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import importlib.util
 import ipaddress
@@ -34,6 +35,7 @@ import os
 import grp
 import pwd
 import re
+import secrets
 import signal
 import stat
 import sys
@@ -74,6 +76,19 @@ MCP_ROUTED_PRIVATE_IPV4_NETWORKS = tuple(
 ENV_PLACEHOLDER_RE = re.compile(
     r"^Bearer openshell:resolve:env:([A-Za-z_][A-Za-z0-9_]{0,127})$"
 )
+# write-model-config (OpenShell 0.1.x, #52): ClawShell rewrites the default
+# profile's model routing as the sandbox user. Only these top-level sections may
+# change, so MCP servers, toolsets and every other section stay untouched.
+MODEL_CONFIG_ACTION = "write-model-config"
+MODEL_CONFIG_SECTIONS = frozenset({"model", "providers", "custom_providers"})
+# The 0.0.x inference.local routing marker may only be dropped: once re-routed,
+# it no longer describes the route and would steer the dashboard seeder wrong.
+MODEL_CONFIG_REMOVABLE_SECTIONS = frozenset({"_nemoclaw_upstream"})
+MODEL_CONFIG_PAYLOAD_FIELDS = frozenset({"expected_config_sha256", "config"})
+MAX_MODEL_CONFIG_BYTES = 256 * 1024
+MODEL_CONFIG_CONFLICT_EXIT = 3
+CONFIG_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+CREDENTIAL_PLACEHOLDER_RE = re.compile(r"^openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
 OPENSHELL_REVISIONED_CREDENTIAL_NAME_RE = re.compile(r"^v[0-9]+_[A-Za-z0-9_]+$")
 BOUNDARY_MANIFEST_NAME = "openshell-child-visible-credentials.v0.0.101.json"
 ANSI_ESCAPE_RE = re.compile(
@@ -474,9 +489,81 @@ def _managed_local_uploader_candidate(payload: dict[str, object]) -> dict[str, o
     }
 
 
+class ModelConfigConflict(RuntimeError):
+    """The default config changed after the caller read it (CAS mismatch)."""
+
+
+def _validate_model_config_payload(payload: dict[str, object]) -> None:
+    if set(payload) != MODEL_CONFIG_PAYLOAD_FIELDS:
+        raise ValueError("write-model-config payload has invalid fields")
+    expected = payload.get("expected_config_sha256")
+    if not isinstance(expected, str) or not CONFIG_SHA256_RE.fullmatch(expected):
+        raise ValueError("write-model-config requires a lowercase SHA-256 of the config it read")
+    config = payload.get("config")
+    if not isinstance(config, str) or len(config.encode("utf-8")) > MAX_MODEL_CONFIG_BYTES:
+        raise ValueError("write-model-config config must be a bounded YAML document")
+
+
+def _check_model_config_cas(original_text: str, payload: dict[str, object]) -> None:
+    actual = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(actual, str(payload["expected_config_sha256"])):
+        raise ModelConfigConflict(
+            "Hermes config changed after it was read; read it again and retry"
+        )
+
+
+def _api_keys(value: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "api_key" and isinstance(child, str):
+                found.add(child)
+            else:
+                found |= _api_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            found |= _api_keys(child)
+    return found
+
+
+def _model_config_candidate(data: dict, payload: dict[str, object]) -> dict:
+    """Return the submitted config after proving it only re-routes the model.
+
+    Sections outside MODEL_CONFIG_SECTIONS must be byte-for-byte equal after
+    parsing, so this action can never change MCP servers or any other policy.
+    A credential the config did not already hold must be an OpenShell
+    placeholder: the caller can route providers but never plant a raw key.
+    """
+    replacement = yaml.safe_load(str(payload["config"]))
+    if not isinstance(replacement, dict):
+        raise ValueError("Invalid Hermes config: expected a YAML object")
+    missing = object()
+    changed = {
+        key for key in set(data) | set(replacement)
+        if data.get(key, missing) != replacement.get(key, missing)
+    }
+    removed = {key for key in MODEL_CONFIG_REMOVABLE_SECTIONS if key in data and key not in replacement}
+    outside = sorted(str(key) for key in changed - MODEL_CONFIG_SECTIONS - removed)
+    if outside:
+        raise ValueError(
+            "write-model-config may change only model, providers and custom_providers; "
+            f"refused sections: {', '.join(outside)}"
+        )
+    existing = _api_keys({key: data.get(key) for key in MODEL_CONFIG_SECTIONS})
+    added = _api_keys({key: replacement.get(key) for key in MODEL_CONFIG_SECTIONS}) - existing
+    if any(not CREDENTIAL_PLACEHOLDER_RE.fullmatch(value) for value in added):
+        raise ValueError(
+            "write-model-config accepts only OpenShell credential placeholders as new api_key values"
+        )
+    return replacement
+
+
 def _validate_mutation_payload(action: str, payload: dict[str, object]) -> None:
     if action == LOCAL_UPLOADER_ACTION:
         _validate_local_uploader_payload(action, payload)
+        return
+    if action == MODEL_CONFIG_ACTION:
+        _validate_model_config_payload(payload)
         return
     _validate_payload(action, payload)
 
@@ -587,6 +674,9 @@ def _inspect_expected_config(present: dict, absent: list) -> dict[str, object]:
 def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict, bool]:
     if not isinstance(data, dict):
         raise ValueError("Invalid Hermes config: expected a YAML object")
+    if action == MODEL_CONFIG_ACTION:
+        replacement = _model_config_candidate(data, payload)
+        return replacement, replacement != data
     if action == LOCAL_UPLOADER_ACTION:
         server_name = LOCAL_UPLOADER_SERVER_NAME
     else:
@@ -739,6 +829,8 @@ def apply_transaction(action: str, payload: dict[str, object]) -> bool:
     guard = _load_guard()
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
     _assert_mutable_snapshot(original_snapshot)
+    if action == MODEL_CONFIG_ACTION:
+        _check_model_config_cas(original_text, payload)
     hash_originals = {
         path: guard._read_text(path) for path in _managed_hash_paths(privileged)
     }
@@ -802,6 +894,8 @@ def apply_transaction_and_reload(
     privileged = os.geteuid() == 0
     guard = _load_guard()
     original_text, original_snapshot = guard._read_text(CONFIG_PATH)
+    if action == MODEL_CONFIG_ACTION:
+        _check_model_config_cas(original_text, payload)
     parsed = yaml.safe_load(original_text)
     if parsed is None:
         parsed = {}
@@ -1253,13 +1347,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "action",
-        choices=("add", "remove", "inspect", "inspect-local-uploader", "probe", LOCAL_UPLOADER_ACTION),
+        choices=(
+            "add", "remove", "inspect", "inspect-local-uploader", "probe",
+            LOCAL_UPLOADER_ACTION, MODEL_CONFIG_ACTION,
+        ),
     )
     parser.add_argument("--payload")
     args = parser.parse_args()
     payload: dict[str, object] | None = None
     try:
-        if args.action == "probe":
+        if args.action == MODEL_CONFIG_ACTION:
+            # The config travels on stdin, never in argv (/proc/<pid>/cmdline).
+            if args.payload is not None:
+                raise ValueError("write-model-config reads its payload from stdin")
+            raw = sys.stdin.buffer.read(2 * MAX_MODEL_CONFIG_BYTES + 1)
+            if len(raw) > 2 * MAX_MODEL_CONFIG_BYTES:
+                raise ValueError("write-model-config payload is too large")
+            payload = _parse_payload(raw.decode("utf-8"))
+            result = execute(args.action, payload)
+        elif args.action == "probe":
             if args.payload is not None:
                 raise ValueError("Hermes MCP lifecycle probe does not accept --payload")
             result = probe()
@@ -1277,7 +1383,7 @@ def main() -> int:
             result = execute(args.action, payload)
     except Exception as error:
         print(_sanitize_error_message(error, payload), file=sys.stderr)
-        return 2
+        return MODEL_CONFIG_CONFLICT_EXIT if isinstance(error, ModelConfigConflict) else 2
     print(json.dumps(result, sort_keys=True))
     return 0
 

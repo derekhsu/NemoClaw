@@ -11,6 +11,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import YAML from "yaml";
+import type { HermesBuildSettings } from "../agents/hermes-01x/config/build-env.ts";
+import { buildHermesManagedPolicy } from "../agents/hermes-01x/config/managed-policy.ts";
 
 const AGENT = path.resolve(import.meta.dirname, "../agents/hermes-01x");
 const PROFILE_TOOL = path.join(AGENT, "api-profile.py");
@@ -501,3 +504,313 @@ write_runtime_shell_env`,
     expect(result.stdout).not.toContain("10.200.0.1");
   });
 });
+
+// ── hermes-mcp-config-transaction.py write-model-config ─────────────────
+
+const MCP_TRANSACTION = path.join(AGENT, "mcp-config-transaction.py");
+
+const MODEL_HARNESS = `
+import importlib.util, json, os, sys
+source, hermes_dir, record = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("fx_mcp_tx", source)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+module.GUARD_PATH = os.path.join(os.path.dirname(source), "runtime-config-guard.py")
+module.HERMES_DIR = hermes_dir
+module.CONFIG_PATH = os.path.join(hermes_dir, "config.yaml")
+module.STRICT_HASH_PATH = os.path.join(os.path.dirname(hermes_dir), "strict.config-hash")
+module._assert_non_root_lifecycle_identity = lambda: None
+def reload_gateway():
+    with open(record, "a") as handle:
+        handle.write("reload\\n")
+    return True
+module.reload_gateway = reload_gateway
+if os.environ.get("FX_SEED_HASH"):
+    guard = module._load_guard()
+    text, _c, _e = guard._hash_text(module.CONFIG_PATH, os.path.join(hermes_dir, ".env"))
+    guard._write_hash(os.path.join(hermes_dir, ".config-hash"), text)
+    raise SystemExit(0)
+if os.environ.get("FX_INSPECT"):
+    guard = module._load_guard()
+    print(guard.inspect_mcp_integrity(hermes_dir, os.path.join(hermes_dir, ".config-hash")))
+    raise SystemExit(0)
+sys.argv = ["hermes-mcp-config-transaction.py", *sys.argv[4:]]
+raise SystemExit(module.main())
+`;
+
+const DEFAULT_CONFIG = `_nemoclaw_upstream:
+  provider: custom
+  provider_key: custom
+  model: nvidia/nemotron-3-super-120b-a12b
+model:
+  default: nvidia/nemotron-3-super-120b-a12b
+  provider: custom
+  base_url: https://inference.local/v1
+  api_key: sk-OPENSHELL-PROXY-REWRITE
+providers:
+  custom:
+    name: custom
+    api: https://inference.local/v1
+    api_key: sk-OPENSHELL-PROXY-REWRITE
+mcp_servers:
+  fake:
+    url: https://mcp.example.test/mcp
+    enabled: true
+platform_toolsets:
+  api_server: [file]
+`;
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "hermes-mcp-config-transaction.py write-model-config (0.1.x default profile)",
+  () => {
+    let base: string;
+    let hermes: string;
+    let record: string;
+
+    beforeEach(() => {
+      base = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-01x-model-"));
+      hermes = path.join(base, ".hermes");
+      fs.mkdirSync(hermes, { mode: 0o700 });
+      fs.writeFileSync(path.join(hermes, "config.yaml"), DEFAULT_CONFIG, { mode: 0o640 });
+      fs.writeFileSync(path.join(hermes, ".env"), "API_SERVER_KEY=x\n", { mode: 0o640 });
+      record = path.join(base, "reloads");
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+    });
+
+    afterEach(() => {
+      fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    function run(args: string[], env: Record<string, string> = {}, stdin?: string) {
+      return spawnSync("python3", ["-c", MODEL_HARNESS, MCP_TRANSACTION, hermes, record, ...args], {
+        encoding: "utf8",
+        input: stdin,
+        timeout: 30000,
+        env: { ...process.env, ...env },
+      });
+    }
+
+    const configText = () => fs.readFileSync(path.join(hermes, "config.yaml"), "utf8");
+    const configSha = () => sha256(path.join(hermes, "config.yaml"));
+    const reloads = () =>
+      fs.existsSync(record)
+        ? fs.readFileSync(record, "utf8").split("\n").filter(Boolean).length
+        : 0;
+    const write = (config: string, expected = configSha()) =>
+      run(["write-model-config"], {}, JSON.stringify({ expected_config_sha256: expected, config }));
+
+    const ROUTED = `model:
+  default: gpt-5.5
+  provider: custom:clawshell-openai
+providers:
+  clawshell-openai:
+    name: clawshell-openai
+    base_url: https://api.openai.com/v1
+    api_key: ${PLACEHOLDER}
+    api_mode: chat_completions
+mcp_servers:
+  fake:
+    url: https://mcp.example.test/mcp
+    enabled: true
+platform_toolsets:
+  api_server: [file]
+`;
+
+    it("re-routes the model, keeps the hash current and reloads the gateway once", () => {
+      const result = write(ROUTED);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ changed: true, ok: true, reloaded: true });
+      expect(configText()).toContain("provider: custom:clawshell-openai");
+      expect(configText()).not.toContain("inference.local");
+      expect(reloads()).toBe(1);
+      const inspected = run([], { FX_INSPECT: "1" });
+      expect(inspected.status, inspected.stderr).toBe(0);
+      expect(inspected.stdout.trim()).toBe("current");
+    });
+
+    it("refuses a config read before a concurrent change with exit 3", () => {
+      const stale = configSha();
+      fs.appendFileSync(path.join(hermes, "config.yaml"), "# edited\n");
+      const before = configText();
+      const result = write(ROUTED, stale);
+      expect(result.status).toBe(3);
+      expect(configText()).toBe(before);
+      expect(reloads()).toBe(0);
+    });
+
+    it("refuses to change any section other than model routing", () => {
+      for (const config of [
+        ROUTED.replace("https://mcp.example.test/mcp", "https://evil.example.test/mcp"),
+        ROUTED.replace("api_server: [file]", "api_server: [file, terminal]"),
+        `${ROUTED}approvals:\n  mode: off\n`,
+      ]) {
+        const result = write(config);
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain("may change only model, providers and custom_providers");
+      }
+      expect(configText()).toBe(DEFAULT_CONFIG);
+      expect(reloads()).toBe(0);
+    });
+
+    it("accepts only placeholders as new credentials but keeps existing ones", () => {
+      const raw = write(ROUTED.replace(PLACEHOLDER, "sk-live-not-a-placeholder"));
+      expect(raw.status).toBe(2);
+      expect(raw.stderr).toContain("only OpenShell credential placeholders");
+      expect(raw.stderr).not.toContain("sk-live-not-a-placeholder");
+      expect(configText()).toBe(DEFAULT_CONFIG);
+      // Only the model choice changes; the existing legacy value stays.
+      const kept = write(
+        DEFAULT_CONFIG.replace("default: nvidia/nemotron-3-super-120b-a12b", "default: other"),
+      );
+      expect(kept.status, kept.stderr).toBe(0);
+    });
+
+    it("lets the 0.0.x upstream marker be dropped but never rewritten", () => {
+      // ROUTED has no _nemoclaw_upstream: the first test already proves removal works.
+      const rewritten = write(
+        `_nemoclaw_upstream:\n  provider: other\n  provider_key: other\n  model: x\n${ROUTED}`,
+      );
+      expect(rewritten.status).toBe(2);
+      expect(rewritten.stderr).toContain("refused sections: _nemoclaw_upstream");
+      expect(configText()).toBe(DEFAULT_CONFIG);
+      const removed = write(ROUTED);
+      expect(removed.status, removed.stderr).toBe(0);
+      expect(configText()).not.toContain("_nemoclaw_upstream");
+    });
+
+    it("reads its payload only from stdin", () => {
+      const result = run(["write-model-config", "--payload", "{}"]);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("reads its payload from stdin");
+    });
+  },
+);
+
+// ── seed-dashboard-config.py: OpenShell 0.1.x named-provider routing ─────
+
+const SEEDER = path.join(AGENT, "seed-dashboard-config.py");
+const SEED_POLICY = buildHermesManagedPolicy(
+  {
+    model: "nvidia-routed",
+    baseUrl: "https://inference.local/v1",
+    providerKey: "nvidia-router",
+    upstreamProvider: "nvidia-router",
+    inferenceApi: "openai-completions",
+    contextWindow: null,
+    toolDisclosure: "progressive",
+    webSearchProvider: null,
+    messagingCredentialPlaceholders: [],
+    managedToolGateways: { brokerEnabled: false, presets: [] },
+    managedImageCapabilityUnion: false,
+  } as HermesBuildSettings,
+  {},
+);
+const SEED_GATEWAY_POLICY = Object.fromEntries(
+  Array.from(
+    new Set(SEED_POLICY.managed_paths.map((dotted) => dotted.split(".", 1)[0])),
+    (section) => [section, SEED_POLICY.config[section]],
+  ),
+);
+const PRIMARY = "clawshell-openai-official-1bc0bf8d8096";
+const SECOND = "clawshell-openai-alt-test-9aedb1aa61c7";
+const NAMED_ROUTING = {
+  model: { default: "gpt-6-luna", provider: `custom:${PRIMARY}` },
+  providers: {
+    [PRIMARY]: {
+      name: PRIMARY,
+      base_url: "https://api.openai.com/v1",
+      api_key: PLACEHOLDER,
+      api_mode: "codex_responses",
+    },
+    [SECOND]: {
+      name: SECOND,
+      base_url: "https://api.openai.com/v1",
+      api_key: "openshell:resolve:env:sb2",
+      api_mode: "chat_completions",
+    },
+  },
+  custom_providers: [],
+};
+
+describe.skipIf(process.platform === "win32")(
+  "seed-dashboard-config.py (0.1.x named providers)",
+  () => {
+    let dir: string;
+    let policy: string;
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-01x-seed-"));
+      policy = path.join(dir, "managed-policy.json");
+      fs.writeFileSync(policy, JSON.stringify(SEED_POLICY));
+    });
+
+    afterEach(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    function seed(gateway: object, dashboard: object) {
+      const src = path.join(dir, "gateway.yaml");
+      const dst = path.join(dir, "dashboard-home", "config.yaml");
+      fs.mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(src, YAML.stringify({ ...SEED_GATEWAY_POLICY, ...gateway }));
+      fs.writeFileSync(dst, YAML.stringify(dashboard), { mode: 0o600 });
+      const result = spawnSync("python3", [SEEDER, policy, src, dst], {
+        encoding: "utf8",
+        timeout: 20000,
+      });
+      return {
+        ...result,
+        dashboard: YAML.parse(fs.readFileSync(dst, "utf8")) as Record<string, unknown>,
+      };
+    }
+
+    // The image's dashboard-home starts from the 0.0.x inference.local route.
+    const STALE_DASHBOARD = {
+      model: {
+        default: "nemotron",
+        provider: "custom",
+        base_url: "https://inference.local/v1",
+        api_key: "sk-OPENSHELL-PROXY-REWRITE",
+      },
+      custom_providers: [
+        {
+          name: "custom",
+          base_url: "https://inference.local/v1",
+          api_key: "sk-OPENSHELL-PROXY-REWRITE",
+        },
+      ],
+      _nemoclaw_upstream: { provider_key: "custom" },
+      dashboard_local: { keep: true },
+    };
+
+    it("mirrors every named provider and drops the 0.0.x upstream", () => {
+      const result = seed(NAMED_ROUTING, STALE_DASHBOARD);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.dashboard.model).toEqual(NAMED_ROUTING.model);
+      expect(result.dashboard.providers).toEqual(NAMED_ROUTING.providers);
+      expect(result.dashboard.custom_providers).toEqual([]);
+      expect(result.dashboard).not.toHaveProperty("_nemoclaw_upstream");
+      expect(result.dashboard.dashboard_local).toEqual({ keep: true });
+    });
+
+    it("refuses a raw credential and keeps the dashboard as it was", () => {
+      const raw = structuredClone(NAMED_ROUTING);
+      raw.providers[SECOND].api_key = "sk-live-raw-key";
+      const result = seed(raw, STALE_DASHBOARD);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("invalid model routing");
+      expect(result.stderr).not.toContain("sk-live-raw-key");
+      expect(result.dashboard).toEqual(STALE_DASHBOARD);
+    });
+
+    it("refuses a selection that names no provider entry", () => {
+      const result = seed(
+        { ...NAMED_ROUTING, model: { provider: "custom:clawshell-gone" } },
+        STALE_DASHBOARD,
+      );
+      expect(result.status).toBe(1);
+      expect(result.dashboard).toEqual(STALE_DASHBOARD);
+    });
+  },
+);

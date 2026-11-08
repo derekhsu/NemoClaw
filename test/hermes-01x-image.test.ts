@@ -826,11 +826,15 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       (YAML.parse(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).mcp_servers ??
         {}) as Record<string, { headers?: Record<string, string> }>;
 
-    it("stores the Authorization as an env reference Hermes expands to the live placeholder", () => {
+    it("stores the placeholder it holds, which a gateway started before the provider can still use", () => {
+      // The gateway keeps its launch environment; only the stored value can
+      // carry a provider attached after the sandbox started.
       const result = run(["add", "--payload", payload()], { MCP_TOKEN: STABLE });
       expect(result.status, result.stderr).toBe(0);
-      expect(servers().docs?.headers).toEqual({ Authorization: "Bearer ${MCP_TOKEN}" });
-      expect(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).not.toContain(STABLE);
+      expect(servers().docs?.headers).toEqual({ Authorization: `Bearer ${STABLE}` });
+      expect(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).not.toContain(
+        "${MCP_TOKEN}",
+      );
     });
 
     it.each([
@@ -880,11 +884,36 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       );
       expect(inspected.status, inspected.stderr).toBe(0);
       expect(inspected.stdout).toContain("matched");
+      // Re-attaching the provider issues a new handle: inspection reports the
+      // stale entry, and the owner can still remove it without --force.
+      const reissued = `openshell:resolve:env:s${"c".repeat(64)}_MCP_TOKEN`;
+      const stale = run(
+        ["inspect", "--payload", JSON.stringify({ present: { docs: expected }, absent: [] })],
+        { MCP_TOKEN: reissued },
+      );
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain("does not match persisted managed intent");
       const removed = run(["remove", "--payload", payload(SUBMITTED, { force: false })], {
-        MCP_TOKEN: STABLE,
+        MCP_TOKEN: reissued,
       });
       expect(removed.status, removed.stderr).toBe(0);
       expect(servers().docs).toBeUndefined();
+    });
+
+    it("refuses to remove a same-named entry that holds another credential without --force", () => {
+      expect(run(["add", "--payload", payload()], { MCP_TOKEN: STABLE }).status).toBe(0);
+      const config = fs.readFileSync(path.join(hermes, "config.yaml"), "utf8");
+      fs.writeFileSync(
+        path.join(hermes, "config.yaml"),
+        config.replace(STABLE, `openshell:resolve:env:s${"a".repeat(64)}_OTHER_TOKEN`),
+      );
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+      const removed = run(["remove", "--payload", payload(SUBMITTED, { force: false })], {
+        MCP_TOKEN: STABLE,
+      });
+      expect(removed.status).not.toBe(0);
+      expect(removed.stderr).toContain("Refusing to remove modified Hermes MCP server");
+      expect(servers().docs).toBeDefined();
     });
   },
 );

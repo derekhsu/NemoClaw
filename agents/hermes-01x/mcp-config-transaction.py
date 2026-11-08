@@ -230,39 +230,62 @@ def _credential_name_is_reserved(name: str) -> bool:
     )
 
 
-def _environment_holds_placeholder(name: str) -> bool:
-    """True when ``name`` is an OpenShell credential placeholder in this process.
+def _placeholder_pattern(name: str) -> str:
+    return r"openshell:resolve:env:(?:v[0-9]+_|s[0-9a-f]{64}_)?" + re.escape(name)
+
+
+def _current_placeholder(name: str) -> str | None:
+    """The OpenShell placeholder this process holds for ``name``, if any.
 
     OpenShell 0.1.x hands every provider value that is not a static credential
     to children as its raw value, so a name outside the reserved list can still
-    carry a raw value. The transaction runs as an OpenShell child, so its own
-    environment shows what Hermes will read for ``${name}``.
+    carry a raw value. The transaction runs as a fresh OpenShell child, so its
+    environment reflects the providers attached now.
     """
     value = os.environ.get(name)
-    if value is None:
-        return False
-    return re.fullmatch(
-        r"openshell:resolve:env:(?:v[0-9]+_|s[0-9a-f]{64}_)?" + re.escape(name),
-        value,
-    ) is not None
+    if value is None or re.fullmatch(_placeholder_pattern(name), value) is None:
+        return None
+    return value
 
 
-def _stored_authorization(authorization: object) -> object:
-    """Store the Authorization as an env reference Hermes expands at load time.
+def _environment_holds_placeholder(name: str) -> bool:
+    return _current_placeholder(name) is not None
 
-    Endpoint-bound 0.1.x credentials resolve only through the revisioned or
-    stable-handle placeholder in the environment; a bare
-    ``openshell:resolve:env:NAME`` fails with ``credential_unavailable``.
-    ``${NAME}`` picks up the current placeholder whenever Hermes starts.
-    """
+
+def _submitted_credential_name(authorization: object) -> str | None:
     match = (
         ENV_PLACEHOLDER_RE.fullmatch(authorization)
         if isinstance(authorization, str)
         else None
     )
-    if match is None:
+    return match.group(1) if match is not None else None
+
+
+def _stored_authorization(authorization: object) -> object:
+    """Store the Authorization with the placeholder this transaction holds.
+
+    Endpoint-bound 0.1.x credentials resolve only through the revisioned or
+    stable-handle placeholder; a bare ``openshell:resolve:env:NAME`` fails with
+    ``credential_unavailable``. OpenShell resolves that placeholder by value,
+    so it also works for the running gateway, whose environment predates any
+    provider attached after the sandbox started (a ``${NAME}`` reference would
+    expand from that stale environment). Re-attaching the provider issues a new
+    handle; the stored one then fails closed until the server is added again.
+    """
+    name = _submitted_credential_name(authorization)
+    if name is None:
         return authorization
-    return f"Bearer ${{{match.group(1)}}}"
+    placeholder = _current_placeholder(name)
+    if placeholder is None:
+        return authorization
+    return f"Bearer {placeholder}"
+
+
+def _authorization_holds_credential(stored: object, name: str) -> bool:
+    """True when ``stored`` is an Authorization for ``name`` in any placeholder form."""
+    return isinstance(stored, str) and (
+        re.fullmatch("Bearer " + _placeholder_pattern(name), stored) is not None
+    )
 
 
 def _load_guard() -> ModuleType:
@@ -674,7 +697,7 @@ def _validate_mutation_payload(action: str, payload: dict[str, object]) -> None:
 def _managed_candidate(
     payload: dict[str, object], *, stored: bool = True
 ) -> dict[str, object]:
-    """Config entry for ``payload``; ``stored`` uses the persisted ``${NAME}`` form."""
+    """Config entry for ``payload``; ``stored`` substitutes the held placeholder."""
     headers = payload.get("headers")
     if not isinstance(headers, dict):
         raise ValueError("MCP mutation payload headers must be an object")
@@ -693,6 +716,33 @@ def _managed_candidate(
     if headers:
         candidate["headers"] = headers
     return candidate
+
+
+def _matches_managed_entry(current: object, payload: dict[str, object]) -> bool:
+    """True when ``current`` is the entry ``add`` wrote for ``payload``.
+
+    The stored placeholder handle changes when the provider is re-attached, so
+    any placeholder form of the submitted credential name still identifies the
+    entry; every other field must match exactly.
+    """
+    expected = _managed_candidate(payload, stored=False)
+    if current == expected:
+        return True
+    if not isinstance(current, dict) or not isinstance(current.get("headers"), dict):
+        return False
+    headers = expected.get("headers")
+    name = _submitted_credential_name(
+        headers.get("Authorization") if isinstance(headers, dict) else None
+    )
+    if name is None or not _authorization_holds_credential(
+        current["headers"].get("Authorization"), name
+    ):
+        return False
+    normalized = {
+        **current,
+        "headers": {**current["headers"], "Authorization": headers["Authorization"]},
+    }
+    return normalized == expected
 
 
 _MANAGED_CANDIDATE_FIELDS = frozenset(
@@ -736,7 +786,8 @@ def _validate_inspection_payload(payload: dict[str, object]) -> None:
 def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
     _validate_inspection_payload(payload)
     # Callers describe the intent with the placeholder they submitted to add;
-    # compare it with the persisted ${NAME} form.
+    # compare it with the placeholder this sandbox holds now, so an entry whose
+    # handle went stale after a provider re-attachment reports a mismatch.
     present = {
         server: _managed_candidate({"url": expected.get("url"), "headers": expected.get("headers")})
         for server, expected in payload["present"].items()
@@ -833,11 +884,7 @@ def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict
         return data, False
     if payload.get("force") is not True:
         current = servers.get(server_name)
-        # Entries written before the ${NAME} form keep the submitted placeholder.
-        if current not in (
-            _managed_candidate(payload),
-            _managed_candidate(payload, stored=False),
-        ):
+        if not _matches_managed_entry(current, payload):
             raise ValueError(
                 f"Refusing to remove modified Hermes MCP server '{server_name}'. Use --force to remove it."
             )

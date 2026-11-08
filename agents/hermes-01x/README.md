@@ -46,9 +46,12 @@ request leaves the sandbox.
    `s<64 hex>_` placeholder namespace;
 2. refuses `NAME` unless the transaction's own environment holds an OpenShell
    placeholder for it, which rejects raw (non-secret) values;
-3. stores `Bearer ${NAME}`, which Hermes expands at load time to the current
-   placeholder, so a credential refresh or provider re-attachment needs only a
-   Hermes restart.
+3. stores `Bearer <that placeholder>`. OpenShell resolves a placeholder by
+   value, so the running gateway can use it even though its own environment
+   predates a provider attached after the sandbox started; a `${NAME}`
+   reference would expand from that stale environment. Re-attaching the
+   provider issues a new handle: `inspect` then reports a mismatch and the
+   server must be added again (a non-forced `remove` still recognizes it).
 
 Regenerate the manifest for a new OpenShell release from
 `google_cloud.rs`, `provider_credentials.rs` and `secrets.rs` in

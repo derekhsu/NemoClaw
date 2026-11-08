@@ -397,15 +397,19 @@ print(json.dumps({"rules": rules, "state": launcher.STATE_TREE, "ro": launcher.R
   });
 
   it("passes only allowlisted environment variables plus fixed values", () => {
-    const result = launcher(`print(json.dumps(launcher._sanitized_env("/h", ["EXTRA_OK"])))`, {
-      LD_PRELOAD: "/tmp/evil.so",
-      PYTHONPATH: "/tmp/evil",
-      OPENAI_API_KEY: "sk-secret",
-      SSL_CERT_FILE: "/run/ca.pem",
-      LANG: "C.UTF-8",
-      EXTRA_OK: "1",
-      PATH: "/tmp/evil-bin:/usr/bin",
-    });
+    const result = launcher(
+      `print(json.dumps(launcher._sanitized_env("/h", ["EXTRA_OK", "NEMOCLAW_HERMES_PIN_AGENT_HOME"])))`,
+      {
+        NEMOCLAW_HERMES_PIN_AGENT_HOME: "0",
+        LD_PRELOAD: "/tmp/evil.so",
+        PYTHONPATH: "/tmp/evil",
+        OPENAI_API_KEY: "sk-secret",
+        SSL_CERT_FILE: "/run/ca.pem",
+        LANG: "C.UTF-8",
+        EXTRA_OK: "1",
+        PATH: "/tmp/evil-bin:/usr/bin",
+      },
+    );
     expect(result.status, result.stderr).toBe(0);
     const env = JSON.parse(result.stdout);
     expect(env).toMatchObject({
@@ -414,6 +418,7 @@ print(json.dumps({"rules": rules, "state": launcher.STATE_TREE, "ro": launcher.R
       EXTRA_OK: "1",
       HOME: "/h",
       HERMES_HOME: "/h",
+      NEMOCLAW_HERMES_PIN_AGENT_HOME: "1",
       TMPDIR: "/h/tmp",
       PYTHONNOUSERSITE: "1",
     });
@@ -976,7 +981,8 @@ describe.skipIf(process.platform === "win32")(
 
 // ── patch-agent-home-state-symlink.py ───────────────────────────────────
 // Hermes v0.21.3 derived the agent home from the resolved session DB path, so
-// the api profile's state.db symlink moved SOUL.md and skills/ into state/.
+// the api profile's state.db symlink moved SOUL.md and skills/ into the
+// api-writable state/. The launcher's pin makes HERMES_HOME the home.
 describe("patch-agent-home-state-symlink.py", () => {
   const PATCHER = path.join(AGENT, "patch-agent-home-state-symlink.py");
   const UNPATCHED = [
@@ -1004,7 +1010,7 @@ describe("patch-agent-home-state-symlink.py", () => {
     return { result, target };
   }
 
-  function home(target: string, dbPath: string, hermesHome: string) {
+  function home(target: string, dbPath: string, env: Record<string, string>) {
     const probe = [
       "import importlib.util, sys",
       "from types import SimpleNamespace",
@@ -1013,25 +1019,37 @@ describe("patch-agent-home-state-symlink.py", () => {
       "agent = SimpleNamespace(_session_db=SimpleNamespace(db_path=sys.argv[2]))",
       "print(module._agent_home(agent))",
     ].join("\n");
+    const clean = { ...process.env };
+    delete clean.NEMOCLAW_HERMES_PIN_AGENT_HOME;
     return spawnSync("python3", ["-I", "-c", probe, target, dbPath], {
       encoding: "utf8",
-      env: { ...process.env, HERMES_HOME: hermesHome },
+      env: { ...clean, ...env },
     }).stdout.trim();
   }
 
-  it("keeps HERMES_HOME when its state.db is a symlink into state/", () => {
+  it("uses the pinned HERMES_HOME wherever the session DB path points", () => {
     const { result, target } = patch(UNPATCHED);
     expect(result.status, result.stderr).toBe(0);
     const api = path.join(dir, "profiles", "api");
-    fs.mkdirSync(path.join(api, "state"), { recursive: true });
-    fs.writeFileSync(path.join(api, "state", "state.db"), "");
-    fs.symlinkSync("state/state.db", path.join(api, "state.db"));
-    const resolved = fs.realpathSync(path.join(api, "state.db"));
-    expect(home(target, resolved, api)).toBe(api);
-    // A regular state.db elsewhere keeps Hermes' own answer.
-    const plain = path.join(dir, "plain");
-    fs.mkdirSync(plain);
-    expect(home(target, path.join(plain, "state.db"), api)).toBe(plain);
+    const pinned = { HERMES_HOME: api, NEMOCLAW_HERMES_PIN_AGENT_HOME: "1" };
+    // The resolved admin symlink, and a path the api side redirected state.db to.
+    expect(home(target, path.join(api, "state", "state.db"), pinned)).toBe(api);
+    expect(home(target, path.join(api, "state", "a", "session.db"), pinned)).toBe(api);
+    expect(home(target, path.join(dir, "elsewhere", "state.db"), pinned)).toBe(api);
+  });
+
+  it("keeps Hermes' answer without the launcher's pin", () => {
+    const { target } = patch(UNPATCHED);
+    const api = path.join(dir, "profiles", "api");
+    expect(home(target, path.join(api, "state", "state.db"), { HERMES_HOME: api })).toBe(
+      path.join(api, "state"),
+    );
+    expect(
+      home(target, path.join(api, "state.db"), {
+        HERMES_HOME: api,
+        NEMOCLAW_HERMES_PIN_AGENT_HOME: "0",
+      }),
+    ).toBe(api);
   });
 
   it("is idempotent and fails closed on an unknown source shape", () => {

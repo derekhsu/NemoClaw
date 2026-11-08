@@ -65,7 +65,7 @@ def verify_profile_policy() -> None:
 
 
 def verify_agent_home_state_symlink() -> None:
-    """The api profile's symlinked state.db must not move the agent home into state/ (#52)."""
+    """The api launcher's pin keeps HERMES_HOME as the agent home (#52)."""
     import os
     import tempfile
     from types import SimpleNamespace
@@ -77,15 +77,19 @@ def verify_agent_home_state_symlink() -> None:
 
     with tempfile.TemporaryDirectory() as root:
         home = Path(root) / "profiles" / "api"
-        (home / "state").mkdir(parents=True)
-        (home / "state" / "state.db").touch()
+        (home / "state" / "a").mkdir(parents=True)
+        (home / "state" / "a" / "session.db").touch()
+        (home / "state" / "state.db").symlink_to("a/session.db")
         (home / "state.db").symlink_to("state/state.db")
         os.environ["HERMES_HOME"] = str(home)
-        # SessionDB registries resolve the symlink before opening the database.
+        os.environ["NEMOCLAW_HERMES_PIN_AGENT_HOME"] = "1"
+        # SessionDB registries resolve symlinks, and the api side controls state/.
         assert _agent_home(agent((home / "state.db").resolve())) == home
+        assert _agent_home(agent(home / "state" / "a" / "session.db")) == home
+        # Without the launcher's pin Hermes keeps its own answer.
+        del os.environ["NEMOCLAW_HERMES_PIN_AGENT_HOME"]
         plain = Path(root) / "plain"
         plain.mkdir()
-        (plain / "state.db").touch()
         assert _agent_home(agent(plain / "state.db")) == plain
 
 

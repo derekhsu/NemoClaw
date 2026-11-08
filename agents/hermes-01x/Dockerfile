@@ -382,7 +382,7 @@ RUN find /opt/nemoclaw-hermes-config -type d -exec chmod 755 {} + \
         /scripts/patch-bundled-npm-tar.mts \
     && chmod -R a+rX /src/lib/messaging
 
-ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=1206ab8029f5b65ba2baa1563092a7d895ae5aa1048f8358300b07dc6d016129
+ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=faa483360ddb70d1cfd04d821a59bd4b78bf2cc1989b7940052d6d6f7e5ec2d2
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256" /opt/nemoclaw-hermes-config/image-build-probes.py \
@@ -540,9 +540,9 @@ RUN /usr/bin/python3 -I \
 # Hermes derives the agent home from the resolved session DB path, so SOUL.md,
 # the skills index and context files were read from the api-writable state
 # tree. Keep the HERMES_HOME that owns the symlinked state.db.
-ARG NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256=6164bf88107f393d53918f8d3c81ac32273e039923b0d86d02126bfd167a8b41
+ARG NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256=9167d27670db8eb8bb55d1df9a89f3d238a3e34b8ffa9fa752b780975fac750e
 ARG NEMOCLAW_HERMES_SYSTEM_PROMPT_SOURCE_SHA256=20a6b326816fc6924ed0b5f4407281b38b9254f7b43465acff10fae09be3114f
-ARG NEMOCLAW_HERMES_SYSTEM_PROMPT_PATCHED_SHA256=2eeb8a97b164f30ffd3ef1a7e472c2aa738427b5e2acbf3f09e79650c77e5f60
+ARG NEMOCLAW_HERMES_SYSTEM_PROMPT_PATCHED_SHA256=eb347caf5313d130edfa2cfddab065232ba3b62828921b950a07cc6024110811
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256" /opt/nemoclaw-hermes-config/patch-agent-home-state-symlink.py \
@@ -711,7 +711,7 @@ RUN printf '%s  %s\n' \
     || { echo "ERROR: hermes-api-profile.py hash mismatch (update NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256)" >&2; exit 1; } \
     && chown root:root /usr/local/lib/nemoclaw/hermes-api-profile.py \
     && chmod 444 /usr/local/lib/nemoclaw/hermes-api-profile.py
-ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=cf9eb9d5badc8292d10592ea1744879ca770bb724e9c5509f2081099a51fc57e
+ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=def8e5059b48b8c71716ac05293c87ac97f57161233fc1f4c92c2dbf4df5af30
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256" /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \

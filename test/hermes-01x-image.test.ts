@@ -140,6 +140,8 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       // The runtime contract is pinned from the first boot.
       expect(config()).toMatch(/host: 127\.0\.0\.1/);
       expect(config()).toMatch(/dispatch_in_gateway: false/);
+      // The api agent sees installed skills only through the skills toolset.
+      expect(config()).toMatch(/platform_toolsets:\n  api_server:\n  - file\n  - skills\n/);
       expect(tool(["verify"]).status).toBe(0);
     });
 

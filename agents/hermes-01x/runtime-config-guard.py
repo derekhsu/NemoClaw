@@ -5291,6 +5291,8 @@ HERMES_API_CONFIG_TEMPLATE = (
     "platform_toolsets:\n"
     "  api_server:\n"
     "    - file\n"
+    # Without skills the api agent cannot see or load any installed skill.
+    "    - skills\n"
     "model:\n"
     "  default: hermes-agent\n"
 )
@@ -5954,7 +5956,7 @@ def _api_uploader_config(document: dict, payload: dict) -> dict:
             raise UnsafePathError("API uploader refuses unrelated prior intent")
     updated = copy.deepcopy(document)
     updated["mcp_servers"] = expected
-    updated.setdefault("platform_toolsets", {})["api_server"] = ["file", "mcp-sandbox-file-uploader"]
+    updated.setdefault("platform_toolsets", {})["api_server"] = ["file", "skills", "mcp-sandbox-file-uploader"]
     return updated
 
 

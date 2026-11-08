@@ -32,6 +32,8 @@ describe("agents/hermes-01x Dockerfile pins", () => {
       ["NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256", "api-profile.py"],
       ["NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256", "api-landlock-exec.py"],
       ["NEMOCLAW_HERMES_ATOMIC_WRITE_PATCHER_SHA256", "patch-atomic-write-symlink-target.py"],
+      ["NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256", "patch-agent-home-state-symlink.py"],
+      ["NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256", "image-build-probes.py"],
       ["NEMOCLAW_HERMES_VALIDATOR_SHA256", "validate-env-secret-boundary.py"],
     ]) {
       const match = dockerfile.match(new RegExp(`^ARG ${arg}=([0-9a-f]{64})$`, "m"));
@@ -971,3 +973,76 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+// ── patch-agent-home-state-symlink.py ───────────────────────────────────
+// Hermes v0.21.3 derived the agent home from the resolved session DB path, so
+// the api profile's state.db symlink moved SOUL.md and skills/ into state/.
+describe("patch-agent-home-state-symlink.py", () => {
+  const PATCHER = path.join(AGENT, "patch-agent-home-state-symlink.py");
+  const UNPATCHED = [
+    "import os",
+    "from pathlib import Path",
+    "",
+    "def _agent_home(agent):",
+    "    try:",
+    '        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)',
+    "        return Path(db_path).parent if db_path else None",
+    "    except Exception:",
+    "        return None",
+    "",
+  ].join("\n");
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-home-"));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function patch(source: string) {
+    const target = path.join(dir, "system_prompt.py");
+    fs.writeFileSync(target, source);
+    const result = spawnSync("python3", ["-I", PATCHER, target], { encoding: "utf8" });
+    return { result, target };
+  }
+
+  function home(target: string, dbPath: string, hermesHome: string) {
+    const probe = [
+      "import importlib.util, sys",
+      "from types import SimpleNamespace",
+      'spec = importlib.util.spec_from_file_location("sp", sys.argv[1])',
+      "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)",
+      "agent = SimpleNamespace(_session_db=SimpleNamespace(db_path=sys.argv[2]))",
+      "print(module._agent_home(agent))",
+    ].join("\n");
+    return spawnSync("python3", ["-I", "-c", probe, target, dbPath], {
+      encoding: "utf8",
+      env: { ...process.env, HERMES_HOME: hermesHome },
+    }).stdout.trim();
+  }
+
+  it("keeps HERMES_HOME when its state.db is a symlink into state/", () => {
+    const { result, target } = patch(UNPATCHED);
+    expect(result.status, result.stderr).toBe(0);
+    const api = path.join(dir, "profiles", "api");
+    fs.mkdirSync(path.join(api, "state"), { recursive: true });
+    fs.writeFileSync(path.join(api, "state", "state.db"), "");
+    fs.symlinkSync("state/state.db", path.join(api, "state.db"));
+    const resolved = fs.realpathSync(path.join(api, "state.db"));
+    expect(home(target, resolved, api)).toBe(api);
+    // A regular state.db elsewhere keeps Hermes' own answer.
+    const plain = path.join(dir, "plain");
+    fs.mkdirSync(plain);
+    expect(home(target, path.join(plain, "state.db"), api)).toBe(plain);
+  });
+
+  it("is idempotent and fails closed on an unknown source shape", () => {
+    const { target } = patch(UNPATCHED);
+    const once = fs.readFileSync(target, "utf8");
+    expect(spawnSync("python3", ["-I", PATCHER, target]).status).toBe(0);
+    expect(fs.readFileSync(target, "utf8")).toBe(once);
+    const changed = patch(
+      UNPATCHED.replace("return Path(db_path).parent if db_path else None", "return None"),
+    );
+    expect(changed.result.status).not.toBe(0);
+    expect(changed.result.stderr).toContain("source shape changed");
+  });
+});

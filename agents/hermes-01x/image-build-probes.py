@@ -64,6 +64,31 @@ def verify_profile_policy() -> None:
         hermes_config.load_config = original_load_config
 
 
+def verify_agent_home_state_symlink() -> None:
+    """The api profile's symlinked state.db must not move the agent home into state/ (#52)."""
+    import os
+    import tempfile
+    from types import SimpleNamespace
+
+    from agent.system_prompt import _agent_home
+
+    def agent(db_path: Path) -> SimpleNamespace:
+        return SimpleNamespace(_session_db=SimpleNamespace(db_path=db_path))
+
+    with tempfile.TemporaryDirectory() as root:
+        home = Path(root) / "profiles" / "api"
+        (home / "state").mkdir(parents=True)
+        (home / "state" / "state.db").touch()
+        (home / "state.db").symlink_to("state/state.db")
+        os.environ["HERMES_HOME"] = str(home)
+        # SessionDB registries resolve the symlink before opening the database.
+        assert _agent_home(agent((home / "state.db").resolve())) == home
+        plain = Path(root) / "plain"
+        plain.mkdir()
+        (plain / "state.db").touch()
+        assert _agent_home(agent(plain / "state.db")) == plain
+
+
 def verify_gateway_runtime_metadata() -> None:
     from gateway.status import (
         _get_gateway_lock_path,
@@ -577,6 +602,7 @@ def verify_guard_without_dac_override() -> None:
 
 
 COMMANDS: dict[str, Callable[[], None]] = {
+    "agent-home-state-symlink": verify_agent_home_state_symlink,
     "cron-backup": verify_cron_backup,
     "cron-create": verify_cron_create,
     "cron-reopen": verify_cron_reopen,

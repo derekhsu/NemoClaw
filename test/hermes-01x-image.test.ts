@@ -801,14 +801,14 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     });
 
     function run(args: string[], env: Record<string, string | undefined> = {}) {
-      const merged: Record<string, string | undefined> = { ...process.env, ...env };
-      for (const [key, value] of Object.entries(merged)) {
-        if (value === undefined) delete merged[key];
-      }
+      // An undefined value removes the variable from the child environment.
+      const merged = Object.fromEntries(
+        Object.entries({ ...process.env, ...env }).filter(([, value]) => value !== undefined),
+      ) as NodeJS.ProcessEnv;
       return spawnSync("python3", ["-c", MODEL_HARNESS, MCP_TRANSACTION, hermes, record, ...args], {
         encoding: "utf8",
         timeout: 30000,
-        env: merged as NodeJS.ProcessEnv,
+        env: merged,
       });
     }
 

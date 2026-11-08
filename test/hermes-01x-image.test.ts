@@ -749,6 +749,175 @@ platform_toolsets:
   },
 );
 
+// ── hermes-mcp-config-transaction.py add (OpenShell 0.1.x credentials, #34) ──
+
+describe("OpenShell 0.1.7 credential boundary manifest (#34)", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        import.meta.dirname,
+        "..",
+        "src/lib/actions/sandbox/openshell-child-visible-credentials.v0.1.7.json",
+      ),
+      "utf8",
+    ),
+  );
+
+  // source-shape-contract: security -- The image must install the reviewed 0.1.7 credential boundary the 0.1.x MCP transaction loads, not the 0.0.101 one
+  it("is the manifest the 0.1.x transaction and image load", () => {
+    expect(manifest.openshellVersion).toBe("0.1.7");
+    expect(fs.readFileSync(MCP_TRANSACTION, "utf8")).toContain(
+      'OPENSHELL_BOUNDARY_VERSION = "0.1.7"',
+    );
+    const dockerfile = fs.readFileSync(path.join(AGENT, "Dockerfile"), "utf8");
+    expect(dockerfile).toContain(
+      "COPY src/lib/actions/sandbox/openshell-child-visible-credentials.v0.1.7.json /usr/local/lib/nemoclaw/openshell-child-visible-credentials.v0.1.7.json",
+    );
+    expect(dockerfile).not.toContain("openshell-child-visible-credentials.v0.0.101.json");
+  });
+});
+
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "hermes-mcp-config-transaction.py add with OpenShell 0.1.x credentials (#34)",
+  () => {
+    const STABLE = `openshell:resolve:env:s${"a".repeat(64)}_MCP_TOKEN`;
+    const SUBMITTED = "Bearer openshell:resolve:env:MCP_TOKEN";
+    let base: string;
+    let hermes: string;
+    let record: string;
+
+    beforeEach(() => {
+      base = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-01x-mcp-add-"));
+      hermes = path.join(base, ".hermes");
+      fs.mkdirSync(hermes, { mode: 0o700 });
+      fs.writeFileSync(path.join(hermes, "config.yaml"), DEFAULT_CONFIG, { mode: 0o640 });
+      fs.writeFileSync(path.join(hermes, ".env"), "API_SERVER_KEY=x\n", { mode: 0o640 });
+      record = path.join(base, "reloads");
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+    });
+
+    afterEach(() => {
+      fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    function run(args: string[], env: Record<string, string | undefined> = {}) {
+      // An undefined value removes the variable from the child environment.
+      const merged = Object.fromEntries(
+        Object.entries({ ...process.env, ...env }).filter(([, value]) => value !== undefined),
+      ) as NodeJS.ProcessEnv;
+      return spawnSync("python3", ["-c", MODEL_HARNESS, MCP_TRANSACTION, hermes, record, ...args], {
+        encoding: "utf8",
+        timeout: 30000,
+        env: merged,
+      });
+    }
+
+    const payload = (
+      authorization = SUBMITTED,
+      extra: Record<string, unknown> = { replace_existing: false },
+    ) =>
+      JSON.stringify({
+        server: "docs",
+        url: "https://mcp.example.test/docs",
+        headers: { Authorization: authorization },
+        ...extra,
+      });
+    const servers = () =>
+      (YAML.parse(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).mcp_servers ??
+        {}) as Record<string, { headers?: Record<string, string> }>;
+
+    it("stores the placeholder it holds, which a gateway started before the provider can still use", () => {
+      // The gateway keeps its launch environment; only the stored value can
+      // carry a provider attached after the sandbox started.
+      const result = run(["add", "--payload", payload()], { MCP_TOKEN: STABLE });
+      expect(result.status, result.stderr).toBe(0);
+      expect(servers().docs?.headers).toEqual({ Authorization: `Bearer ${STABLE}` });
+      expect(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).not.toContain(
+        "${MCP_TOKEN}",
+      );
+    });
+
+    it.each([
+      ["is not set", undefined],
+      ["holds a raw (non-secret) value", "eu-west-1"],
+      [
+        "holds another credential's placeholder",
+        `openshell:resolve:env:s${"a".repeat(64)}_OTHER_TOKEN`,
+      ],
+    ])("refuses a credential name whose environment value %s", (_case, value) => {
+      const result = run(["add", "--payload", payload()], { MCP_TOKEN: value });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("holds as an OpenShell placeholder");
+      expect(servers().docs).toBeUndefined();
+    });
+
+    it.each([
+      ["a stable-handle placeholder name", `s${"b".repeat(64)}_MCP_TOKEN`],
+      ["a revisioned placeholder name", "v3_MCP_TOKEN"],
+      // Raw, non-secret names seen in a live 0.1.7 Hermes workload.
+      ["the raw workload variable SANDBOX_ID", "SANDBOX_ID"],
+      ["the raw workload variable CHAT_UI_URL", "CHAT_UI_URL"],
+      ["the raw workload variable DEBIAN_FRONTEND", "DEBIAN_FRONTEND"],
+      ["the raw shell variable SHLVL", "SHLVL"],
+    ])("refuses %s as a reserved credential name", (_case, name) => {
+      const result = run(["add", "--payload", payload(`Bearer openshell:resolve:env:${name}`)], {
+        [name]: `openshell:resolve:env:${name}`,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("reserved credential environment name");
+      expect(servers().docs).toBeUndefined();
+    });
+
+    it("removes the stored entry and inspects it with the submitted placeholder", () => {
+      expect(run(["add", "--payload", payload()], { MCP_TOKEN: STABLE }).status).toBe(0);
+      const expected = {
+        url: "https://mcp.example.test/docs",
+        enabled: true,
+        timeout: 120,
+        connect_timeout: 60,
+        tools: { resources: true, prompts: true },
+        headers: { Authorization: SUBMITTED },
+      };
+      const inspected = run(
+        ["inspect", "--payload", JSON.stringify({ present: { docs: expected }, absent: [] })],
+        { MCP_TOKEN: STABLE },
+      );
+      expect(inspected.status, inspected.stderr).toBe(0);
+      expect(inspected.stdout).toContain("matched");
+      // Re-attaching the provider issues a new handle: inspection reports the
+      // stale entry, and the owner can still remove it without --force.
+      const reissued = `openshell:resolve:env:s${"c".repeat(64)}_MCP_TOKEN`;
+      const stale = run(
+        ["inspect", "--payload", JSON.stringify({ present: { docs: expected }, absent: [] })],
+        { MCP_TOKEN: reissued },
+      );
+      expect(stale.status).not.toBe(0);
+      expect(stale.stderr).toContain("does not match persisted managed intent");
+      const removed = run(["remove", "--payload", payload(SUBMITTED, { force: false })], {
+        MCP_TOKEN: reissued,
+      });
+      expect(removed.status, removed.stderr).toBe(0);
+      expect(servers().docs).toBeUndefined();
+    });
+
+    it("refuses to remove a same-named entry that holds another credential without --force", () => {
+      expect(run(["add", "--payload", payload()], { MCP_TOKEN: STABLE }).status).toBe(0);
+      const config = fs.readFileSync(path.join(hermes, "config.yaml"), "utf8");
+      fs.writeFileSync(
+        path.join(hermes, "config.yaml"),
+        config.replace(STABLE, `openshell:resolve:env:s${"a".repeat(64)}_OTHER_TOKEN`),
+      );
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+      const removed = run(["remove", "--payload", payload(SUBMITTED, { force: false })], {
+        MCP_TOKEN: STABLE,
+      });
+      expect(removed.status).not.toBe(0);
+      expect(removed.stderr).toContain("Refusing to remove modified Hermes MCP server");
+      expect(servers().docs).toBeDefined();
+    });
+  },
+);
+
 describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "hermes-mcp-config-transaction.py set-clawshell-management-plugin (clawshell-gateway#254)",
   () => {

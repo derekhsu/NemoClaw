@@ -102,8 +102,15 @@ MAX_PLUGIN_PAYLOAD_BYTES = 64
 MODEL_CONFIG_CONFLICT_EXIT = 3
 CONFIG_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CREDENTIAL_PLACEHOLDER_RE = re.compile(r"^openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
-OPENSHELL_REVISIONED_CREDENTIAL_NAME_RE = re.compile(r"^v[0-9]+_[A-Za-z0-9_]+$")
-BOUNDARY_MANIFEST_NAME = "openshell-child-visible-credentials.v0.0.101.json"
+# OpenShell reserves both the revisioned (v<n>_KEY) and the stable-handle
+# (s<64 hex>_KEY) placeholder namespaces (0.1.x secrets.rs).
+OPENSHELL_REVISIONED_CREDENTIAL_NAME_RE = re.compile(
+    r"^(?:v[0-9]+|s[0-9a-f]{64})_[A-Za-z0-9_]+$"
+)
+OPENSHELL_BOUNDARY_VERSION = "0.1.7"
+BOUNDARY_MANIFEST_NAME = (
+    f"openshell-child-visible-credentials.v{OPENSHELL_BOUNDARY_VERSION}.json"
+)
 ANSI_ESCAPE_RE = re.compile(
     r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-_])"
 )
@@ -153,7 +160,7 @@ def _load_credential_boundary_manifest() -> dict[str, object]:
     # corrupt, or wrong-version OpenShell boundary manifest.
     # sourceBoundary: NemoClaw owns one reviewed manifest installed beside this
     # helper in images; the second path is the deterministic source-checkout layout.
-    # whyNotSourceFix: OpenShell v0.0.101 has no machine-readable child-env contract.
+    # whyNotSourceFix: OpenShell 0.1.x has no machine-readable child-env contract.
     # It also deliberately hides the supervisor identity mount from workload
     # children and the Hermes image contains no OpenShell CLI. Executing
     # ``openshell --version`` here would therefore either fail every real
@@ -181,7 +188,7 @@ def _load_credential_boundary_manifest() -> dict[str, object]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (
         not isinstance(manifest, dict)
-        or manifest.get("openshellVersion") != "0.0.101"
+        or manifest.get("openshellVersion") != OPENSHELL_BOUNDARY_VERSION
     ):
         raise RuntimeError("Hermes MCP credential boundary manifest is invalid")
     return manifest
@@ -220,6 +227,64 @@ def _credential_name_is_reserved(name: str) -> bool:
         or name in _REWRITTEN_CHILD_VALUE_KEYS
         or name in _RUNTIME_CONTROL_KEYS
         or any(name.startswith(prefix) for prefix in _RUNTIME_CONTROL_PREFIXES)
+    )
+
+
+def _placeholder_pattern(name: str) -> str:
+    return r"openshell:resolve:env:(?:v[0-9]+_|s[0-9a-f]{64}_)?" + re.escape(name)
+
+
+def _current_placeholder(name: str) -> str | None:
+    """The OpenShell placeholder this process holds for ``name``, if any.
+
+    OpenShell 0.1.x hands every provider value that is not a static credential
+    to children as its raw value, so a name outside the reserved list can still
+    carry a raw value. The transaction runs as a fresh OpenShell child, so its
+    environment reflects the providers attached now.
+    """
+    value = os.environ.get(name)
+    if value is None or re.fullmatch(_placeholder_pattern(name), value) is None:
+        return None
+    return value
+
+
+def _environment_holds_placeholder(name: str) -> bool:
+    return _current_placeholder(name) is not None
+
+
+def _submitted_credential_name(authorization: object) -> str | None:
+    match = (
+        ENV_PLACEHOLDER_RE.fullmatch(authorization)
+        if isinstance(authorization, str)
+        else None
+    )
+    return match.group(1) if match is not None else None
+
+
+def _stored_authorization(authorization: object) -> object:
+    """Store the Authorization with the placeholder this transaction holds.
+
+    Endpoint-bound 0.1.x credentials resolve only through the revisioned or
+    stable-handle placeholder; a bare ``openshell:resolve:env:NAME`` fails with
+    ``credential_unavailable``. OpenShell resolves that placeholder by value,
+    so it also works for the running gateway, whose environment predates any
+    provider attached after the sandbox started (a ``${NAME}`` reference would
+    expand from that stale environment). Re-attaching the provider issues a new
+    handle; the stored one then fails closed until the server is added again.
+    """
+    name = _submitted_credential_name(authorization)
+    if name is None:
+        return authorization
+    placeholder = _current_placeholder(name)
+    if placeholder is None:
+        return authorization
+    return f"Bearer {placeholder}"
+
+
+def _authorization_holds_credential(stored: object, name: str) -> bool:
+    """True when ``stored`` is an Authorization for ``name`` in any placeholder form."""
+    return isinstance(stored, str) and (
+        re.fullmatch("Bearer " + _placeholder_pattern(name), stored) is not None
     )
 
 
@@ -438,6 +503,11 @@ def _validate_payload(action: str, payload: dict[str, object]) -> None:
         raise ValueError(
             "Hermes MCP Authorization uses a reserved credential environment name"
         )
+    if action == "add" and not _environment_holds_placeholder(authorization_match.group(1)):
+        raise ValueError(
+            "Hermes MCP Authorization must name a provider credential that this "
+            "sandbox holds as an OpenShell placeholder"
+        )
 
 
 def _validate_local_uploader_payload(action: str, payload: dict[str, object]) -> None:
@@ -624,10 +694,18 @@ def _validate_mutation_payload(action: str, payload: dict[str, object]) -> None:
     _validate_payload(action, payload)
 
 
-def _managed_candidate(payload: dict[str, object]) -> dict[str, object]:
+def _managed_candidate(
+    payload: dict[str, object], *, stored: bool = True
+) -> dict[str, object]:
+    """Config entry for ``payload``; ``stored`` substitutes the held placeholder."""
     headers = payload.get("headers")
     if not isinstance(headers, dict):
         raise ValueError("MCP mutation payload headers must be an object")
+    if stored and "Authorization" in headers:
+        headers = {
+            **headers,
+            "Authorization": _stored_authorization(headers["Authorization"]),
+        }
     candidate: dict[str, object] = {
         "url": payload.get("url"),
         "enabled": True,
@@ -638,6 +716,33 @@ def _managed_candidate(payload: dict[str, object]) -> dict[str, object]:
     if headers:
         candidate["headers"] = headers
     return candidate
+
+
+def _matches_managed_entry(current: object, payload: dict[str, object]) -> bool:
+    """True when ``current`` is the entry ``add`` wrote for ``payload``.
+
+    The stored placeholder handle changes when the provider is re-attached, so
+    any placeholder form of the submitted credential name still identifies the
+    entry; every other field must match exactly.
+    """
+    expected = _managed_candidate(payload, stored=False)
+    if current == expected:
+        return True
+    if not isinstance(current, dict) or not isinstance(current.get("headers"), dict):
+        return False
+    headers = expected.get("headers")
+    name = _submitted_credential_name(
+        headers.get("Authorization") if isinstance(headers, dict) else None
+    )
+    if name is None or not _authorization_holds_credential(
+        current["headers"].get("Authorization"), name
+    ):
+        return False
+    normalized = {
+        **current,
+        "headers": {**current["headers"], "Authorization": headers["Authorization"]},
+    }
+    return normalized == expected
 
 
 _MANAGED_CANDIDATE_FIELDS = frozenset(
@@ -674,13 +779,20 @@ def _validate_inspection_payload(payload: dict[str, object]) -> None:
             "replace_existing": True,
         }
         _validate_payload("add", synthetic)
-        if expected != _managed_candidate(synthetic):
+        if expected != _managed_candidate(synthetic, stored=False):
             raise ValueError("Hermes MCP inspection expected config is not canonical")
 
 
 def inspect_managed_config(payload: dict[str, object]) -> dict[str, object]:
     _validate_inspection_payload(payload)
-    return _inspect_expected_config(payload["present"], payload["absent"])
+    # Callers describe the intent with the placeholder they submitted to add;
+    # compare it with the placeholder this sandbox holds now, so an entry whose
+    # handle went stale after a provider re-attachment reports a mismatch.
+    present = {
+        server: _managed_candidate({"url": expected.get("url"), "headers": expected.get("headers")})
+        for server, expected in payload["present"].items()
+    }
+    return _inspect_expected_config(present, payload["absent"])
 
 
 def inspect_local_uploader(payload: dict[str, object]) -> dict[str, object]:
@@ -772,7 +884,7 @@ def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict
         return data, False
     if payload.get("force") is not True:
         current = servers.get(server_name)
-        if current != _managed_candidate(payload):
+        if not _matches_managed_entry(current, payload):
             raise ValueError(
                 f"Refusing to remove modified Hermes MCP server '{server_name}'. Use --force to remove it."
             )

@@ -24,3 +24,36 @@ model.
   `agents/hermes/`. This image is consumed by ClawShell only.
 - ClawShell's `runtime/hermes/` overlay is adapted separately
   (derekhsu/clawshell-gateway#254).
+
+## Credential boundary (OpenShell 0.1.x)
+
+Children of the OpenShell supervisor see provider credentials only as
+placeholders. OpenShell replaces a placeholder with the real value when a
+request leaves the sandbox.
+
+- Endpoint-bound credentials resolve only through the placeholder in the
+  environment, which carries a stable handle
+  (`openshell:resolve:env:s<64 hex>_NAME`) or a revision (`v<n>_NAME`). A bare
+  `openshell:resolve:env:NAME` fails with `credential_unavailable` (#34).
+- A provider value that is not a static credential reaches children as its raw
+  value. Raw provider keys are therefore not a fixed list.
+
+`hermes-mcp-config-transaction.py add` accepts
+`Authorization: Bearer openshell:resolve:env:NAME` and:
+
+1. refuses `NAME` when it is reserved in
+   `openshell-child-visible-credentials.v0.1.7.json` or uses the `v<n>_` or
+   `s<64 hex>_` placeholder namespace;
+2. refuses `NAME` unless the transaction's own environment holds an OpenShell
+   placeholder for it, which rejects raw (non-secret) values;
+3. stores `Bearer <that placeholder>`. OpenShell resolves a placeholder by
+   value, so the running gateway can use it even though its own environment
+   predates a provider attached after the sandbox started; a `${NAME}`
+   reference would expand from that stale environment. Re-attaching the
+   provider issues a new handle: `inspect` then reports a mismatch and the
+   server must be added again (a non-forced `remove` still recognizes it).
+
+Regenerate the manifest for a new OpenShell release from
+`google_cloud.rs`, `provider_credentials.rs` and `secrets.rs` in
+`openshell-core`, and `grpc/policy.rs` in `openshell-server`, and record their
+blob ids and SHA-256 in `generation.upstreamSourceEvidence`.

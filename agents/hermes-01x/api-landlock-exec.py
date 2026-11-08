@@ -362,6 +362,9 @@ def _sanitized_env(home: str, keep: list[str]) -> dict[str, str]:
             "PATH": FIXED_PATH,
             "HOME": home,
             "HERMES_HOME": home,
+            # The patched Hermes (patch-agent-home-state-symlink.py) then takes
+            # HERMES_HOME as the agent home instead of the session DB directory.
+            "NEMOCLAW_HERMES_PIN_AGENT_HOME": "1",
             "TMPDIR": os.path.join(home, "tmp"),
             "PYTHONNOUSERSITE": "1",
         }

@@ -85,6 +85,7 @@ COPY agents/hermes-01x/config/ /opt/nemoclaw-hermes-config/config/
 COPY agents/hermes-01x/image-build-probes.py /opt/nemoclaw-hermes-config/image-build-probes.py
 COPY agents/hermes-01x/patch-gateway-runtime-metadata.py /opt/nemoclaw-hermes-config/patch-gateway-runtime-metadata.py
 COPY agents/hermes-01x/patch-atomic-write-symlink-target.py /opt/nemoclaw-hermes-config/patch-atomic-write-symlink-target.py
+COPY agents/hermes-01x/patch-agent-home-state-symlink.py /opt/nemoclaw-hermes-config/patch-agent-home-state-symlink.py
 COPY agents/hermes-01x/patch-gateway-process-identity.py /opt/nemoclaw-hermes-config/patch-gateway-process-identity.py
 COPY agents/hermes-01x/patch-cron-execution-runtime.py /opt/nemoclaw-hermes-config/patch-cron-execution-runtime.py
 COPY agents/hermes-01x/patch-cron-restore-drain.py /opt/nemoclaw-hermes-config/patch-cron-restore-drain.py
@@ -381,7 +382,7 @@ RUN find /opt/nemoclaw-hermes-config -type d -exec chmod 755 {} + \
         /scripts/patch-bundled-npm-tar.mts \
     && chmod -R a+rX /src/lib/messaging
 
-ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=5747b15a868b513484dd6c88cf42e7a4501fee92d687ad99ff001b590c7e78da
+ARG NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256=faa483360ddb70d1cfd04d821a59bd4b78bf2cc1989b7940052d6d6f7e5ec2d2
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256" /opt/nemoclaw-hermes-config/image-build-probes.py \
@@ -534,6 +535,27 @@ RUN /usr/bin/python3 -I \
     && test -L "$probe/home/probe.json" \
     && grep -q '"ok": 1' "$probe/home/state/probe.json" \
     && chmod 755 "$probe/home" && rm -rf "$probe"
+
+# OpenShell 0.1.x api profile (#52): state.db is a symlink into state/, and
+# Hermes derives the agent home from the resolved session DB path, so SOUL.md,
+# the skills index and context files were read from the api-writable state
+# tree. Keep the HERMES_HOME that owns the symlinked state.db.
+ARG NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256=9167d27670db8eb8bb55d1df9a89f3d238a3e34b8ffa9fa752b780975fac750e
+ARG NEMOCLAW_HERMES_SYSTEM_PROMPT_SOURCE_SHA256=20a6b326816fc6924ed0b5f4407281b38b9254f7b43465acff10fae09be3114f
+ARG NEMOCLAW_HERMES_SYSTEM_PROMPT_PATCHED_SHA256=eb347caf5313d130edfa2cfddab065232ba3b62828921b950a07cc6024110811
+# hadolint ignore=DL4006
+RUN printf '%s  %s\n' \
+        "$NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256" /opt/nemoclaw-hermes-config/patch-agent-home-state-symlink.py \
+        "$NEMOCLAW_HERMES_SYSTEM_PROMPT_SOURCE_SHA256" /opt/hermes/agent/system_prompt.py \
+    | sha256sum -c - \
+    || { echo "ERROR: Hermes agent home patch identity mismatch (update NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256 / NEMOCLAW_HERMES_SYSTEM_PROMPT_*_SHA256)" >&2; exit 1; }
+# hadolint ignore=DL4006
+RUN /usr/bin/python3 -I \
+        /opt/nemoclaw-hermes-config/patch-agent-home-state-symlink.py /opt/hermes/agent/system_prompt.py \
+    && printf '%s  %s\n' "$NEMOCLAW_HERMES_SYSTEM_PROMPT_PATCHED_SHA256" /opt/hermes/agent/system_prompt.py \
+    | sha256sum -c - \
+    && HERMES_HOME="$(mktemp -d)" /opt/hermes/.venv/bin/python -I \
+        /opt/nemoclaw-hermes-config/image-build-probes.py agent-home-state-symlink
 
 # NemoClaw installs its wrapper as `hermes` and moves the real entrypoint to
 # `hermes.real`, so every managed gateway command line carries that basename.
@@ -689,7 +711,7 @@ RUN printf '%s  %s\n' \
     || { echo "ERROR: hermes-api-profile.py hash mismatch (update NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256)" >&2; exit 1; } \
     && chown root:root /usr/local/lib/nemoclaw/hermes-api-profile.py \
     && chmod 444 /usr/local/lib/nemoclaw/hermes-api-profile.py
-ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=cf9eb9d5badc8292d10592ea1744879ca770bb724e9c5509f2081099a51fc57e
+ARG NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256=def8e5059b48b8c71716ac05293c87ac97f57161233fc1f4c92c2dbf4df5af30
 # hadolint ignore=DL4006
 RUN printf '%s  %s\n' \
         "$NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256" /usr/local/lib/nemoclaw/hermes-api-landlock-exec.py \

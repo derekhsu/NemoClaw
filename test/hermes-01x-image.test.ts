@@ -32,6 +32,8 @@ describe("agents/hermes-01x Dockerfile pins", () => {
       ["NEMOCLAW_HERMES_PROFILE_LAYOUT_TOOL_SHA256", "api-profile.py"],
       ["NEMOCLAW_HERMES_API_LANDLOCK_EXEC_SHA256", "api-landlock-exec.py"],
       ["NEMOCLAW_HERMES_ATOMIC_WRITE_PATCHER_SHA256", "patch-atomic-write-symlink-target.py"],
+      ["NEMOCLAW_HERMES_AGENT_HOME_PATCHER_SHA256", "patch-agent-home-state-symlink.py"],
+      ["NEMOCLAW_HERMES_IMAGE_BUILD_PROBES_SHA256", "image-build-probes.py"],
       ["NEMOCLAW_HERMES_VALIDATOR_SHA256", "validate-env-secret-boundary.py"],
     ]) {
       const match = dockerfile.match(new RegExp(`^ARG ${arg}=([0-9a-f]{64})$`, "m"));
@@ -397,15 +399,19 @@ print(json.dumps({"rules": rules, "state": launcher.STATE_TREE, "ro": launcher.R
   });
 
   it("passes only allowlisted environment variables plus fixed values", () => {
-    const result = launcher(`print(json.dumps(launcher._sanitized_env("/h", ["EXTRA_OK"])))`, {
-      LD_PRELOAD: "/tmp/evil.so",
-      PYTHONPATH: "/tmp/evil",
-      OPENAI_API_KEY: "sk-secret",
-      SSL_CERT_FILE: "/run/ca.pem",
-      LANG: "C.UTF-8",
-      EXTRA_OK: "1",
-      PATH: "/tmp/evil-bin:/usr/bin",
-    });
+    const result = launcher(
+      `print(json.dumps(launcher._sanitized_env("/h", ["EXTRA_OK", "NEMOCLAW_HERMES_PIN_AGENT_HOME"])))`,
+      {
+        NEMOCLAW_HERMES_PIN_AGENT_HOME: "0",
+        LD_PRELOAD: "/tmp/evil.so",
+        PYTHONPATH: "/tmp/evil",
+        OPENAI_API_KEY: "sk-secret",
+        SSL_CERT_FILE: "/run/ca.pem",
+        LANG: "C.UTF-8",
+        EXTRA_OK: "1",
+        PATH: "/tmp/evil-bin:/usr/bin",
+      },
+    );
     expect(result.status, result.stderr).toBe(0);
     const env = JSON.parse(result.stdout);
     expect(env).toMatchObject({
@@ -414,6 +420,7 @@ print(json.dumps({"rules": rules, "state": launcher.STATE_TREE, "ro": launcher.R
       EXTRA_OK: "1",
       HOME: "/h",
       HERMES_HOME: "/h",
+      NEMOCLAW_HERMES_PIN_AGENT_HOME: "1",
       TMPDIR: "/h/tmp",
       PYTHONNOUSERSITE: "1",
     });
@@ -973,3 +980,89 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+// ── patch-agent-home-state-symlink.py ───────────────────────────────────
+// Hermes v0.21.3 derived the agent home from the resolved session DB path, so
+// the api profile's state.db symlink moved SOUL.md and skills/ into the
+// api-writable state/. The launcher's pin makes HERMES_HOME the home.
+describe("patch-agent-home-state-symlink.py", () => {
+  const PATCHER = path.join(AGENT, "patch-agent-home-state-symlink.py");
+  const UNPATCHED = [
+    "import os",
+    "from pathlib import Path",
+    "",
+    "def _agent_home(agent):",
+    "    try:",
+    '        db_path = getattr(getattr(agent, "_session_db", None), "db_path", None)',
+    "        return Path(db_path).parent if db_path else None",
+    "    except Exception:",
+    "        return None",
+    "",
+  ].join("\n");
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-home-"));
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function patch(source: string) {
+    const target = path.join(dir, "system_prompt.py");
+    fs.writeFileSync(target, source);
+    const result = spawnSync("python3", ["-I", PATCHER, target], { encoding: "utf8" });
+    return { result, target };
+  }
+
+  function home(target: string, dbPath: string, env: Record<string, string>) {
+    const probe = [
+      "import importlib.util, sys",
+      "from types import SimpleNamespace",
+      'spec = importlib.util.spec_from_file_location("sp", sys.argv[1])',
+      "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)",
+      "agent = SimpleNamespace(_session_db=SimpleNamespace(db_path=sys.argv[2]))",
+      "print(module._agent_home(agent))",
+    ].join("\n");
+    const clean = { ...process.env };
+    delete clean.NEMOCLAW_HERMES_PIN_AGENT_HOME;
+    return spawnSync("python3", ["-I", "-c", probe, target, dbPath], {
+      encoding: "utf8",
+      env: { ...clean, ...env },
+    }).stdout.trim();
+  }
+
+  it("uses the pinned HERMES_HOME wherever the session DB path points", () => {
+    const { result, target } = patch(UNPATCHED);
+    expect(result.status, result.stderr).toBe(0);
+    const api = path.join(dir, "profiles", "api");
+    const pinned = { HERMES_HOME: api, NEMOCLAW_HERMES_PIN_AGENT_HOME: "1" };
+    // The resolved admin symlink, and a path the api side redirected state.db to.
+    expect(home(target, path.join(api, "state", "state.db"), pinned)).toBe(api);
+    expect(home(target, path.join(api, "state", "a", "session.db"), pinned)).toBe(api);
+    expect(home(target, path.join(dir, "elsewhere", "state.db"), pinned)).toBe(api);
+  });
+
+  it("keeps Hermes' answer without the launcher's pin", () => {
+    const { target } = patch(UNPATCHED);
+    const api = path.join(dir, "profiles", "api");
+    expect(home(target, path.join(api, "state", "state.db"), { HERMES_HOME: api })).toBe(
+      path.join(api, "state"),
+    );
+    expect(
+      home(target, path.join(api, "state.db"), {
+        HERMES_HOME: api,
+        NEMOCLAW_HERMES_PIN_AGENT_HOME: "0",
+      }),
+    ).toBe(api);
+  });
+
+  it("is idempotent and fails closed on an unknown source shape", () => {
+    const { target } = patch(UNPATCHED);
+    const once = fs.readFileSync(target, "utf8");
+    expect(spawnSync("python3", ["-I", PATCHER, target]).status).toBe(0);
+    expect(fs.readFileSync(target, "utf8")).toBe(once);
+    const changed = patch(
+      UNPATCHED.replace("return Path(db_path).parent if db_path else None", "return None"),
+    );
+    expect(changed.result.status).not.toBe(0);
+    expect(changed.result.stderr).toContain("source shape changed");
+  });
+});

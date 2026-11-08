@@ -740,6 +740,110 @@ platform_toolsets:
   },
 );
 
+describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "hermes-mcp-config-transaction.py set-clawshell-management-plugin (clawshell-gateway#254)",
+  () => {
+    let base: string;
+    let hermes: string;
+    let record: string;
+    const CONFIG = `${DEFAULT_CONFIG}plugins:
+  enabled:
+  - nemoclaw
+`;
+
+    beforeEach(() => {
+      base = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-01x-plugin-"));
+      hermes = path.join(base, ".hermes");
+      fs.mkdirSync(hermes, { mode: 0o700 });
+      fs.writeFileSync(path.join(hermes, "config.yaml"), CONFIG, { mode: 0o640 });
+      fs.writeFileSync(path.join(hermes, ".env"), "API_SERVER_KEY=x\n", { mode: 0o640 });
+      record = path.join(base, "reloads");
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+    });
+
+    afterEach(() => {
+      fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    function run(args: string[], env: Record<string, string> = {}, stdin?: string) {
+      return spawnSync("python3", ["-c", MODEL_HARNESS, MCP_TRANSACTION, hermes, record, ...args], {
+        encoding: "utf8",
+        input: stdin,
+        timeout: 30000,
+        env: { ...process.env, ...env },
+      });
+    }
+    const toggle = (payload: unknown) =>
+      run(["set-clawshell-management-plugin"], {}, JSON.stringify(payload));
+    const config = () =>
+      YAML.parse(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+    const reloads = () =>
+      fs.existsSync(record)
+        ? fs.readFileSync(record, "utf8").split("\n").filter(Boolean).length
+        : 0;
+
+    it("adds only the plugin entry, keeps the hash current and reloads once", () => {
+      const { plugins: _before, ...restBefore } = config();
+      const result = toggle({ enabled: true });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ changed: true, ok: true });
+      const { plugins, ...restAfter } = config();
+      expect(plugins).toEqual({ enabled: ["nemoclaw", "clawshell-profile-management"] });
+      expect(restAfter).toEqual(restBefore);
+      expect(reloads()).toBe(1);
+      expect(run([], { FX_INSPECT: "1" }).stdout.trim()).toBe("current");
+    });
+
+    it("is idempotent and removes only its own entry", () => {
+      expect(toggle({ enabled: true }).status).toBe(0);
+      const again = toggle({ enabled: true });
+      expect(again.status, again.stderr).toBe(0);
+      expect(JSON.parse(again.stdout).changed).toBe(false);
+      const off = toggle({ enabled: false });
+      expect(off.status, off.stderr).toBe(0);
+      expect(config().plugins).toEqual({ enabled: ["nemoclaw"] });
+      expect(run([], { FX_INSPECT: "1" }).stdout.trim()).toBe("current");
+    });
+
+    it("creates the plugins section when the config has none", () => {
+      fs.writeFileSync(path.join(hermes, "config.yaml"), DEFAULT_CONFIG, { mode: 0o640 });
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+      const result = toggle({ enabled: true });
+      expect(result.status, result.stderr).toBe(0);
+      expect(config().plugins).toEqual({ enabled: ["clawshell-profile-management"] });
+    });
+
+    it.each([
+      [{ enabled: "yes" }],
+      [{ enabled: true, name: "other-plugin" }],
+      [{}],
+    ])("refuses payload %j without touching the config", (payload) => {
+      const before = fs.readFileSync(path.join(hermes, "config.yaml"), "utf8");
+      const result = toggle(payload);
+      expect(result.status).toBe(2);
+      expect(fs.readFileSync(path.join(hermes, "config.yaml"), "utf8")).toBe(before);
+      expect(reloads()).toBe(0);
+    });
+
+    it("reads its payload only from stdin and refuses a malformed plugins section", () => {
+      const argv = run(["set-clawshell-management-plugin", "--payload", '{"enabled":true}']);
+      expect(argv.status).toBe(2);
+      expect(argv.stderr).toContain("reads its payload from stdin");
+      fs.writeFileSync(
+        path.join(hermes, "config.yaml"),
+        `${DEFAULT_CONFIG}plugins:\n  enabled: nemoclaw\n`,
+      );
+      expect(run([], { FX_SEED_HASH: "1" }).status).toBe(0);
+      const malformed = toggle({ enabled: true });
+      expect(malformed.status).toBe(2);
+      expect(malformed.stderr).toContain("plugins.enabled must be a list");
+    });
+  },
+);
+
 // ── seed-dashboard-config.py: OpenShell 0.1.x named-provider routing ─────
 
 const SEEDER = path.join(AGENT, "seed-dashboard-config.py");

@@ -1892,6 +1892,11 @@ ARG NEMOCLAW_DARWIN_VM_COMPAT=0
 # before running `nemoclaw onboard`. See #1409.
 ARG NEMOCLAW_PROXY_HOST=10.200.0.1
 ARG NEMOCLAW_PROXY_PORT=3128
+# OpenShell release line the image targets: 0.0 (default, explicit egress proxy
+# at NEMOCLAW_PROXY_HOST) or 0.1 (transparent egress; the 0.0.x proxy address
+# does not exist, so OpenClaw's managed proxy is off and the entrypoint clears
+# proxy variables). See derekhsu/NemoClaw#33.
+ARG NEMOCLAW_OPENSHELL_LINE=0.0
 # Non-secret web-search selection from onboard. The actual API key is injected
 # at runtime via openshell:resolve:env, never baked into the image.
 ARG NEMOCLAW_WEB_SEARCH_ENABLED=0
@@ -1938,6 +1943,7 @@ ENV NEMOCLAW_MODEL=${NEMOCLAW_MODEL} \
     NEMOCLAW_DEVICE_AUTH_OPT_OUT_SOURCE=${NEMOCLAW_DEVICE_AUTH_OPT_OUT_SOURCE} \
     NEMOCLAW_PROXY_HOST=${NEMOCLAW_PROXY_HOST} \
     NEMOCLAW_PROXY_PORT=${NEMOCLAW_PROXY_PORT} \
+    NEMOCLAW_OPENSHELL_LINE=${NEMOCLAW_OPENSHELL_LINE} \
     NEMOCLAW_WEB_SEARCH_ENABLED=${NEMOCLAW_WEB_SEARCH_ENABLED} \
     NEMOCLAW_WEB_SEARCH_PROVIDER=${NEMOCLAW_WEB_SEARCH_PROVIDER} \
     NEMOCLAW_OPENCLAW_OTEL=${NEMOCLAW_OPENCLAW_OTEL} \
@@ -2183,15 +2189,19 @@ ENV NPM_CONFIG_OFFLINE=false
 # Also add the final OpenClaw managed proxy config after build-time OpenClaw
 # commands are done, so runtime Discord/WebSocket traffic uses the OpenShell
 # gateway proxy without forcing image-build npm traffic through that proxy.
+# OpenShell 0.1.x has no explicit proxy (NEMOCLAW_OPENSHELL_LINE=0.1): keep the
+# entry disabled, the same shape ClawShell writes for 0.0.x images on 0.1.x.
 RUN PATH=/usr/bin:/bin python3 -c "\
 import json, os; \
+line = os.environ.get('NEMOCLAW_OPENSHELL_LINE') or '0.0'; \
+assert line in ('0.0', '0.1'), 'NEMOCLAW_OPENSHELL_LINE must be 0.0 or 0.1'; \
 path = os.path.expanduser('~/.openclaw/openclaw.json'); \
 cfg = json.load(open(path)); \
 cfg.setdefault('gateway', {}).setdefault('auth', {})['token'] = ''; \
 proxy_host = os.environ.get('NEMOCLAW_PROXY_HOST') or '10.200.0.1'; \
 proxy_port = os.environ.get('NEMOCLAW_PROXY_PORT') or '3128'; \
 cfg['proxy'] = { \
-    'enabled': True, \
+    'enabled': line == '0.0', \
     'proxyUrl': f'http://{proxy_host}:{proxy_port}', \
     'loopbackMode': 'gateway-only', \
 }; \

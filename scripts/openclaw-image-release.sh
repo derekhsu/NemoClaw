@@ -18,8 +18,13 @@
 #             <tag>-arm64, latest, and openclaw-<version>.
 #   tools     <version>-tools.<n>; writes only that tag. <version> must equal
 #             the version that the built image reports with openclaw --version.
+# OpenShell 0.1.x images (derekhsu/NemoClaw#33) insert -openshell01x:
+#   standard  <version>-openshell01x-r<n>; built with NEMOCLAW_OPENSHELL_LINE=0.1
+#             and writes no alias tag.
+#   tools     <version>-openshell01x-tools.<n>; its base is the digest pinned in
+#             tools/openclaw-tools-image/base-image-openshell01x.txt.
 # Release tags are never overwritten. latest and openclaw-<version> are the
-# only tags that move, and only standard releases move them.
+# only tags that move, and only 0.0.x standard releases move them.
 
 set -euo pipefail
 
@@ -28,6 +33,8 @@ ALLOWED_REF=refs/heads/feat/image-only-cli
 ALLOWED_IMAGE=docker.io/derekhsu/openshell-openclaw
 ROOT=${ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 VERSION_RE='[0-9]{4}\.[1-9][0-9]?\.[1-9][0-9]?'
+OPENSHELL01X_INFIX=-openshell01x
+TOOLS_BASE_OPENSHELL01X=tools/openclaw-tools-image/base-image-openshell01x.txt
 
 fail() {
   echo "ERROR: $*" >&2
@@ -56,8 +63,16 @@ release_tags() {
   esac
 }
 
+# Print the OpenShell release line the tag targets: 0.0 or 0.1.
+openshell_line() {
+  case "$TAG" in
+    *"$OPENSHELL01X_INFIX"-*) echo 0.1 ;;
+    *) echo 0.0 ;;
+  esac
+}
+
 alias_tags() {
-  if [ "$VARIANT" = standard ]; then
+  if [ "$VARIANT" = standard ] && [ "$(openshell_line)" = 0.0 ]; then
     printf '%s\n' latest "openclaw-$1"
   fi
 }
@@ -90,12 +105,12 @@ validate_request() {
   [ "${IMAGE_NAME:-}" = "$ALLOWED_IMAGE" ] || fail "publication targets only $ALLOWED_IMAGE, not '${IMAGE_NAME:-}'"
   case "${VARIANT:-}" in
     standard)
-      [[ "${TAG:-}" =~ ^($VERSION_RE)(-r[1-9][0-9]*)?$ ]] \
-        || fail "standard tag must be <version> or <version>-r<n>, not '${TAG:-}'"
+      [[ "${TAG:-}" =~ ^($VERSION_RE)(-r[1-9][0-9]*|$OPENSHELL01X_INFIX-r[1-9][0-9]*)?$ ]] \
+        || fail "standard tag must be <version>, <version>-r<n> or <version>$OPENSHELL01X_INFIX-r<n>, not '${TAG:-}'"
       ;;
     tools)
-      [[ "${TAG:-}" =~ ^($VERSION_RE)-tools\.[1-9][0-9]*$ ]] \
-        || fail "tools tag must be <version>-tools.<n>, not '${TAG:-}'"
+      [[ "${TAG:-}" =~ ^($VERSION_RE)($OPENSHELL01X_INFIX)?-tools\.[1-9][0-9]*$ ]] \
+        || fail "tools tag must be <version>-tools.<n> or <version>$OPENSHELL01X_INFIX-tools.<n>, not '${TAG:-}'"
       ;;
     *) fail "variant must be standard or tools, not '${VARIANT:-}'" ;;
   esac
@@ -103,20 +118,29 @@ validate_request() {
 }
 
 cmd_plan() {
-  local version pinned base=""
+  local version pinned base="" line source
   version=$(validate_request)
+  line=$(openshell_line)
   if [ "$VARIANT" = standard ]; then
     pinned=$(sed -n 's/^ARG OPENCLAW_VERSION=//p' "$ROOT/Dockerfile" | head -n1)
     [ "$version" = "$pinned" ] || fail "tag version $version does not match Dockerfile OPENCLAW_VERSION $pinned"
+  elif [ "$line" = 0.1 ]; then
+    source=$TOOLS_BASE_OPENSHELL01X
+    [ -f "$ROOT/$source" ] || fail "$source is missing; pin the published $OPENSHELL01X_INFIX standard image first"
+    base=$(grep -v '^#' "$ROOT/$source" | sed '/^[[:space:]]*$/d' | head -n1)
   else
+    source=Dockerfile.tools
     base=$(sed -n 's/^ARG BASE_IMAGE=//p' "$ROOT/Dockerfile.tools" | head -n1)
+  fi
+  if [ "$VARIANT" = tools ]; then
     [[ "$base" =~ ^$ALLOWED_IMAGE@sha256:[0-9a-f]{64}$ ]] \
-      || fail "Dockerfile.tools BASE_IMAGE must be $ALLOWED_IMAGE pinned by digest, not '$base'"
+      || fail "$source BASE_IMAGE must be $ALLOWED_IMAGE pinned by digest, not '$base'"
   fi
   reject_existing_tags
   output version "$version"
   output base_image "$base"
-  summary "### Release plan" "" "- Variant: \`$VARIANT\`" "- Version: \`$version\`"
+  output openshell_line "$line"
+  summary "### Release plan" "" "- Variant: \`$VARIANT\`" "- Version: \`$version\`" "- OpenShell line: \`$line\`"
   [ -z "$base" ] || summary "- Base: \`$base\`"
   local tag
   while read -r tag; do summary "- Release tag: \`$IMAGE_NAME:$tag\`"; done < <(release_tags)
@@ -126,7 +150,8 @@ cmd_plan() {
 # Usage: check-tools-version TAG "OpenClaw <version>"
 cmd_check_tools_version() {
   local tag=$1 reported=$2 version
-  [[ "$tag" =~ ^($VERSION_RE)-tools\.[1-9][0-9]*$ ]] || fail "tools tag must be <version>-tools.<n>, not '$tag'"
+  [[ "$tag" =~ ^($VERSION_RE)($OPENSHELL01X_INFIX)?-tools\.[1-9][0-9]*$ ]] \
+    || fail "tools tag must be <version>-tools.<n> or <version>$OPENSHELL01X_INFIX-tools.<n>, not '$tag'"
   version=${BASH_REMATCH[1]}
   [[ "$reported" =~ ^OpenClaw\ ($VERSION_RE)([[:space:]]|$) ]] || fail "cannot read an OpenClaw version from '$reported'"
   [ "${BASH_REMATCH[1]}" = "$version" ] \
@@ -171,8 +196,10 @@ cmd_publish() {
     written+=("$TAG-amd64")
     create -t "$IMAGE_NAME:$TAG-arm64" "$arm64"
     written+=("$TAG-arm64")
-    create -t "$IMAGE_NAME:latest" -t "$IMAGE_NAME:openclaw-$version" "$amd64" "$arm64"
-    written+=(latest "openclaw-$version")
+    if [ "$(openshell_line)" = 0.0 ]; then
+      create -t "$IMAGE_NAME:latest" -t "$IMAGE_NAME:openclaw-$version" "$amd64" "$arm64"
+      written+=(latest "openclaw-$version")
+    fi
   fi
 
   # Read the index digest before reporting success: deployment needs it.

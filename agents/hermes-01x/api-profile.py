@@ -399,7 +399,7 @@ def _with_uploader(document: dict, entry: dict) -> dict:
     toolsets = dict(toolsets) if isinstance(toolsets, dict) else {}
     api_tools = toolsets.get("api_server")
     # Keep every tool the admin granted; only make sure the uploader is there.
-    api_tools = list(api_tools) if isinstance(api_tools, list) else ["file"]
+    api_tools = list(api_tools) if isinstance(api_tools, list) else ["file", "skills"]
     if UPLOADER_TOOLSET not in api_tools:
         api_tools.append(UPLOADER_TOOLSET)
     toolsets["api_server"] = api_tools

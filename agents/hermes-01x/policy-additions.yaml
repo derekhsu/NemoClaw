@@ -57,26 +57,6 @@ process:
   run_as_group: sandbox
 
 network_policies:
-  managed_inference:
-    name: managed_inference
-    endpoints:
-      - host: inference.local
-        port: 443
-        protocol: rest
-        enforcement: enforce
-        rules:
-          - allow: { method: POST, path: "/v1/chat/completions" }
-          - allow: { method: POST, path: "/v1/messages" }
-          - allow: { method: POST, path: "/v1/responses" }
-          - allow: { method: POST, path: "/v1/completions" }
-          - allow: { method: POST, path: "/v1/embeddings" }
-          - allow: { method: GET, path: "/v1/models" }
-          - allow: { method: GET, path: "/v1/models/**" }
-    binaries:
-      - { path: /usr/local/bin/hermes }
-      - { path: /usr/bin/python3.11 }
-      - { path: /opt/hermes/.venv/bin/python }
-
   nvidia:
     name: nvidia
     endpoints:

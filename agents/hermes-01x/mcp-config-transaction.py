@@ -25,6 +25,7 @@ and acknowledged reload guarantees.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import http.client
 import importlib.util
@@ -90,6 +91,14 @@ MODEL_CONFIG_PAYLOAD_FIELDS = frozenset({"expected_config_sha256", "config"})
 # that file are adopted and every other section keeps the current value.
 MODEL_CONFIG_SECTIONS_ONLY_FIELD = "model_sections_only"
 MAX_MODEL_CONFIG_BYTES = 256 * 1024
+# set-clawshell-management-plugin (OpenShell 0.1.x, clawshell-gateway#254):
+# ClawShell lets the owner manage the api profile from default-profile chat by
+# enabling its management plugin here. Only this one entry of plugins.enabled
+# may change; the plugin itself refuses to act outside interactive CLI/TUI
+# sessions and registers nothing in the gateway process.
+PLUGIN_CONFIG_ACTION = "set-clawshell-management-plugin"
+CLAWSHELL_MANAGEMENT_PLUGIN = "clawshell-profile-management"
+MAX_PLUGIN_PAYLOAD_BYTES = 64
 MODEL_CONFIG_CONFLICT_EXIT = 3
 CONFIG_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CREDENTIAL_PLACEHOLDER_RE = re.compile(r"^openshell:resolve:env:[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -575,7 +584,37 @@ def _model_config_candidate(data: dict, payload: dict[str, object]) -> dict:
     return replacement
 
 
+def _validate_plugin_payload(payload: dict[str, object]) -> None:
+    if set(payload) != {"enabled"} or not isinstance(payload["enabled"], bool):
+        raise ValueError(f"{PLUGIN_CONFIG_ACTION} accepts only {{\"enabled\": true|false}}")
+
+
+def _plugin_config_candidate(data: dict, payload: dict[str, object]) -> dict:
+    """Return the config with only the ClawShell management plugin toggled in plugins.enabled."""
+    replacement = copy.deepcopy(data)
+    plugins = replacement.get("plugins")
+    if plugins is None:
+        plugins = {}
+    if not isinstance(plugins, dict):
+        raise ValueError("Invalid Hermes config: plugins must be an object")
+    enabled = plugins.get("enabled")
+    if enabled is None:
+        enabled = []
+    if not isinstance(enabled, list) or not all(isinstance(name, str) for name in enabled):
+        raise ValueError("Invalid Hermes config: plugins.enabled must be a list of names")
+    present = CLAWSHELL_MANAGEMENT_PLUGIN in enabled
+    if payload["enabled"] is present:
+        return data
+    enabled = ([*enabled, CLAWSHELL_MANAGEMENT_PLUGIN] if payload["enabled"]
+               else [name for name in enabled if name != CLAWSHELL_MANAGEMENT_PLUGIN])
+    replacement["plugins"] = {**plugins, "enabled": enabled}
+    return replacement
+
+
 def _validate_mutation_payload(action: str, payload: dict[str, object]) -> None:
+    if action == PLUGIN_CONFIG_ACTION:
+        _validate_plugin_payload(payload)
+        return
     if action == LOCAL_UPLOADER_ACTION:
         _validate_local_uploader_payload(action, payload)
         return
@@ -693,6 +732,9 @@ def _mutate(data: object, action: str, payload: dict[str, object]) -> tuple[dict
         raise ValueError("Invalid Hermes config: expected a YAML object")
     if action == MODEL_CONFIG_ACTION:
         replacement = _model_config_candidate(data, payload)
+        return replacement, replacement != data
+    if action == PLUGIN_CONFIG_ACTION:
+        replacement = _plugin_config_candidate(data, payload)
         return replacement, replacement != data
     if action == LOCAL_UPLOADER_ACTION:
         server_name = LOCAL_UPLOADER_SERVER_NAME
@@ -1366,7 +1408,7 @@ def main() -> int:
         "action",
         choices=(
             "add", "remove", "inspect", "inspect-local-uploader", "probe",
-            LOCAL_UPLOADER_ACTION, MODEL_CONFIG_ACTION,
+            LOCAL_UPLOADER_ACTION, MODEL_CONFIG_ACTION, PLUGIN_CONFIG_ACTION,
         ),
     )
     parser.add_argument("--payload")
@@ -1380,6 +1422,14 @@ def main() -> int:
             raw = sys.stdin.buffer.read(2 * MAX_MODEL_CONFIG_BYTES + 1)
             if len(raw) > 2 * MAX_MODEL_CONFIG_BYTES:
                 raise ValueError("write-model-config payload is too large")
+            payload = _parse_payload(raw.decode("utf-8"))
+            result = execute(args.action, payload)
+        elif args.action == PLUGIN_CONFIG_ACTION:
+            if args.payload is not None:
+                raise ValueError(f"{PLUGIN_CONFIG_ACTION} reads its payload from stdin")
+            raw = sys.stdin.buffer.read(MAX_PLUGIN_PAYLOAD_BYTES + 1)
+            if len(raw) > MAX_PLUGIN_PAYLOAD_BYTES:
+                raise ValueError(f"{PLUGIN_CONFIG_ACTION} payload is too large")
             payload = _parse_payload(raw.decode("utf-8"))
             result = execute(args.action, payload)
         elif args.action == "probe":

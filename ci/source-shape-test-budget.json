@@ -242,6 +242,11 @@
       "category": "security"
     },
     {
+      "file": "test/hermes-01x-image.test.ts",
+      "test": "is the manifest the 0.1.x transaction and image load",
+      "category": "security"
+    },
+    {
       "file": "test/hermes-final-image-layout.test.ts",
       "test": "keeps security entrypoint hashes synchronized with the copied files",
       "category": "security"

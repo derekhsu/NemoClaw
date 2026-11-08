@@ -2189,8 +2189,9 @@ ENV NPM_CONFIG_OFFLINE=false
 # Also add the final OpenClaw managed proxy config after build-time OpenClaw
 # commands are done, so runtime Discord/WebSocket traffic uses the OpenShell
 # gateway proxy without forcing image-build npm traffic through that proxy.
-# OpenShell 0.1.x has no explicit proxy (NEMOCLAW_OPENSHELL_LINE=0.1): keep the
-# entry disabled, the same shape ClawShell writes for 0.0.x images on 0.1.x.
+# OpenShell 0.1.x has no proxy at the 0.0.x address (NEMOCLAW_OPENSHELL_LINE=0.1):
+# keep the entry disabled, the shape ClawShell writes for 0.0.x images on 0.1.x,
+# unless an operator chose another proxy host, as the entrypoint does.
 RUN PATH=/usr/bin:/bin python3 -c "\
 import json, os; \
 line = os.environ.get('NEMOCLAW_OPENSHELL_LINE') or '0.0'; \
@@ -2198,10 +2199,11 @@ assert line in ('0.0', '0.1'), 'NEMOCLAW_OPENSHELL_LINE must be 0.0 or 0.1'; \
 path = os.path.expanduser('~/.openclaw/openclaw.json'); \
 cfg = json.load(open(path)); \
 cfg.setdefault('gateway', {}).setdefault('auth', {})['token'] = ''; \
-proxy_host = os.environ.get('NEMOCLAW_PROXY_HOST') or '10.200.0.1'; \
+configured_host = os.environ.get('NEMOCLAW_PROXY_HOST') or ''; \
+proxy_host = configured_host or '10.200.0.1'; \
 proxy_port = os.environ.get('NEMOCLAW_PROXY_PORT') or '3128'; \
 cfg['proxy'] = { \
-    'enabled': line == '0.0', \
+    'enabled': line == '0.0' or configured_host not in ('', '10.200.0.1'), \
     'proxyUrl': f'http://{proxy_host}:{proxy_port}', \
     'loopbackMode': 'gateway-only', \
 }; \

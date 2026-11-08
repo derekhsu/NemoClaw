@@ -132,3 +132,62 @@ describe("nemoclaw-start runtime shell env file on OpenShell 0.1.x (NemoClaw#33)
     );
   });
 });
+
+describe("Dockerfile managed proxy entry for OpenShell 0.1.x (NemoClaw#33)", () => {
+  const dockerfile = fs.readFileSync(path.resolve(import.meta.dirname, "../Dockerfile"), "utf8");
+  const startMarker = 'RUN PATH=/usr/bin:/bin python3 -c "\\\n';
+  const start = dockerfile.indexOf(startMarker);
+  const end = dockerfile.indexOf('os.chmod(path, 0o600)"', start);
+  // Docker joins each backslash-newline continuation into one shell line.
+  const program = dockerfile
+    .slice(start + startMarker.length, end + "os.chmod(path, 0o600)".length)
+    .replaceAll("\\\n", "");
+
+  function managedProxy(env: Record<string, string>): Record<string, unknown> {
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-01x-managed-proxy-"));
+    try {
+      fs.mkdirSync(path.join(home, ".openclaw"));
+      const config = path.join(home, ".openclaw", "openclaw.json");
+      fs.writeFileSync(config, JSON.stringify({ gateway: { auth: { token: "x" } } }));
+      const result = spawnSync("python3", ["-c", program], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, ...env },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(fs.readFileSync(config, "utf8")).proxy;
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ["0.0.x default", { NEMOCLAW_PROXY_HOST: "10.200.0.1" }, true, "http://10.200.0.1:3128"],
+    [
+      "0.1.x with the baked 0.0.x address",
+      { NEMOCLAW_OPENSHELL_LINE: "0.1", NEMOCLAW_PROXY_HOST: "10.200.0.1" },
+      false,
+      "http://10.200.0.1:3128",
+    ],
+    [
+      "0.1.x without a proxy host",
+      { NEMOCLAW_OPENSHELL_LINE: "0.1" },
+      false,
+      "http://10.200.0.1:3128",
+    ],
+    [
+      "0.1.x operator proxy",
+      {
+        NEMOCLAW_OPENSHELL_LINE: "0.1",
+        NEMOCLAW_PROXY_HOST: "proxy.corp.example",
+        NEMOCLAW_PROXY_PORT: "8080",
+      },
+      true,
+      "http://proxy.corp.example:8080",
+    ],
+  ])("writes the managed proxy for %s", (_case, env, enabled, proxyUrl) => {
+    expect(managedProxy(env)).toEqual({ enabled, proxyUrl, loopbackMode: "gateway-only" });
+  });
+});

@@ -57,3 +57,19 @@ Regenerate the manifest for a new OpenShell release from
 `google_cloud.rs`, `provider_credentials.rs` and `secrets.rs` in
 `openshell-core`, and `grpc/policy.rs` in `openshell-server`, and record their
 blob ids and SHA-256 in `generation.upstreamSourceEvidence`.
+
+## OpenShell 0.0.x leftovers (unused on 0.1.x)
+
+OpenShell 0.1.x has no `inference.local`; ClawShell writes the provider
+connection with `write-model-config` and `hermes-api-profile.py write-config`
+after Hermes starts. These parts still describe the 0.0.x route and are not
+used on 0.1.x. They are removed together with `agents/hermes/` after the f314
+migration (#34):
+
+- `Dockerfile` defaults `NEMOCLAW_INFERENCE_BASE_URL` to
+  `https://inference.local/v1`, so the build-time `config.yaml` points at it
+  until ClawShell rewrites the model routing.
+- `runtime-config-guard.py` keeps the managed-default commands
+  (`write-managed-default` and related) and `start.sh` keeps
+  `reload-managed-default`. They need root, which 0.1.x workloads do not have,
+  and ClawShell no longer calls them (derekhsu/clawshell-gateway#267).

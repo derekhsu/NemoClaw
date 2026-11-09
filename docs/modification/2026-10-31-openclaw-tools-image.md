@@ -80,7 +80,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 |------|------|------|
 | officecli | 1.0.160 | amd64、arm64 |
 | himalaya | 2.2.1 | amd64、arm64;官方 release 的靜態連結執行檔,與 brew 安裝的版本相同 |
-| yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.60.0 從原始碼建置 |
+| yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.62.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
 | pnpm | 12.16.1 | 不分架構 |

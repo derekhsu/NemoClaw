@@ -43,7 +43,7 @@ ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
 WORKDIR /src
 RUN set -eu; \
     go mod init nemoclaw-tools/yq; \
-    go get github.com/mikefarah/yq/v4@v4.54.1 golang.org/x/net@v0.60.0; \
+    go get github.com/mikefarah/yq/v4@v4.54.1 golang.org/x/net@v0.62.0; \
     go build -ldflags='-s -w' -o /out/yq github.com/mikefarah/yq/v4; \
     /out/yq --version
 

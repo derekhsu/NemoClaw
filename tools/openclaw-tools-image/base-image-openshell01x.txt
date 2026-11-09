@@ -1,0 +1,4 @@
+# Base image for the OpenShell 0.1.x tools image (<version>-openshell01x-tools.<n>).
+# Index digest of docker.io/derekhsu/openshell-openclaw:2026.9.2-openshell01x-r1,
+# published by openclaw-sandbox-image run 42552447132 from cfb11e91e8.
+docker.io/derekhsu/openshell-openclaw@sha256:6af18f1542a4f875b6942583436ad3f235b2cde8468077127c3689406501463b

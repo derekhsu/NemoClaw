@@ -13,4 +13,4 @@ shadcn-components	skills@ca45fc49	all	https://raw.githubusercontent.com/anthropi
 # shadcn-components is unpacked into frontend-template/src (Apache-2.0, see
 # frontend-template/LICENSE.web-artifacts-builder.txt).
 # yq 4.54.1 is built from source in Dockerfile.tools with Go 1.27.3 and
-# golang.org/x/net 0.60.0; Go verifies module hashes with sumdb.
+# golang.org/x/net 0.62.0; Go verifies module hashes with sumdb.

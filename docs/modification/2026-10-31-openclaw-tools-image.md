@@ -63,10 +63,10 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 
 | 類別 | 套件與版本 |
 |------|------------|
-| Office | `libreoffice-core`、`libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress` `4:25.2.3-2+deb13u8` |
+| Office | `libreoffice-core`、`libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress` `4:25.2.3-2+deb13u9` |
 | PDF 與轉檔 | `pandoc 3.1.11.1+ds-2`、`poppler-utils 25.03.0-5+deb13u4`、`qpdf 12.2.0-1`、`ghostscript 10.05.1~dfsg-1+deb13u3` |
 | OCR | `tesseract-ocr 5.5.0-1+b1`;語言資料 `eng`、`chi-tra`、`chi-sim` `1:4.1.0-2` |
-| 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u13`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |
+| 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u14`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |
 | 瀏覽器 | `chromium 156.0.8078.79-1~deb13u1`,固定在 `apt-packages-browser.txt` |
 | 字型 | `fontconfig 2.15.0-2.3`、`fonts-noto-cjk 1:20240730+repack1-1`、`fonts-liberation 1:2.1.5-3`、`fonts-dejavu-core 2.37-8` |
 | Workspace | `zip 3.0-15+deb13u1`、`unzip 6.0-29+deb13u1`、`ripgrep 14.1.1-1+b4`、`sqlite3 3.46.1-7+deb13u2` |
@@ -80,7 +80,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 |------|------|------|
 | officecli | 1.0.160 | amd64、arm64 |
 | himalaya | 2.2.1 | amd64、arm64;官方 release 的靜態連結執行檔,與 brew 安裝的版本相同 |
-| yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.60.0 從原始碼建置 |
+| yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.3 與 `golang.org/x/net` 0.62.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
 | pnpm | 12.16.1 | 不分架構 |

@@ -8,9 +8,18 @@ const PINNED_HERMES_BASE_PYTHON_HTMLPARSER_FIX_PACKAGE =
 const SHARED_LIBEXPAT_PACKAGE = "libexpat1=2.8.3-1";
 // Only the OpenClaw base installs the Debian security update (#19).
 const OPENCLAW_LIBEXPAT_PACKAGE = "libexpat1=2.9.0-1~deb13u1";
+const SHARED_ZLIB_PACKAGE = "zlib1g=1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1";
+// The OpenClaw base installs Debian's zlib and apt security updates, which
+// supersede the NemoClaw zlib backport (CVE-2026-85091, CVE-2026-76844,
+// CVE-2026-109518).
+const OPENCLAW_ZLIB_PACKAGE = "zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1";
+const OPENCLAW_SECURITY_PACKAGE_OVERRIDES: ReadonlyMap<string, string> = new Map([
+  [SHARED_LIBEXPAT_PACKAGE, OPENCLAW_LIBEXPAT_PACKAGE],
+  [SHARED_ZLIB_PACKAGE, OPENCLAW_ZLIB_PACKAGE],
+]);
 
 const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
-  "zlib1g=1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1",
+  SHARED_ZLIB_PACKAGE,
   "libc6=2.41-12+deb13u4",
   "libc-bin=2.41-12+deb13u4",
   "bsdutils=1:2.41.5-0+deb13u1",
@@ -46,10 +55,12 @@ const PINNED_HERMES_BASE_SECURITY_PACKAGE_INVENTORY = SANDBOX_BASE_SECURITY_PACK
 );
 
 const OPENCLAW_SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
-  ...SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY.map((packageSpec) =>
-    packageSpec === SHARED_LIBEXPAT_PACKAGE ? OPENCLAW_LIBEXPAT_PACKAGE : packageSpec,
+  ...SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY.map(
+    (packageSpec) => OPENCLAW_SECURITY_PACKAGE_OVERRIDES.get(packageSpec) ?? packageSpec,
   ),
   "libevent-core-2.1-7t64=2.1.13-stable-1",
+  "apt=3.0.4",
+  "libapt-pkg7.0=3.0.4",
 ] as const;
 
 const SECURITY_INVENTORY_PROBE_OK = "nemoclaw-security-inventory-ok";

@@ -349,6 +349,35 @@ Homebrew `7.0.12` passes only `allow_duplicate_key: true`, in `Library/Homebrew/
 
 Remove the entry when Homebrew ships a portable Ruby with `json` `2.19.2` or later, and bump `HOMEBREW_VERSION` to that release.
 
+## Debian zlib and apt Updates
+
+On November 8, 2026, the OpenClaw Standard Verify scan (run `42503891703`, derekhsu/NemoClaw#63) reported four new fixable HIGH findings on amd64 and arm64.
+The images built since 2026.9.2-r4 have the same packages.
+
+| Package | Location | Installed | Fixed | Findings |
+| --- | --- | --- | --- | --- |
+| `zlib1g` | Debian package in the OpenClaw base | `1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1` | `1:1.3.dfsg+really1.3.1-1+deb13u1` | `CVE-2026-76844`, `CVE-2026-85091` |
+| `apt`, `libapt-pkg7.0` | Debian packages from the Node base image | `3.0.3` | `3.0.4` | `CVE-2026-109518` |
+
+`Dockerfile.base` installs `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1`, `apt=3.0.4`, and `libapt-pkg7.0=3.0.4` from `trixie-security`.
+The OpenClaw security inventory records these three versions.
+
+The Debian zlib update carries two upstream fixes:
+
+- `Fix-buffer-overflow-bug-in-non-blocking-gzwrite.patch` (`CVE-2026-85091`, Debian bug #1146895) makes the same `gz_write` change as the NemoClaw backport `scripts/security/patches/zlib-1.3.1-write-error.patch`.
+- `Check-for-negative-lengths-in-crc32_combine-function.patch` adds a check that the backport does not have.
+
+The OpenClaw base therefore installs Debian's package and does not install the NemoClaw `+nemoclaw1` backport.
+`scripts/security/zlib-write-error.c` passes against a library built from the `deb13u1` source.
+With the Debian gzwrite patch reversed, the same regression fails with exit status 4.
+
+These updates change only the OpenClaw base image and its inventory, like the Expat update.
+The Hermes and Deep Agents Code bases still install the zlib backport and the apt from the Node base image.
+The shared inventory keeps `1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1` for both, and those images still have these findings.
+
+The update adds no Trivy exception.
+The existing `json` exception is not changed.
+
 ## Existing security and runtime contracts
 
 The supply-chain gates are unchanged: unpinned versions are rejected, versions

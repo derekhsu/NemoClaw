@@ -46,7 +46,7 @@ fork 維護者負責工具清單、相容性、安全更新與重新建置。
 | #18 | 實際部署環境驗收 | 2026-11-02 以 `2026.9.2-tools.1` 完成 amd64 驗收;arm64 驗收與 512 個 process 上限由 #32 追蹤;瀏覽器工具由 #27 追蹤 |
 
 第 4、5 節的安裝位置、使用方式與離線行為已在 GitHub Actions 原生 amd64 與 arm64 runner 上驗證。
-第 7 節的發布規則已由單元測試與 CI 驗證,並已實際發布兩個 tools 映像(見 7.5 節)。#18 以 tools.1 在 amd64 部署環境驗證了 fixture、Playwright、LibreOffice 與被拒絕的連線目的地。OpenClaw 瀏覽器工具仍無法在 OpenShell sandbox 中開啟網頁,由 #27 追蹤。
+第 7 節的發布規則已由單元測試與 CI 驗證,並已實際發布兩個 tools 映像(見 7.5 節)。#18 以 tools.1 在 amd64 部署環境驗證了 fixture、Playwright、LibreOffice 與被拒絕的連線目的地。OpenClaw 瀏覽器工具在 OpenShell 0.0.x sandbox 中無法開啟網頁(#27);0.1.x 映像的設定見 4.6.1 節。
 
 維護者已審閱文件與驗證證據,並[確認 Phase 5 文件與交接完成](https://github.com/derekhsu/NemoClaw/pull/20#issuecomment-6555856173)。
 [#18](https://github.com/derekhsu/NemoClaw/issues/18) 也確認冷啟動時間在預算內。arm64 部署驗收與 512 個 process 的上限由 [#32](https://github.com/derekhsu/NemoClaw/issues/32) 追蹤。
@@ -173,6 +173,28 @@ Phase 2 在 tools 映像中以 officecli 編輯、驗證並讀回 DOCX、XLSX、
 - `/sandbox/.cache/ms-playwright` 指向這個目錄。sandbox 使用者的 `HOME` 是 `/sandbox`,所以 `p.chromium.launch()` 不需要指定路徑。
 - 也可以用 `executable_path="/usr/lib/chromium/chromium"` 讓 Playwright 使用 Debian Chromium;CI 已在 `HOME` 可寫入時驗證。
 - 在其他 `HOME` 執行時,請設定 `PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/nemoclaw-tools/ms-playwright`。
+
+#### 4.6.1 OpenClaw browser 工具(OpenShell 0.1.x,#27)
+
+0.1.x 的 tools 映像(`<version>-openshell01x-tools.<n>`)預設開啟 OpenClaw 內建的 browser 工具。`tools/openclaw-tools-image/configure-browser.py` 在建置時寫入 `openclaw.json`,並重算 `.config-hash`:
+
+| 設定 | 值 | 原因 |
+|------|----|------|
+| `browser.executablePath` | `/usr/lib/chromium/chromium` | network policy 看到的是這個執行檔;`/usr/bin/chromium` 只是 shell 包裝腳本 |
+| `browser.noSandbox`、`browser.extraArgs` | `true`、`--no-zygote --disable-gpu` | OpenShell 的 seccomp 不允許 Chromium 的 sandbox 與 zygote 建立 user namespace,只加 `--no-sandbox` 仍會 `Target crashed`。外層仍由 OpenShell 的 seccomp、Landlock 與 network policy 隔離 |
+| `browser.ssrfPolicy.allowRfc2544BenchmarkRange` | `true` | policy DNS 回傳 `198.18.0.0/15` 的合成 IP,SSRF 檢查預設會拒絕 |
+| `tools.alsoAllow` | 加入 `browser` | 不論 OpenClaw 選哪個工具 profile,都提供 browser 工具 |
+
+0.0.x 的 tools 映像不開啟:0.0.x sandbox 沒有 DNS,browser 工具在導航前的 DNS 查詢一定失敗(#27 第 1 點)。0.0.x 請沿用 Python Playwright。
+
+要開網站時,network policy 需要:
+
+- 放行 `/usr/lib/chromium/chromium`(browser 工具)與 `/usr/local/share/nemoclaw-tools/ms-playwright/*/*/chrome-headless-shell`(Python Playwright)。
+- 目標 endpoint 設 `tls: skip`。OpenShell 檢查 TLS 時會用自己的 CA 重新簽發憑證,Chromium 不信任,會出現 `ERR_CERT_AUTHORITY_INVALID`。
+
+在 0.1.x 用 Python Playwright 時,也要加上 `chromium.launch(args=["--no-sandbox", "--no-zygote"])`。
+
+修改 browser 設定後要重新啟動 OpenClaw gateway,設定才會生效。
 
 ### 4.7 前端專案
 

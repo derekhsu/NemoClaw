@@ -221,6 +221,24 @@ RUN set -eu; \
     test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills/himalaya)" = "sandbox:sandbox 2770"; \
     test "$(stat -c '%U:%G %a' /sandbox/.openclaw/skills/himalaya/SKILL.md)" = "sandbox:sandbox 660"
 
+# OpenClaw browser tool on OpenShell 0.1.x (#27); configure-browser.py
+# explains each setting and leaves 0.0.x images unchanged. Recompute
+# .config-hash so the config integrity check still matches, and keep the base
+# image's owner and modes.
+COPY tools/openclaw-tools-image/configure-browser.py /tmp/nemoclaw-tools/configure-browser.py
+RUN set -eu; \
+    test "$(stat -c '%U:%G %a' /sandbox/.openclaw/openclaw.json)" = "sandbox:sandbox 660"; \
+    test -x /usr/lib/chromium/chromium; \
+    python3 /tmp/nemoclaw-tools/configure-browser.py "${NEMOCLAW_OPENSHELL_LINE:-0.0}" /sandbox/.openclaw/openclaw.json; \
+    cp -a /sandbox/.openclaw /tmp/nemoclaw-tools/openclaw-state; \
+    HOME=/tmp/nemoclaw-tools OPENCLAW_STATE_DIR=/tmp/nemoclaw-tools/openclaw-state \
+      OPENCLAW_CONFIG_PATH=/tmp/nemoclaw-tools/openclaw-state/openclaw.json \
+      openclaw config validate --json > /tmp/nemoclaw-tools/config-validate.json; \
+    python3 -c "import json, sys; sys.exit(0 if json.load(open('/tmp/nemoclaw-tools/config-validate.json'))['valid'] else 1)"; \
+    sha256sum /sandbox/.openclaw/openclaw.json > /sandbox/.openclaw/.config-hash; \
+    chown sandbox:sandbox /sandbox/.openclaw/openclaw.json /sandbox/.openclaw/.config-hash; \
+    chmod 660 /sandbox/.openclaw/openclaw.json /sandbox/.openclaw/.config-hash
+
 RUN rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 
 # Same user name as the base image configuration.

@@ -393,6 +393,28 @@ himalaya_skill_override() {
     <<<"$info"
 }
 
+browser_config() {
+  # The OpenClaw browser tool is on only for OpenShell 0.1.x images (#27).
+  local config=/sandbox/.openclaw/openclaw.json
+  case "${NEMOCLAW_OPENSHELL_LINE:-0.0}" in
+    0.1)
+      jq -e '.browser.enabled == true
+        and .browser.executablePath == "/usr/lib/chromium/chromium"
+        and .browser.noSandbox == true
+        and (.browser.extraArgs | index("--no-zygote")) != null
+        and .browser.ssrfPolicy.allowRfc2544BenchmarkRange == true
+        and (.tools.alsoAllow | index("browser")) != null' "$config"
+      ;;
+    *) jq -e '.browser == null' "$config" ;;
+  esac
+  (cd / && sha256sum -c /sandbox/.openclaw/.config-hash)
+  test "$(stat -c '%U:%G %a' "$config")" = "sandbox:sandbox 660"
+  # The configured executable starts headless with the configured flags.
+  timeout 60 /usr/lib/chromium/chromium --headless=new --no-sandbox --no-zygote --disable-gpu \
+    --user-data-dir="$WORK/chromium-profile" --dump-dom 'data:text/html,<title>browser-fixture</title>' 2>/dev/null \
+    | grep -q '<title>browser-fixture</title>'
+}
+
 python_libraries() {
   python3 - <<'PY'
 import importlib
@@ -430,6 +452,7 @@ check metadata metadata
 check media media
 check charts charts
 check workspace workspace
+check browser_config browser_config
 check python_libraries python_libraries
 check node_resolution node_resolution
 

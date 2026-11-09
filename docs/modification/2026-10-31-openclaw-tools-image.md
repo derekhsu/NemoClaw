@@ -278,6 +278,28 @@ Debian `0.04-11` 沒有原始碼修補,只多了 hardening 旗標、`dh_perl -d`
 
 兩種映像都推送到 `docker.io/derekhsu/openshell-openclaw`。
 
+### 7.1.1 OpenShell 0.1.x 映像(derekhsu/NemoClaw#33)
+
+OpenShell 0.1.x 沒有 explicit proxy(`10.200.0.1:3128`)與 `inference.local`,對外連線由 supervisor 透明處理。
+0.1.x 用的映像以 tag 中的 `-openshell01x` 區分,與 0.0.x 映像分開發布,不覆寫 0.0.x 的 tag:
+
+| 映像 | tag 格式 | 差異 |
+|------|----------|------|
+| standard | `<version>-openshell01x-r<n>`,例如 `2026.9.2-openshell01x-r1` | 以 `NEMOCLAW_OPENSHELL_LINE=0.1` 建置:`openclaw.json` 的 managed proxy 關閉;entrypoint 清除 proxy 環境變數,`/tmp/nemoclaw-proxy-env.sh` 改為 `unset`。不移動 `latest` 與 `openclaw-<version>` |
+| tools | `<version>-openshell01x-tools.<n>`,例如 `2026.9.2-openshell01x-tools.1` | base 改用 `tools/openclaw-tools-image/base-image-openshell01x.txt` 固定的 digest,不讀 `Dockerfile.tools` 的 `BASE_IMAGE` |
+
+發布順序:先發布 standard,再把它的 index digest 寫進 `base-image-openshell01x.txt`(以 PR 合併),最後發布 tools。
+檔案不存在時,0.1.x tools 的發布在規劃階段就會失敗。
+
+`NEMOCLAW_PROXY_HOST` 為 0.0.x 預設值 `10.200.0.1` 以外的值時,0.1.x 映像仍會使用該 explicit proxy。
+`inference.local` 的預設 provider 仍保留,由 ClawShell 寫入 provider 設定時移除。
+
+Telegram 設定在 0.1.x 映像不再產生 `proxy`。
+messaging applier 是把新設定合併進既有的 `channels.telegram`,新設定沒有的欄位不會刪除。
+因此從 0.0.x 搬過來的沙箱,`channels.telegram.accounts.*.proxy` 會保留 `http://10.200.0.1:3128`,Telegram 會連不上。
+ClawShell 寫入 provider 設定時會移除 host 為 `10.200.0.1` 的 Telegram proxy(derekhsu/clawshell-gateway#290)。
+不經 ClawShell 管理的沙箱,要手動刪除這個欄位。
+
 ### 7.2 發布規則
 
 `scripts/openclaw-image-release.sh` 檢查以下規則,`test/openclaw-image-release.test.ts` 測試這些規則:

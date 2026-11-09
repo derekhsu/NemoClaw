@@ -3482,16 +3482,37 @@ PYAUTOPAIR
 # NEMOCLAW_PROXY_HOST / NEMOCLAW_PROXY_PORT can be overridden at sandbox
 # creation time if the gateway IP or port changes in a future OpenShell release.
 # Ref: https://github.com/NVIDIA/NemoClaw/issues/626
-PROXY_HOST="${NEMOCLAW_PROXY_HOST:-10.200.0.1}"
+#
+# OpenShell 0.1.x (NEMOCLAW_OPENSHELL_LINE=0.1) mediates egress transparently
+# and strips ambient proxy variables from the children it starts. The 0.0.x
+# address (10.200.0.1:3128) does not exist there; a client that honours it is
+# denied with transparent_tcp_policy_denied (derekhsu/NemoClaw#33, #52). Clear
+# the proxy routing so the gateway and every later OpenShell exec (which
+# sources the runtime env file through .bashrc) connect directly. A
+# NEMOCLAW_PROXY_HOST other than that 0.0.x default still selects an explicit
+# proxy.
+if [ "${NEMOCLAW_OPENSHELL_LINE:-0.0}" = "0.1" ]; then
+  unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy grpc_proxy
+  PROXY_HOST=""
+  if [ -n "${NEMOCLAW_PROXY_HOST:-}" ] && [ "$NEMOCLAW_PROXY_HOST" != "10.200.0.1" ]; then
+    PROXY_HOST="$NEMOCLAW_PROXY_HOST"
+  fi
+else
+  PROXY_HOST="${NEMOCLAW_PROXY_HOST:-10.200.0.1}"
+fi
 PROXY_PORT="${NEMOCLAW_PROXY_PORT:-3128}"
-_PROXY_URL="http://${PROXY_HOST}:${PROXY_PORT}"
-_NO_PROXY_VAL="localhost,127.0.0.1,::1,${PROXY_HOST}"
-export HTTP_PROXY="$_PROXY_URL"
-export HTTPS_PROXY="$_PROXY_URL"
-export NO_PROXY="$_NO_PROXY_VAL"
-export http_proxy="$_PROXY_URL"
-export https_proxy="$_PROXY_URL"
-export no_proxy="$_NO_PROXY_VAL"
+_PROXY_URL=""
+_NO_PROXY_VAL=""
+if [ -n "$PROXY_HOST" ]; then
+  _PROXY_URL="http://${PROXY_HOST}:${PROXY_PORT}"
+  _NO_PROXY_VAL="localhost,127.0.0.1,::1,${PROXY_HOST}"
+  export HTTP_PROXY="$_PROXY_URL"
+  export HTTPS_PROXY="$_PROXY_URL"
+  export NO_PROXY="$_NO_PROXY_VAL"
+  export http_proxy="$_PROXY_URL"
+  export https_proxy="$_PROXY_URL"
+  export no_proxy="$_NO_PROXY_VAL"
+fi
 
 # Corporate proxy CA merge (NemoClaw#6210).
 # OpenShell injects SSL_CERT_FILE for its own L7 proxy CA at runtime. When a
@@ -3712,7 +3733,8 @@ _RUNTIME_SHELL_ENV_SHIM="[ -f ${_RUNTIME_SHELL_ENV_FILE} ] && . ${_RUNTIME_SHELL
 write_runtime_shell_env() {
   _PROXY_ENV_FILE="/tmp/nemoclaw-proxy-env.sh"
   {
-    cat <<PROXYEOF
+    if [ -n "$_PROXY_URL" ]; then
+      cat <<PROXYEOF
 # Proxy configuration (overrides narrow OpenShell defaults on connect)
 export HTTP_PROXY="$_PROXY_URL"
 export HTTPS_PROXY="$_PROXY_URL"
@@ -3720,6 +3742,14 @@ export NO_PROXY="$_NO_PROXY_VAL"
 export http_proxy="$_PROXY_URL"
 export https_proxy="$_PROXY_URL"
 export no_proxy="$_NO_PROXY_VAL"
+PROXYEOF
+    else
+      cat <<'PROXYEOF'
+# OpenShell 0.1.x egress is transparent; no explicit proxy (NemoClaw#33)
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy grpc_proxy
+PROXYEOF
+    fi
+    cat <<PROXYEOF
 export AWS_EC2_METADATA_DISABLED="true"
 export JITI_FS_CACHE="false"
 PROXYEOF

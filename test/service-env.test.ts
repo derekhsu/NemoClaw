@@ -100,16 +100,17 @@ function extractToolRedirectsSnippet() {
 
 function extractProxyVarsSnippet() {
   const src = readFileSync(NEMOCLAW_START_SCRIPT, "utf-8");
-  const start = src.indexOf("PROXY_HOST=");
-  const endMarker = 'export no_proxy="$_NO_PROXY_VAL"';
-  const end = src.indexOf(endMarker, start);
+  // The block now branches on NEMOCLAW_OPENSHELL_LINE (NemoClaw#33), so take
+  // the whole section rather than the first PROXY_HOST..no_proxy lines.
+  const start = src.indexOf("# ── Proxy environment");
+  const end = src.indexOf("# Corporate proxy CA merge", start);
   if (start === -1 || end === -1 || end <= start) {
     throw new Error(
       "Failed to extract proxy configuration from scripts/nemoclaw-start.sh — " +
-        "the PROXY_HOST..no_proxy block may have been moved or renamed",
+        "the Proxy environment section may have been moved or renamed",
     );
   }
-  return src.slice(start, end + endMarker.length);
+  return src.slice(start, end);
 }
 
 describe("service environment", () => {

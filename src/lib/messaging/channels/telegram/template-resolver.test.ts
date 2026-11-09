@@ -38,4 +38,30 @@ describe("Telegram template resolver", () => {
       resolveTelegramTemplateReference("telegramConfig.openclawGroups", { inputs })?.value,
     ).toEqual(expectedGroups);
   });
+
+  it.each([
+    ["0.0.x default", {}, "http://10.200.0.1:3128"],
+    [
+      "0.0.x operator proxy",
+      { NEMOCLAW_PROXY_HOST: "proxy.corp.example" },
+      "http://proxy.corp.example:3128",
+    ],
+    [
+      "0.1.x with the baked 0.0.x address",
+      { NEMOCLAW_OPENSHELL_LINE: "0.1", NEMOCLAW_PROXY_HOST: "10.200.0.1" },
+      undefined,
+    ],
+    ["0.1.x without a proxy host", { NEMOCLAW_OPENSHELL_LINE: "0.1" }, undefined],
+    [
+      "0.1.x operator proxy",
+      {
+        NEMOCLAW_OPENSHELL_LINE: "0.1",
+        NEMOCLAW_PROXY_HOST: "proxy.corp.example",
+        NEMOCLAW_PROXY_PORT: "8080",
+      },
+      "http://proxy.corp.example:8080",
+    ],
+  ] as const)("resolves the account proxy for %s (NemoClaw#33)", (_case, env, expected) => {
+    expect(resolveTelegramTemplateReference("proxyUrl", { inputs: [], env })?.value).toBe(expected);
+  });
 });

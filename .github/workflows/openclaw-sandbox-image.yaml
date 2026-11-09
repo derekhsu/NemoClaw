@@ -33,7 +33,7 @@ on:
           - standard
           - tools
       tag:
-        description: "Release tag: standard 2026.9.2-r4, tools 2026.9.2-tools.3"
+        description: "Release tag: standard 2026.9.2-r4 or 2026.9.2-openshell01x-r1, tools 2026.9.2-tools.3 or 2026.9.2-openshell01x-tools.1"
         required: true
         type: string
 
@@ -55,6 +55,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       base_image: ${{ steps.plan.outputs.base_image }}
+      openshell_line: ${{ steps.plan.outputs.openshell_line }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -130,9 +131,10 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             BASE_IMAGE=${{ env.BASE_IMAGE_NAME }}:ci-${{ github.run_id }}-${{ matrix.arch }}
+            NEMOCLAW_OPENSHELL_LINE=${{ needs.plan.outputs.openshell_line }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=final-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=final-${{ matrix.arch }}
+          cache-from: type=gha,scope=final-${{ matrix.arch }}-${{ needs.plan.outputs.openshell_line }}
+          cache-to: type=gha,mode=max,scope=final-${{ matrix.arch }}-${{ needs.plan.outputs.openshell_line }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -190,14 +192,18 @@ jobs:
         run: scripts/check-production-build-args.sh
 
       # Build and test before logging in, so registry credentials are not on
-      # the runner while the image and its fixtures run. The base comes from
-      # the digest in Dockerfile.tools; the tools image keeps no build cache
+      # the runner while the image and its fixtures run. The base is the
+      # digest the plan read: Dockerfile.tools, or for an -openshell01x tag
+      # tools/openclaw-tools-image/base-image-openshell01x.txt (NemoClaw#33).
+      # The tools image keeps no build cache
       # in GitHub Actions, so it cannot evict the standard image caches.
       - name: Build ${{ matrix.platform }} tools image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: Dockerfile.tools
+          build-args: |
+            BASE_IMAGE=${{ needs.plan.outputs.base_image }}
           platforms: ${{ matrix.platform }}
           tags: ${{ env.TOOLS_IMAGE }}
           load: true
@@ -254,6 +260,8 @@ jobs:
         with:
           context: .
           file: Dockerfile.tools
+          build-args: |
+            BASE_IMAGE=${{ needs.plan.outputs.base_image }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: |

@@ -341,3 +341,111 @@ describe("OpenClaw image publication (#16)", () => {
     expect(result.summary).not.toContain("- Tag:");
   });
 });
+
+describe("OpenClaw image release for OpenShell 0.1.x (NemoClaw#33)", () => {
+  const pinned01x = `${image}@sha256:${"b".repeat(64)}`;
+  const pinFile = "tools/openclaw-tools-image/base-image-openshell01x.txt";
+
+  function workspaceWith01xPin(content: string) {
+    const dir = workspace();
+    mkdirSync(path.join(dir, "tools/openclaw-tools-image"), { recursive: true });
+    writeFileSync(path.join(dir, pinFile), content);
+    return dir;
+  }
+
+  it("plans a 0.1.x standard release with architecture tags and no moving alias", () => {
+    const result = run(["plan"], { VARIANT: "standard", TAG: "2026.9.2-openshell01x-r1" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("version=2026.9.2\n");
+    expect(result.outputs).toContain("openshell_line=0.1\n");
+    expect(result.calls).toEqual(
+      [
+        "2026.9.2-openshell01x-r1",
+        "2026.9.2-openshell01x-r1-amd64",
+        "2026.9.2-openshell01x-r1-arm64",
+      ].map((tag) => `buildx imagetools inspect ${image}:${tag}`),
+    );
+    expect(result.summary).not.toContain("Moving alias");
+  });
+
+  it("keeps 0.0.x releases on the 0.0 line", () => {
+    const result = run(["plan"], { VARIANT: "standard", TAG: "2026.9.2-r5" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("openshell_line=0.0\n");
+  });
+
+  it("plans a 0.1.x tools release from the 0.1.x pin, not Dockerfile.tools", () => {
+    const result = run(
+      ["plan"],
+      { VARIANT: "tools", TAG: "2026.9.2-openshell01x-tools.1" },
+      workspaceWith01xPin(`# published 2026.9.2-openshell01x-r1\n${pinned01x}\n`),
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain(`base_image=${pinned01x}\n`);
+    expect(result.outputs).toContain("openshell_line=0.1\n");
+  });
+
+  it("refuses a 0.1.x tools release before the 0.1.x standard image is pinned", () => {
+    const result = run(["plan"], { VARIANT: "tools", TAG: "2026.9.2-openshell01x-tools.1" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`${pinFile} is missing`);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("refuses a 0.1.x tools pin that is not the published standard image by digest", () => {
+    const result = run(
+      ["plan"],
+      { VARIANT: "tools", TAG: "2026.9.2-openshell01x-tools.1" },
+      workspaceWith01xPin(`${image}:2026.9.2-openshell01x-r1\n`),
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`${pinFile} BASE_IMAGE must be ${image} pinned by digest`);
+  });
+
+  it.each([
+    ["standard", "2026.9.2-openshell01x"],
+    ["standard", "2026.9.2-openshell01x-tools.1"],
+    ["standard", "2026.9.2-r1-openshell01x"],
+    ["tools", "2026.9.2-openshell01x-r1"],
+    ["tools", "2026.9.2-tools.1-openshell01x"],
+  ])("rejects %s tag %j", (variant, tag) => {
+    const result = run(["plan"], { VARIANT: variant, TAG: tag });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`${variant} tag must be`);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("accepts a 0.1.x tools tag whose version matches the image", () => {
+    const result = run([
+      "check-tools-version",
+      "2026.9.2-openshell01x-tools.1",
+      "OpenClaw 2026.9.2 (abc)",
+    ]);
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("publishes a 0.1.x standard release without moving latest or openclaw-<version>", () => {
+    const result = run(["publish"], { VARIANT: "standard", TAG: "2026.9.2-openshell01x-r1" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      creates(result.calls).map((call) =>
+        call
+          .split(" -t ")
+          .slice(1)
+          .map((t) => t.split(" ")[0]),
+      ),
+    ).toEqual([
+      [`${image}:2026.9.2-openshell01x-r1`],
+      [`${image}:2026.9.2-openshell01x-r1-amd64`],
+      [`${image}:2026.9.2-openshell01x-r1-arm64`],
+    ]);
+  });
+});

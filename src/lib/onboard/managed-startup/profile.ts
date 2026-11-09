@@ -728,6 +728,9 @@ export const MANAGED_STARTUP_PROFILE_EXCLUDED_DOCKER_INPUTS = {
     { input: "OPENCLAW_TAVILY_PLUGIN_2026_9_2_INTEGRITY", reason: "integrity-pin" },
     { input: "NEMOCLAW_E2E_FIXTURE_LEGACY_OPENCLAW", reason: "release-composition" },
     { input: "NEMOCLAW_MANAGED_IMAGE_CAPABILITY_UNION", reason: "release-composition" },
+    // OpenShell release line of a published image (NemoClaw#33); onboarding
+    // keeps the 0.0 default.
+    { input: "NEMOCLAW_OPENSHELL_LINE", reason: "release-composition" },
     { input: "OPENCLAW_2026_3_11_INTEGRITY", reason: "integrity-pin" },
     { input: "OPENCLAW_2026_3_11_TARBALL", reason: "release-composition" },
     { input: "OPENCLAW_2026_4_24_INTEGRITY", reason: "integrity-pin" },

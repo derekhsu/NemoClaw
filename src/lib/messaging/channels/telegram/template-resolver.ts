@@ -51,10 +51,22 @@ export const resolveTelegramTemplateReference: BuiltInRenderTemplateResolver = (
   }
 };
 
-function proxyUrl(env: RenderTemplateContext["env"]): string {
-  const host = nonEmptyString(env?.NEMOCLAW_PROXY_HOST) ?? DEFAULT_PROXY_HOST;
+/**
+ * Telegram's explicit account proxy. OpenShell 0.1.x images
+ * (NEMOCLAW_OPENSHELL_LINE=0.1) have no proxy at the 0.0.x address, so only an
+ * operator-chosen host is kept there and the account connects directly
+ * otherwise, matching the entrypoint (derekhsu/NemoClaw#33).
+ */
+function proxyUrl(env: RenderTemplateContext["env"]): string | undefined {
+  const configured = nonEmptyString(env?.NEMOCLAW_PROXY_HOST);
+  const host =
+    env?.NEMOCLAW_OPENSHELL_LINE === "0.1"
+      ? configured === DEFAULT_PROXY_HOST
+        ? undefined
+        : configured
+      : (configured ?? DEFAULT_PROXY_HOST);
   const port = nonEmptyString(env?.NEMOCLAW_PROXY_PORT) ?? DEFAULT_PROXY_PORT;
-  return `http://${host}:${port}`;
+  return host === undefined ? undefined : `http://${host}:${port}`;
 }
 
 function telegramGroupPolicy(context: RenderTemplateContext): string {

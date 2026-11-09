@@ -69,13 +69,21 @@ describe("nemoclaw-npm-global profile hook", () => {
     }
   });
 
-  it("keeps a prefix that is already set", () => {
-    expect(sourceHook("sandbox", { npm_config_prefix: "/tmp/npm-global" }).prefix).toBe(
-      "/tmp/npm-global",
-    );
+  it("keeps a prefix that is already set and puts its bin directory on PATH", () => {
+    // nemoclaw-start's /tmp/npm-global redirect reaches agent shells this way.
+    const redirect = sourceHook("sandbox", { npm_config_prefix: "/tmp/npm-global" }, 2);
+    expect(redirect.prefix).toBe("/tmp/npm-global");
+    expect(redirect.path).toBe("/usr/bin:/bin:/tmp/npm-global/bin");
+
     const upper = sourceHook("sandbox", { NPM_CONFIG_PREFIX: "/opt/custom" });
     expect(upper.prefix).toBe("");
     expect(upper.upperPrefix).toBe("/opt/custom");
-    expect(upper.path).toBe(`/usr/bin:/bin:${NPM_BIN}`);
+    expect(upper.path).toBe("/usr/bin:/bin:/opt/custom/bin");
+  });
+
+  it("does not add a relative prefix to PATH", () => {
+    const result = sourceHook("sandbox", { npm_config_prefix: "relative-prefix" });
+    expect(result.prefix).toBe("relative-prefix");
+    expect(result.path).toBe("/usr/bin:/bin");
   });
 });

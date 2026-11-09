@@ -760,14 +760,17 @@ RUN { \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- env HOME=/sandbox bash -lc "case \":\${PATH}:\" in *:/home/linuxbrew/.linuxbrew/bin:*) exit 0 ;; *) exit 1 ;; esac"
 
 # npm global prefix for the sandbox user (#67). /usr/local is root-owned, so
-# the /etc/profile.d hook points the sandbox user's `npm install -g` at the
-# sandbox-owned /sandbox/.npm-global and appends its bin directory to the
-# login-shell PATH; see scripts/lib/nemoclaw-npm-global.sh. The probe checks
-# that root shells are untouched, then installs a local package as the sandbox
-# user the way an agent would, runs it by name, and removes it again.
-COPY scripts/lib/nemoclaw-npm-global.sh /etc/profile.d/nemoclaw-npm-global.sh
+# the /etc/profile.d hook defaults the sandbox user's `npm install -g` prefix to
+# the sandbox-owned /sandbox/.npm-global and appends the active prefix's bin
+# directory to the login-shell PATH; see scripts/lib/nemoclaw-npm-global.sh.
+# The hook's name sorts after nemoclaw-proxy.sh so it also sees the
+# /tmp/npm-global redirect that nemoclaw-start writes to the proxy env file.
+# The probe checks that root shells are untouched, installs a local package as
+# the sandbox user the way an agent would, runs it by name, removes it again,
+# and checks that an inherited or proxy-env prefix gets its bin on PATH too.
+COPY scripts/lib/nemoclaw-npm-global.sh /etc/profile.d/nemoclaw-sandbox-npm-global.sh
 # hadolint ignore=SC2016
-RUN chmod 444 /etc/profile.d/nemoclaw-npm-global.sh \
+RUN chmod 444 /etc/profile.d/nemoclaw-sandbox-npm-global.sh \
     && install -d -o sandbox -g sandbox -m 755 /sandbox/.npm-global \
     && env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin bash -lc 'case ":${PATH}:" in *:/sandbox/.npm-global/bin:*) exit 1 ;; esac; [ -z "${npm_config_prefix:-}" ]' \
     && probe_dir="$(mktemp -d /tmp/nemoclaw-npm-global-probe.XXXXXX)" \
@@ -787,6 +790,23 @@ RUN chmod 444 /etc/profile.d/nemoclaw-npm-global.sh \
             npm uninstall -g --offline --no-audit --no-fund --no-update-notifier nemoclaw-npm-global-probe >/dev/null; \
             ! command -v nemoclaw-npm-global-probe >/dev/null' \
         _ "$probe_dir" \
+    && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+        env -i HOME=/sandbox PATH=/usr/local/bin:/usr/bin:/bin npm_config_prefix="$probe_dir/inherited" \
+        bash -lc 'set -eu; \
+            test "$npm_config_prefix" = "$1/inherited"; \
+            case ":$PATH:" in *:"$1/inherited/bin":*) ;; *) exit 1 ;; esac' \
+        _ "$probe_dir" \
+    && if [ -f /etc/profile.d/nemoclaw-proxy.sh ]; then \
+        test ! -e /tmp/nemoclaw-proxy-env.sh \
+        && printf 'export npm_config_prefix=%s/redirect\n' "$probe_dir" > /tmp/nemoclaw-proxy-env.sh \
+        && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \
+            env -i HOME=/sandbox PATH=/usr/local/bin:/usr/bin:/bin \
+            bash -lc 'set -eu; \
+                test "$npm_config_prefix" = "$1/redirect"; \
+                case ":$PATH:" in *:"$1/redirect/bin":*) ;; *) exit 1 ;; esac' \
+            _ "$probe_dir" \
+        && rm -f /tmp/nemoclaw-proxy-env.sh; \
+    fi \
     && rm -rf "$probe_dir"
 
 # SQLite can select /var/tmp even when OpenShell denies writes there.

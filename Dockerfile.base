@@ -112,6 +112,10 @@ ENV AWS_EC2_METADATA_DISABLED=true
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install the Debian zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1 and apt 3.0.4
+# security updates from trixie-security. The Debian zlib carries the gzwrite
+# fix that the NemoClaw zlib backport supplied, so this image does not install
+# that backport.
 # Trixie has not published fixes for the reviewed libevent, jq, or Vim
 # advisories. Install the Expat 2.9.0-1~deb13u1 security update (#19) from the
 # 20261017T204620Z snapshot and fixed libevent, jq, and Vim packages from the
@@ -121,6 +125,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # The runtime Vim probe verifies the package that this layer installs.
 # hadolint ignore=DL3001,DL4006
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        apt=3.0.4 \
+        libapt-pkg7.0=3.0.4 \
+        zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
         python3=3.13.5-1 \
         python3-pip=25.1.1+dfsg-1 \
         python3-venv=3.13.5-1 \
@@ -229,7 +236,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         "$security_deb_dir/vim-tiny.deb" \
         /tmp/nemoclaw-native-security/libssh2-1t64.deb \
         /tmp/nemoclaw-native-security/nemoclaw-python3.13-htmlparser-fix.deb \
-        /tmp/nemoclaw-native-security/zlib1g.deb \
     && test "$(dpkg-query -W -f='${Version}' lsof)" = "4.99.4+dfsg-2" \
     && test "$(dpkg-query -W -f='${Version}' perl)" = "$perl_version_before" \
     && test "$(jq --version)" = "jq-1.8.2" \

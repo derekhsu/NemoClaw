@@ -55,10 +55,29 @@ export const BASE_APT_SECURITY_HASHES: Record<
   },
 };
 
+/** Packages whose installed version differs between the base images. */
+export type BaseAptImagePackages = Readonly<{
+  libexpat: BaseAptLibexpatPackage;
+  zlib1gVersion: string;
+}>;
+
+/** Hermes and Deep Agents Code: NemoClaw zlib backport. */
+export const SHARED_BASE_APT_PACKAGES: BaseAptImagePackages = {
+  libexpat: SHARED_LIBEXPAT_PACKAGE,
+  zlib1gVersion: "1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1",
+};
+
+/** OpenClaw: Debian expat, zlib, and apt security updates. */
+export const OPENCLAW_BASE_APT_PACKAGES: BaseAptImagePackages = {
+  libexpat: OPENCLAW_LIBEXPAT_PACKAGE,
+  zlib1gVersion: "1:1.3.dfsg+really1.3.1-1+deb13u1",
+};
+
 export function baseAptSecurityFunctions(
   architecture: DebianArchitecture,
-  libexpat: BaseAptLibexpatPackage = SHARED_LIBEXPAT_PACKAGE,
+  packages: BaseAptImagePackages = SHARED_BASE_APT_PACKAGES,
 ): string[] {
+  const { libexpat } = packages;
   const hashes = BASE_APT_SECURITY_HASHES[architecture];
   return [
     [
@@ -67,9 +86,10 @@ export function baseAptSecurityFunctions(
       `    printf "${architecture}\\n"`,
       '  elif [[ "$#" -eq 1 && "$1" == "--audit" ]]; then',
       "    return 0",
-      '  elif [[ "$#" -eq 11 && "$1" == "-i" && "${2##*/}" == "libexpat1.deb" && "${3##*/}" == "libevent-core-2.1-7t64.deb" && "${4##*/}" == "libonig5.deb" && "${5##*/}" == "libjq1.deb" && "${6##*/}" == "jq.deb" && "${7##*/}" == "vim-common.deb" && "${8##*/}" == "vim-tiny.deb" && "${9##*/}" == "libssh2-1t64.deb" && "${10##*/}" == "nemoclaw-python3.13-htmlparser-fix.deb" && "${11##*/}" == "zlib1g.deb" ]]; then',
+      // The OpenClaw base installs Debian's zlib1g update instead of the backport.
+      '  elif [[ "$#" -eq 10 && "$1" == "-i" && "${2##*/}" == "libexpat1.deb" && "${3##*/}" == "libevent-core-2.1-7t64.deb" && "${4##*/}" == "libonig5.deb" && "${5##*/}" == "libjq1.deb" && "${6##*/}" == "jq.deb" && "${7##*/}" == "vim-common.deb" && "${8##*/}" == "vim-tiny.deb" && "${9##*/}" == "libssh2-1t64.deb" && "${10##*/}" == "nemoclaw-python3.13-htmlparser-fix.deb" ]]; then',
       '    printf "dpkg-install\\n" >> "$call_log"',
-      '    [[ -f "$2" && -f "$3" && -f "$4" && -f "$5" && -f "$6" && -f "$7" && -f "$8" && -f "$9" && -f "${10}" && -f "${11}" ]]',
+      '    [[ -f "$2" && -f "$3" && -f "$4" && -f "$5" && -f "$6" && -f "$7" && -f "$8" && -f "$9" && -f "${10}" ]]',
       '  elif [[ "$#" -eq 10 && "$1" == "-i" && "${2##*/}" == "libexpat1.deb" && "${3##*/}" == "libonig5.deb" && "${4##*/}" == "libjq1.deb" && "${5##*/}" == "jq.deb" && "${6##*/}" == "vim-common.deb" && "${7##*/}" == "vim-tiny.deb" && "${8##*/}" == "libssh2-1t64.deb" && "${9##*/}" == "nemoclaw-python3.13-htmlparser-fix.deb" && "${10##*/}" == "zlib1g.deb" ]]; then',
       '    printf "dpkg-install\\n" >> "$call_log"',
       '    [[ -f "$2" && -f "$3" && -f "$4" && -f "$5" && -f "$6" && -f "$7" && -f "$8" && -f "$9" && -f "${10}" ]]',
@@ -82,7 +102,9 @@ export function baseAptSecurityFunctions(
       "dpkg-query() {",
       '  [[ "$#" -eq 3 && "$1" == "-W" && "$2" == \'-f=${Version}\' ]] || return 64',
       '  case "$3" in',
-      '    zlib1g) printf "1:1.3.dfsg+really1.3.1-1+b1+nemoclaw1" ;;',
+      `    zlib1g) printf "${packages.zlib1gVersion}" ;;`,
+      '    apt) printf "3.0.4" ;;',
+      '    libapt-pkg7.0) printf "3.0.4" ;;',
       '    libc6) printf "2.41-12+deb13u4" ;;',
       '    libc-bin) printf "2.41-12+deb13u4" ;;',
       '    bsdutils) printf "1:2.41.5-0+deb13u1" ;;',
@@ -231,5 +253,5 @@ export function baseAptSecurityFunctions(
 export const BASE_APT_SECURITY_FUNCTIONS = baseAptSecurityFunctions("arm64");
 export const OPENCLAW_BASE_APT_SECURITY_FUNCTIONS = baseAptSecurityFunctions(
   "arm64",
-  OPENCLAW_LIBEXPAT_PACKAGE,
+  OPENCLAW_BASE_APT_PACKAGES,
 );

@@ -294,6 +294,12 @@ OpenShell 0.1.x 沒有 explicit proxy(`10.200.0.1:3128`)與 `inference.local`,�
 `NEMOCLAW_PROXY_HOST` 為 0.0.x 預設值 `10.200.0.1` 以外的值時,0.1.x 映像仍會使用該 explicit proxy。
 `inference.local` 的預設 provider 仍保留,由 ClawShell 寫入 provider 設定時移除。
 
+Telegram 設定在 0.1.x 映像不再產生 `proxy`。
+messaging applier 是把新設定合併進既有的 `channels.telegram`,新設定沒有的欄位不會刪除。
+因此從 0.0.x 搬過來的沙箱,`channels.telegram.accounts.*.proxy` 會保留 `http://10.200.0.1:3128`,Telegram 會連不上。
+ClawShell 寫入 provider 設定時會移除 host 為 `10.200.0.1` 的 Telegram proxy(derekhsu/clawshell-gateway#290)。
+不經 ClawShell 管理的沙箱,要手動刪除這個欄位。
+
 ### 7.2 發布規則
 
 `scripts/openclaw-image-release.sh` 檢查以下規則,`test/openclaw-image-release.test.ts` 測試這些規則:

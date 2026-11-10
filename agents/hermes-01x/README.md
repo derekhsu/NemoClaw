@@ -18,7 +18,10 @@ model.
   release date (e.g. `2026.11.7`); it publishes
   `openshell01x-hermes-<semver>-<release>` plus `-amd64`/`-arm64`, with the
   Hermes version read from `Dockerfile.base`. It never moves `latest` or
-  `hermes-<calver>`.
+  `hermes-<calver>`. Before tagging, the workflow fails if either platform
+  image has more than 115 layers. Docker's overlay2 storage driver refuses an
+  image with more than 125 layers; Podman has no such limit (#70). To add a
+  build step, extend an existing `RUN` instruction.
 - There is no `manifest.yaml` here on purpose: the NemoClaw CLI discovers
   agents from `agents/*/manifest.yaml`, and the CLI's Hermes agent remains
   `agents/hermes/`. This image is consumed by ClawShell only.

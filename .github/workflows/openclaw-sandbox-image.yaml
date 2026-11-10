@@ -319,6 +319,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Docker's overlay2 storage driver refuses an image with more than 125
+      # layers (#70).
+      # Check both platform images before any tag points at them.
+      - name: Check image layer count
+        run: scripts/check-image-layer-count.sh "$(cat digests/amd64.txt)" "$(cat digests/arm64.txt)"
+
       - name: Create tags
         env:
           VARIANT: ${{ inputs.variant }}

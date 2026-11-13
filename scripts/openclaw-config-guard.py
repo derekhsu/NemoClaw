@@ -74,7 +74,17 @@ MAX_READY_BYTES = 4096
 PROC_ROOT = "/proc"
 MAX_PROC_ENTRIES = 32768
 NEMOCLAW_START_ARGV = (b"nemoclaw-start", b"/usr/local/bin/nemoclaw-start")
-OPENSHELL_SUPERVISOR_ARGV0 = b"/opt/openshell/bin/openshell-sandbox"
+# OpenShell launches its supervisor from a driver-specific path (#72): the
+# 0.0.x drivers and the 0.1.x Podman driver use /opt/openshell/bin, while the
+# 0.1.x Docker and Kubernetes drivers use /.openshell/runtime. Match argv0
+# exactly against this allowlist; never relax it to a prefix or basename match,
+# because an unknown PID 1 must keep failing closed.
+OPENSHELL_SUPERVISOR_ARGV0 = frozenset(
+    {
+        b"/opt/openshell/bin/openshell-sandbox",
+        b"/.openshell/runtime/openshell-sandbox",
+    }
+)
 NODE_BINARY_PATH = "/usr/local/bin/node"
 JSON5_MODULE_PATH = "/opt/nemoclaw/node_modules/json5"
 JSON5_VALIDATION_TIMEOUT_SECONDS = 5
@@ -653,7 +663,7 @@ def _cmdline_is_nemoclaw_start(raw: bytes) -> bool:
 
 def _cmdline_is_openshell_supervisor(raw: bytes) -> bool:
     arguments = raw.split(b"\0")
-    return bool(arguments and arguments[0] == OPENSHELL_SUPERVISOR_ARGV0)
+    return bool(arguments and arguments[0] in OPENSHELL_SUPERVISOR_ARGV0)
 
 
 def _parse_process_parent_pid(raw: bytes) -> int | None:

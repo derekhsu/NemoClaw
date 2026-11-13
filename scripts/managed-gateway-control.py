@@ -71,7 +71,15 @@ HERMES_BOUNDARY_PATH = (
     "/usr/local/lib/nemoclaw/validate-hermes-env-secret-boundary.py"
 )
 OPENCLAW_GUARD_PATH = "/usr/local/lib/nemoclaw/openclaw-config-guard.py"
-OPENSHELL_ARGV0 = b"/opt/openshell/bin/openshell-sandbox"
+# Exact per-driver supervisor paths (#72): /opt/openshell/bin for the 0.0.x
+# drivers and the 0.1.x Podman driver, /.openshell/runtime for the 0.1.x Docker
+# and Kubernetes drivers. Never relax this to a prefix or basename match.
+OPENSHELL_ARGV0 = frozenset(
+    {
+        b"/opt/openshell/bin/openshell-sandbox",
+        b"/.openshell/runtime/openshell-sandbox",
+    }
+)
 NEMOCLAW_START_PATH = b"/usr/local/bin/nemoclaw-start"
 MAX_PROC_ENTRIES = 32768
 MAX_PROC_FILE_BYTES = 1024 * 1024
@@ -950,7 +958,7 @@ def _is_openshell(identity: ProcessIdentity) -> bool:
         and identity.state != "Z"
         and identity.uids == (0, 0, 0, 0)
         and identity.namespace_pid == 1
-        and identity.cmdline[0] == OPENSHELL_ARGV0
+        and identity.cmdline[0] in OPENSHELL_ARGV0
     )
 
 

@@ -54,7 +54,17 @@ MCP_HASH_STATE_RE = re.compile(
     rf"{re.escape(MCP_HASH_STATE_PREFIX)} intended=([0-9a-f]{{64}}) applied=([0-9a-f]{{64}})"
 )
 NEMOCLAW_START_ARGV = (b"nemoclaw-start", b"/usr/local/bin/nemoclaw-start")
-OPENSHELL_SUPERVISOR_ARGV0 = b"/opt/openshell/bin/openshell-sandbox"
+# OpenShell 0.1.x launches its supervisor from a driver-specific path (#72):
+# the Podman driver bind-mounts it at /opt/openshell/bin, while the Docker and
+# Kubernetes drivers place it under /.openshell/runtime. Match argv0 exactly
+# against this allowlist; never relax it to a prefix or basename match, because
+# an unknown PID 1 must keep failing closed.
+OPENSHELL_SUPERVISOR_ARGV0 = frozenset(
+    {
+        b"/opt/openshell/bin/openshell-sandbox",
+        b"/.openshell/runtime/openshell-sandbox",
+    }
+)
 # Keep this in exact parity with manifest config_file + config.shields_files +
 # .config-hash. The host manifest remains authoritative for host transitions;
 # the integration test protects this separate in-image recovery boundary.
@@ -323,7 +333,7 @@ def _cmdline_is_nemoclaw_start(raw: bytes) -> bool:
 
 def _cmdline_is_openshell_supervisor(raw: bytes) -> bool:
     arguments = raw.split(b"\0")
-    return bool(arguments and arguments[0] == OPENSHELL_SUPERVISOR_ARGV0)
+    return bool(arguments and arguments[0] in OPENSHELL_SUPERVISOR_ARGV0)
 
 
 def _parse_process_parent_pid(raw: bytes) -> int | None:
@@ -389,8 +399,10 @@ def _pid1_is_nemoclaw_start() -> bool:
         if proc_root_fd >= 0:
             os.close(proc_root_fd)
     # SOURCE_OF_TRUTH_REVIEW (#6110): OpenShell owns PID 1 in Docker-driver
-    # sandboxes and starts the workload as its direct non-root child. NemoClaw's
-    # GPU recreate used to append that workload to the supervisor argv; the
+    # sandboxes (on 0.1.x also Podman and Kubernetes; OPENSHELL_SUPERVISOR_ARGV0
+    # lists the per-driver paths) and starts the workload as its direct
+    # non-root child. NemoClaw's GPU recreate used to append that workload to
+    # the supervisor argv; the
     # source fix is buildDockerGpuCloneRunArgs() in docker-gpu-patch.ts, which
     # now preserves an empty Config.Cmd. An attacker controlling an image or
     # recreate argv could otherwise append `nemoclaw-start`, impersonate direct

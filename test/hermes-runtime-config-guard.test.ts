@@ -1244,3 +1244,148 @@ print(json.dumps(captured))
     });
   });
 });
+
+// OpenShell 0.1.x puts the PID 1 supervisor at a driver-specific path (#72):
+// Podman uses /opt/openshell/bin, Docker and Kubernetes use /.openshell/runtime.
+// The 0.1.x guard accepts exactly those two argv0 values and nothing else.
+const HERMES_01X_RUNTIME_CONFIG_GUARD = path.join(
+  import.meta.dirname,
+  "..",
+  "agents",
+  "hermes-01x",
+  "runtime-config-guard.py",
+);
+
+const supervisorPid1Fixture = String.raw`
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+
+spec = importlib.util.spec_from_file_location("runtime_config_guard", sys.argv[1])
+guard = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = guard
+spec.loader.exec_module(guard)
+
+SANDBOX_UID = 998
+
+def prove(argv0, extra=(b"--bootstrap", b"/.openshell/channel/sandbox/bootstrap.json")):
+    with tempfile.TemporaryDirectory() as root:
+        process_dir = os.path.join(root, "proc", "1")
+        os.makedirs(os.path.join(process_dir, "ns"))
+        namespace = os.path.join(root, "pid-namespace")
+        with open(namespace, "wb") as stream:
+            stream.write(b"ns")
+        os.link(namespace, os.path.join(process_dir, "ns", "pid"))
+        with open(os.path.join(process_dir, "cmdline"), "wb") as stream:
+            stream.write(b"\0".join((argv0, *extra)) + b"\0")
+        fields = ["S", "0"] + (["0"] * 17) + ["424242"]
+        with open(os.path.join(process_dir, "stat"), "w", encoding="ascii") as stream:
+            stream.write(f"1 (openshell-sandbox) {' '.join(fields)}\n")
+        with open(os.path.join(process_dir, "status"), "w", encoding="ascii") as stream:
+            stream.write(f"Uid:\t{SANDBOX_UID}\t{SANDBOX_UID}\t{SANDBOX_UID}\t{SANDBOX_UID}\nNSpid:\t1\n")
+        guard.PROC_ROOT = os.path.join(root, "proc")
+        identity = guard._openshell_supervisor_identity(SANDBOX_UID)
+        direct = guard._pid1_is_nemoclaw_start()
+        return {"identity": identity is not None and identity[0] == "424242", "direct": direct}
+
+argv0s = [value.encode() for value in json.loads(sys.argv[2])]
+print(json.dumps([prove(argv0) for argv0 in argv0s]))
+`;
+
+function proveSupervisorPid1(guardPath: string, argv0s: readonly string[]) {
+  const result = spawnSync(
+    "python3",
+    ["-c", supervisorPid1Fixture, guardPath, JSON.stringify(argv0s)],
+    { encoding: "utf-8", timeout: 5000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as { identity: boolean; direct: boolean }[];
+}
+
+const UNKNOWN_SUPERVISOR_ARGV0 = [
+  "openshell-sandbox",
+  "/usr/bin/openshell-sandbox",
+  "/opt/openshell/bin/openshell-sandbox.real",
+  "/opt/openshell/bin/../bin/openshell-sandbox",
+  "/.openshell/runtime/../runtime/openshell-sandbox",
+  "/.openshell/runtime/openshell-sandbox/",
+  "/tmp/.openshell/runtime/openshell-sandbox",
+  "/.openshell/runtime/openshell-sandbox-shim",
+  "/.openshell/runtime/supervisor",
+] as const;
+
+describe("Hermes 0.1.x OpenShell supervisor PID 1 identity (#72)", () => {
+  it("proves the supervisor for the Podman and the Docker/Kubernetes driver paths", () => {
+    expect(
+      proveSupervisorPid1(HERMES_01X_RUNTIME_CONFIG_GUARD, [
+        "/opt/openshell/bin/openshell-sandbox",
+        "/.openshell/runtime/openshell-sandbox",
+      ]),
+    ).toEqual([
+      { identity: true, direct: false },
+      { identity: true, direct: false },
+    ]);
+  });
+
+  it("fails closed for every argv0 outside the exact allowlist", () => {
+    expect(proveSupervisorPid1(HERMES_01X_RUNTIME_CONFIG_GUARD, UNKNOWN_SUPERVISOR_ARGV0)).toEqual(
+      UNKNOWN_SUPERVISOR_ARGV0.map(() => ({ identity: false, direct: false })),
+    );
+  });
+
+  it("keeps the supervisor exclusion for a Docker-driver argv polluted with nemoclaw-start", () => {
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        `${loadGuardModule}
+import json
+nul = bytes([0])
+polluted = nul.join([
+    b"/.openshell/runtime/openshell-sandbox",
+    b"nemoclaw-start",
+]) + nul
+print(json.dumps({
+    "supervisor": guard._cmdline_is_openshell_supervisor(polluted),
+    "start": guard._cmdline_is_nemoclaw_start(polluted),
+}))
+`,
+        HERMES_01X_RUNTIME_CONFIG_GUARD,
+      ],
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ supervisor: true, start: false });
+  });
+
+  it("keeps the OpenShell 0.0.x guard pinned to the 0.0.101 supervisor path", () => {
+    // NemoClaw's OpenShell 0.0.x line is pinned to 0.0.101, whose drivers all
+    // run the supervisor from /opt/openshell/bin. Do not widen that guard.
+    const results = proveSupervisorPid1(RUNTIME_CONFIG_GUARD, [
+      "/opt/openshell/bin/openshell-sandbox",
+      "/.openshell/runtime/openshell-sandbox",
+    ]);
+    expect(results.map((result) => result.direct)).toEqual([false, false]);
+    // 0.0.x expects a root supervisor, so the sandbox-UID fixture never proves it;
+    // assert only that the new path is not accepted as a supervisor argv0.
+    const argv0 = spawnSync(
+      "python3",
+      [
+        "-c",
+        `${loadGuardModule}
+import json
+print(json.dumps([
+    guard._cmdline_is_openshell_supervisor(b"/opt/openshell/bin/openshell-sandbox"),
+    guard._cmdline_is_openshell_supervisor(b"/.openshell/runtime/openshell-sandbox"),
+]))
+`,
+        RUNTIME_CONFIG_GUARD,
+      ],
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    expect(argv0.status, argv0.stderr).toBe(0);
+    expect(JSON.parse(argv0.stdout)).toEqual([true, false]);
+  });
+});

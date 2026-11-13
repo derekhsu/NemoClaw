@@ -56,12 +56,18 @@ esac
 
 PID1_CMDLINE="$(tr '\0' ' ' <"${CONTROL_PROC_ROOT}/1/cmdline" 2>/dev/null || true)"
 PID1_ARGV0="$(tr '\0' '\n' <"${CONTROL_PROC_ROOT}/1/cmdline" 2>/dev/null | sed -n '1p' || true)"
-if [ "$PID1_ARGV0" = "/opt/openshell/bin/openshell-sandbox" ]; then
-  [ -x "$CONTROL_MANAGED_HELPER" ] || fail "SUPERVISOR_REBUILD_REQUIRED"
-  # Isolated mode ignores Python startup hooks, user-site packages, and
-  # PYTHON* environment variables before the root helper imports anything.
-  exec python3 -I "$CONTROL_MANAGED_HELPER" "$@"
-fi
+# Exact per-driver OpenShell supervisor paths (#72): /opt/openshell/bin for the
+# 0.0.x drivers and the 0.1.x Podman driver, /.openshell/runtime for the 0.1.x
+# Docker and Kubernetes drivers. The managed helper re-proves the full PID 1
+# identity; never relax this to a prefix or basename match.
+case "$PID1_ARGV0" in
+  /opt/openshell/bin/openshell-sandbox | /.openshell/runtime/openshell-sandbox)
+    [ -x "$CONTROL_MANAGED_HELPER" ] || fail "SUPERVISOR_REBUILD_REQUIRED"
+    # Isolated mode ignores Python startup hooks, user-site packages, and
+    # PYTHON* environment variables before the root helper imports anything.
+    exec python3 -I "$CONTROL_MANAGED_HELPER" "$@"
+    ;;
+esac
 [ "$ACTION" != "reload-managed-default" ] || fail "SUPERVISOR_REBUILD_REQUIRED"
 case "$PID1_CMDLINE" in
   *nemoclaw-start*) ;;

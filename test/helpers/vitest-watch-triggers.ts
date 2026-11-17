@@ -64,6 +64,10 @@ export const vitestWatchTriggerPatterns: VitestWatchTriggerPattern[] = [
     testsToRun: runTests("test/openclaw-image-release.test.ts"),
   },
   {
+    pattern: /(?:^|\/)scripts\/hermes-tools-image-release\.sh$/,
+    testsToRun: runTests("test/hermes-tools-image-release.test.ts"),
+  },
+  {
     pattern: /(?:^|\/)agents\/hermes\/policy-additions\.yaml$/,
     testsToRun: runTests(
       "src/lib/onboard/initial-policy-real-policy.test.ts",

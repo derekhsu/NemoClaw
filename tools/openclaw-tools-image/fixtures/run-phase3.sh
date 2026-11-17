@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 3 fixtures for the OpenClaw tools image (issue #16): Chromium,
-# Python Playwright, offline frontend builds, and p5.js.
+# Phase 3 fixtures for the OpenClaw tools image (issue #16) and the Hermes
+# tools image (issue #74): Chromium, Python Playwright, offline frontend
+# builds, p5.js, and for Hermes the agent-browser CLI.
 # Run the same way as run-phase2.sh, with no network. Any attempt to
 # download a browser or package fails the check.
 
@@ -34,7 +35,7 @@ HTML
 # Usage: browser_journey URL SCREENSHOT [EXECUTABLE]
 browser_journey() {
   # HOME=/sandbox exercises the default Playwright browser lookup.
-  HOME=${PW_HOME:-/sandbox} python3 - "$@" <<'PY'
+  HOME=${PW_HOME:-/sandbox} "$PY" - "$@" <<'PY'
 import sys
 from playwright.sync_api import sync_playwright
 url, shot = sys.argv[1], sys.argv[2]
@@ -106,7 +107,7 @@ function setup() { createCanvas(200, 100); background(255, 0, 0); noLoop(); }
 </body>
 </html>
 HTML
-  HOME=/sandbox python3 - "$WORK/sketch.html" "$WORK/p5.png" <<'PY'
+  HOME=/sandbox "$PY" - "$WORK/sketch.html" "$WORK/p5.png" <<'PY'
 import sys
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
@@ -123,10 +124,31 @@ PY
   cp p5.png "$OUT/files/"
 }
 
+# The Hermes browser tool drives Chromium through the base image's
+# agent-browser. Use the flags OpenClaw uses on OpenShell, whose seccomp
+# refuses Chromium's own sandbox (#27).
+agent_browser() {
+  local ab=/opt/hermes/node_modules/.bin/agent-browser out rc=0
+  printf '<!doctype html><title>fixture</title><h1>agent-browser fixture</h1>\n' >agent-browser.html
+  export AGENT_BROWSER_EXECUTABLE_PATH=/usr/lib/chromium/chromium
+  export AGENT_BROWSER_ARGS=--no-sandbox,--no-zygote,--disable-gpu
+  export AGENT_BROWSER_SOCKET_DIR=$WORK/agent-browser
+  mkdir -p "$AGENT_BROWSER_SOCKET_DIR"
+  "$ab" --version
+  timeout 90 "$ab" open "file://$WORK/agent-browser.html" || rc=1
+  out=$(timeout 60 "$ab" get text h1) || rc=1
+  "$ab" close --all || true
+  echo "$out"
+  [ "$rc" -eq 0 ] && grep -q 'agent-browser fixture' <<<"$out"
+}
+
 check chromium_cli chromium_cli
 check playwright_default playwright_default
 check playwright_shared playwright_shared
 check frontend_offline frontend_offline
 check p5js p5js
+if [ "$AGENT" = hermes ]; then
+  check agent_browser agent_browser
+fi
 
 finish

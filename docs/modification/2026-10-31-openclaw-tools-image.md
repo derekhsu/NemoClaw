@@ -421,6 +421,11 @@ fork 上的 GitHub Actions workflow 在原生 runner 上建置 `Dockerfile.tools
 
 workflow 以 `run-fixtures.sh` 執行 track `fixtures.md` 中的 fixture、執行 Trivy 掃描並上傳輸出。
 這個驗證 workflow 不推送映像。它使用與發布 workflow 相同的 Dockerfile、平台與 fixture。
+`check-image.sh` 另外要求 tools layer 新增的 setuid、setgid 與 file capability 檔案都列在 `privileged-files-added.txt`。
+
+Hermes tools 映像(#74)共用這些 fixture,以 `run-fixtures.sh IMAGE OUT hermes` 執行,見 [Hermes tools 映像說明](2026-11-17-hermes-tools-image.md)。
+不帶第三個參數時以 OpenClaw 映像執行,行為與原本相同。
+`base_security_checks` 的 `dpkg --audit` 改為先存進變數再判斷,讀不到 dpkg 資料時檢查會失敗(#30)。
 
 fixture 的執行條件:
 

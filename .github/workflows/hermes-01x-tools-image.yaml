@@ -1,0 +1,259 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Build and publish the Hermes tools image for OpenShell 0.1.x
+# (derekhsu/NemoClaw#74) from agents/hermes-01x/Dockerfile.tools.
+# Fork-only manual workflow.
+#
+# The base is the published Hermes image pinned by ARG BASE_IMAGE in that
+# Dockerfile. The release tag is <base tag>-tools.<n>, for example
+# openshell01x-hermes-0.21.3-2026.11.13-tools.1, plus -amd64 and -arm64 tags.
+# The workflow never writes the base image's tags. Deployments use this image
+# only when they select it.
+#
+# scripts/hermes-tools-image-release.sh owns the tag rules: it rejects existing
+# release tags and runs only in derekhsu/NemoClaw from feat/image-only-cli.
+#
+# Required Actions secrets on this fork:
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+
+name: Images / Hermes Tools OpenShell 0.1.x
+
+on:
+  workflow_dispatch:
+    inputs:
+      tools_release:
+        description: "Tools release number n; the tag becomes <base tag>-tools.<n>"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-01x-tools-image-publish
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: docker.io/derekhsu/openshell-hermes
+
+jobs:
+  plan:
+    name: Check release request
+    runs-on: ubuntu-24.04
+    outputs:
+      base_image: ${{ steps.plan.outputs.base_image }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check tag, ref, and existing tags
+        id: plan
+        env:
+          TOOLS_RELEASE: ${{ inputs.tools_release }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: scripts/hermes-tools-image-release.sh plan
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      TOOLS_IMAGE: nemoclaw-hermes-tools:release
+      BASE_IMAGE: ${{ needs.plan.outputs.base_image }}
+      OUT: ${{ github.workspace }}/tools-image-evidence
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free runner disk
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+          df -h /
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Guard production build args
+        run: scripts/check-production-build-args.sh
+
+      # Build and test before logging in, so registry credentials are not on
+      # the runner while the image and its fixtures run. The tools image keeps
+      # no build cache in GitHub Actions, so it cannot evict the Hermes image
+      # caches.
+      - name: Build ${{ matrix.platform }} tools image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: agents/hermes-01x/Dockerfile.tools
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.TOOLS_IMAGE }}
+          load: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Compare with base image
+        run: tools/openclaw-tools-image/fixtures/check-image.sh "$BASE_IMAGE" "$TOOLS_IMAGE" "$OUT/image" hermes
+
+      - name: Compare startup with base image
+        run: agents/hermes-01x/check-tools-start.sh "$BASE_IMAGE" "$TOOLS_IMAGE" "$OUT/startup"
+
+      - name: Run fixtures offline as sandbox
+        run: tools/openclaw-tools-image/fixtures/run-fixtures.sh "$TOOLS_IMAGE" "$OUT/fixtures" hermes
+
+      - name: Read base digest reference
+        id: base
+        run: |
+          set -euo pipefail
+          name=${BASE_IMAGE%%@*}
+          echo "digest_ref=${name%:*}@${BASE_IMAGE#*@}" >>"$GITHUB_OUTPUT"
+
+      - name: Scan tools image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.TOOLS_IMAGE }}
+          format: json
+          output: tools-image-evidence/trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Scan base image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.base.outputs.digest_ref }}
+          format: json
+          output: tools-image-evidence/trivy-base.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Reject findings added by the tools layer
+        run: |
+          python3 tools/openclaw-tools-image/fixtures/trivy-new-findings.py \
+            "$OUT/trivy-base.json" "$OUT/trivy.json" "$OUT/trivy-added.json"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Same inputs as the tested build, so this step reuses its layers.
+      # Push only the digest; the publish job creates the tags.
+      - name: Push ${{ matrix.platform }} tools image by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: agents/hermes-01x/Dockerfile.tools
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Record platform digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: invalid digest: $DIGEST" >&2
+            exit 1
+          fi
+          mkdir -p digests
+          printf '%s\n' "$IMAGE_NAME@$DIGEST" > "digests/${{ matrix.arch }}.txt"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-digest-hermes-tools-${{ matrix.arch }}
+          path: digests/
+          retention-days: 7
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-tools-image-evidence-${{ matrix.arch }}
+          path: tools-image-evidence
+          retention-days: 30
+
+  publish-manifest:
+    name: Publish multi-arch manifest
+    runs-on: ubuntu-24.04
+    needs: [plan, build]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: platform-digest-hermes-tools-*
+          path: digests
+          merge-multiple: true
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Docker's overlay2 storage driver refuses an image with more than 125
+      # layers (#70).
+      # Check both platform images before any tag points at them.
+      - name: Check image layer count
+        run: scripts/check-image-layer-count.sh "$(cat digests/amd64.txt)" "$(cat digests/arm64.txt)"
+
+      - name: Create tags
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          DIGEST_DIR: digests
+        run: scripts/hermes-tools-image-release.sh publish
+
+  # A failed architecture leaves the other one pushed by digest with no tag.
+  report-untagged-digests:
+    name: Report untagged digests
+    runs-on: ubuntu-24.04
+    needs: build
+    if: always() && needs.build.result == 'failure'
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: platform-digest-hermes-tools-*
+          path: digests
+          merge-multiple: true
+
+      - name: List digests pushed without a tag
+        run: |
+          set -euo pipefail
+          {
+            echo "### Not published"
+            echo
+            echo "An architecture failed, so no tag was written. Pushed by digest only:"
+            echo
+            found=0
+            for file in digests/*.txt; do
+              [ -f "$file" ] || continue
+              found=1
+              echo "- $(basename "$file" .txt): \`$(cat "$file")\`"
+            done
+            [ "$found" = 1 ] || echo "- none"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

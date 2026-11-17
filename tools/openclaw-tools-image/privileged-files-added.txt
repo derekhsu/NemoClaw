@@ -1,0 +1,11 @@
+# Setuid, setgid, and file-capability files that the tools layer may add to
+# its base image. fixtures/check-image.sh fails on any other added file.
+# Format: <setuid|setgid|caps> <path>; <multiarch> stands for the Debian
+# multiarch directory (x86_64-linux-gnu or aarch64-linux-gnu).
+#
+# Under no_new_privs, which the fixtures use, neither the setuid bit nor the
+# file capabilities take effect.
+# dbus (LibreOffice dependency): D-Bus system service activation helper.
+setuid /usr/lib/dbus-1.0/dbus-daemon-launch-helper
+# GStreamer (LibreOffice media dependency): PTP clock helper.
+caps /usr/lib/<multiarch>/gstreamer1.0/gstreamer-1.0/gst-ptp-helper

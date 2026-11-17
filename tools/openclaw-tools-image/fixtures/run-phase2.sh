@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Phase 2 fixtures for the OpenClaw tools image (issue #16).
+# Phase 2 fixtures for the OpenClaw tools image (issue #16) and the Hermes
+# tools image (issue #74). Set NEMOCLAW_TOOLS_AGENT=hermes for the Hermes image;
+# run-fixtures.sh does this.
 # Run inside the image as the sandbox user with no network:
 #   docker run --rm --user sandbox --network none --read-only \
 #     --tmpfs /tmp:rw,exec,size=2g --cap-drop ALL \
@@ -51,15 +53,23 @@ controlled_packages() {
 base_security_checks() {
   test "$(perl -e 'print $^V')" = v5.44.0
   grep -Eq 'libonig[.]so[.]5' <<<"$(ldd /usr/bin/jq)"
-  test "$(tmux -V)" = "tmux 3.5a"
   test "$(jq --version)" = jq-1.8.2
-  PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.9.0', pyexpat.EXPAT_VERSION"
+  # The Hermes base ships no tmux and controls a different expat version;
+  # controlled_packages checks that version.
+  if [ "$AGENT" = openclaw ]; then
+    test "$(tmux -V)" = "tmux 3.5a"
+    PATH=/usr/bin:/bin python3 -c "import pyexpat; assert pyexpat.EXPAT_VERSION == 'expat_2.9.0', pyexpat.EXPAT_VERSION"
+  fi
   printf '%s  %s\n' 4ff43a8578bda2f14686c67911b64c18e869841973722b1c623b5727491bdaf7 \
     /usr/lib/python3.13/html/parser.py | sha256sum -c -
   PATH=/usr/bin:/bin python3 -c "import ctypes, sys; lib=ctypes.CDLL('libssh2.so.1'); lib.libssh2_version.restype=ctypes.c_char_p; lib.libssh2_version(0) == b'1.11.1' or sys.exit('unexpected libssh2')"
   grep -Eq '^VIM - Vi IMproved 9[.]2 ' <<<"$(vim.tiny --version | head -n 1)"
   grep -Fx 'Included patches: 1-858' <<<"$(vim.tiny --version)"
-  test -z "$(dpkg --audit)"
+  # Assign first: a failing command substitution inside test does not stop
+  # the check (#30).
+  local audit
+  audit=$(dpkg --audit)
+  test -z "$audit"
 }
 
 fontconfig_cache() {
@@ -104,7 +114,7 @@ const PptxGenJS = require("pptxgenjs");
 })();
 JS
   node make-office.cjs
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 from openpyxl import Workbook
 wb = Workbook()
 ws = wb.active
@@ -166,7 +176,7 @@ spreadsheet_recalc() {
   mkdir -p recalc
   soffice "-env:UserInstallation=file://$profile" --headless \
     --convert-to 'xlsx:Calc MS Excel 2007 XML' --outdir recalc sheet.xlsx
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 from openpyxl import load_workbook
 value = load_workbook("recalc/sheet.xlsx", data_only=True).active["A2"].value
 print("A2 =", value)
@@ -180,7 +190,7 @@ pdf_tools() {
   test -s page-1.png
   pdfimages -list "$pdf"
   qpdf --check "$pdf"
-  python3 - "$pdf" <<'PY'
+  "$PY" - "$pdf" <<'PY'
 import sys, pdfplumber, pypdf
 path = sys.argv[1]
 a = "".join(p.extract_text() or "" for p in pypdf.PdfReader(path).pages)
@@ -211,7 +221,7 @@ EPS
 }
 
 ocr() {
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import subprocess
 from PIL import Image, ImageDraw, ImageFont
 font_path = subprocess.check_output(["fc-match", "-f", "%{file}", "Noto Sans CJK TC"], text=True)
@@ -243,7 +253,7 @@ PY
   done
   grep -q 'Hello OCR 2026' ocr-eng.txt
   # Tesseract 4.1 CJK data can misread a glyph; require 80% similarity.
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import difflib
 for lang, expected in {"chi_tra": "這是中文測試文件臺北市政府公告", "chi_sim": "这是中文测试文件北京市政府公告"}.items():
     got = "".join(open(f"ocr-{lang}.txt", encoding="utf-8").read().split())
@@ -251,7 +261,7 @@ for lang, expected in {"chi_tra": "這是中文測試文件臺北市政府公告
     print(lang, got, round(ratio, 2))
     assert ratio >= 0.8, (lang, got, ratio)
 PY
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import pytesseract
 from pdf2image import convert_from_path
 page = convert_from_path("eps.pdf", dpi=200)[0]
@@ -292,7 +302,7 @@ media() {
     -f lavfi -i sine=frequency=440:duration=2 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest clip.mp4
   ffmpeg -hide_banner -loglevel error -i clip.mp4 -c:v libvpx-vp9 -b:v 200k -c:a libopus clip.webm
   ffprobe -v error -of json -show_streams -show_format clip.webm >probe.json
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import json
 d = json.load(open("probe.json"))
 video = next(s for s in d["streams"] if s["codec_type"] == "video")
@@ -302,7 +312,7 @@ assert (video["width"], video["height"]) == (320, 240)
 assert audio["codec_name"] == "opus", audio["codec_name"]
 assert 1.5 < float(d["format"]["duration"]) < 2.5, d["format"]["duration"]
 PY
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import os
 import imageio.v2 as imageio
 import imageio_ffmpeg
@@ -316,7 +326,7 @@ PY
 }
 
 charts() {
-  python3 -W error::UserWarning - <<'PY'
+  "$PY" -W error::UserWarning - <<'PY'
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -367,6 +377,8 @@ himalaya_journey() {
   grep -q 'hello from maildir' <<<"$(himalaya message read 1.eml)"
   himalaya message copy --to Archive 1.eml
   jq -e '.envelopes | length == 1' <<<"$(himalaya --json envelope list -m Archive)"
+  # Only the OpenClaw image ships a himalaya skill.
+  [ "$AGENT" = openclaw ] || return 0
   # The image replaces the bundled v1 skill with a v2 copy in the state dir.
   local skill=/sandbox/.openclaw/skills/himalaya/SKILL.md
   grep -q '^name: himalaya$' "$skill"
@@ -415,15 +427,27 @@ browser_config() {
     | grep -q '<title>browser-fixture</title>'
 }
 
+hermes_python() {
+  # PATH still resolves python3 to the Hermes virtual environment, and the
+  # tools layer adds nothing to it.
+  test "$(command -v python3)" = /opt/hermes/.venv/bin/python3
+  if python3 -c 'import openpyxl' 2>/dev/null; then
+    echo "the Hermes virtual environment imports a tools package"
+    return 1
+  fi
+  python3 -c 'import hermes_cli'
+  test "$(/usr/bin/python3 -c 'import openpyxl, sys; print(sys.prefix)')" = /usr
+}
+
 python_libraries() {
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import importlib
 for name in ["anthropic", "mcp", "yaml", "playwright", "markitdown", "pptx",
              "lxml", "defusedxml", "pandas", "numpy", "reportlab"]:
     importlib.import_module(name)
 print("ok")
 PY
-  grep -q 'Latin Test' <<<"$(python3 -m markitdown slides.pptx)"
+  grep -q 'Latin Test' <<<"$("$PY" -m markitdown slides.pptx)"
 }
 
 node_resolution() {
@@ -440,7 +464,11 @@ check fontconfig_cache fontconfig_cache
 check office_create office_create
 check officecli_journey officecli_journey
 check himalaya_journey himalaya_journey
-check himalaya_skill_override himalaya_skill_override
+if [ "$AGENT" = openclaw ]; then
+  check himalaya_skill_override himalaya_skill_override
+else
+  skip himalaya_skill_override "OpenClaw skill"
+fi
 check office_to_pdf office_to_pdf
 check spreadsheet_recalc spreadsheet_recalc
 check pdf_tools pdf_tools
@@ -452,7 +480,12 @@ check metadata metadata
 check media media
 check charts charts
 check workspace workspace
-check browser_config browser_config
+if [ "$AGENT" = openclaw ]; then
+  check browser_config browser_config
+else
+  skip browser_config "OpenClaw browser tool config"
+  check hermes_python hermes_python
+fi
 check python_libraries python_libraries
 check node_resolution node_resolution
 

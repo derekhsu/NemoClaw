@@ -22,6 +22,14 @@ model.
   image has more than 115 layers. Docker's overlay2 storage driver refuses an
   image with more than 125 layers; Podman has no such limit (#70). To add a
   build step, extend an existing `RUN` instruction.
+- Tools image (#74): `Dockerfile.tools` adds the document, PDF/OCR, media,
+  browser, and workspace tools of the OpenClaw tools image to a published
+  image pinned by `BASE_IMAGE`. It is verified by
+  `.github/workflows/hermes-tools-image-verify.yaml` and published as
+  `<base tag>-tools.<n>` by `.github/workflows/hermes-01x-tools-image.yaml`.
+  Its Python packages are in the system interpreter: run them with
+  `/usr/bin/python3`, because `python3` on `PATH` is Hermes' own virtual
+  environment. See `docs/modification/2026-11-17-hermes-tools-image.md`.
 - There is no `manifest.yaml` here on purpose: the NemoClaw CLI discovers
   agents from `agents/*/manifest.yaml`, and the CLI's Hermes agent remains
   `agents/hermes/`. This image is consumed by ClawShell only.

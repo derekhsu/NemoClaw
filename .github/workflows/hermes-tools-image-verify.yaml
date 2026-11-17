@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Build the Hermes tools image (issue #74) on native amd64 and arm64 runners,
+# compare it and its startup with the base image, run the shared tools
+# fixtures offline as the sandbox user, and scan it. The base is ARG
+# BASE_IMAGE in agents/hermes-01x/Dockerfile.tools.
+# Fork-only verification: this workflow never pushes an image.
+
+name: Images / Hermes Tools Verify
+
+on:
+  pull_request:
+    branches:
+      - feat/image-only-cli
+    paths:
+      - agents/hermes-01x/Dockerfile.tools
+      - agents/hermes-01x/check-tools-start.sh
+      - tools/openclaw-tools-image/**
+      - scripts/hermes-tools-image-release.sh
+      - .github/workflows/hermes-tools-image-verify.yaml
+      - .github/workflows/hermes-01x-tools-image.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-tools-image-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.arch }}
+    if: github.repository == 'derekhsu/NemoClaw'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      TOOLS_IMAGE: nemoclaw-hermes-tools:ci
+      OUT: ${{ github.workspace }}/tools-image-evidence
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Free runner disk
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+          df -h /
+
+      - name: Read base image
+        id: base
+        run: |
+          set -euo pipefail
+          ref=$(sed -n 's/^ARG BASE_IMAGE=//p' agents/hermes-01x/Dockerfile.tools | head -n1)
+          case "$ref" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned: $ref" >&2; exit 1 ;; esac
+          echo "ref=$ref" >>"$GITHUB_OUTPUT"
+          # The same image without its tag, for tools that read only one of
+          # tag or digest.
+          name=${ref%%@*}
+          echo "digest_ref=${name%:*}@${ref#*@}" >>"$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Guard production build args
+        run: scripts/check-production-build-args.sh
+
+      # Same Dockerfile, platform, and checks as hermes-01x-tools-image.yaml.
+      - name: Build tools image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: agents/hermes-01x/Dockerfile.tools
+          platforms: linux/${{ matrix.arch }}
+          tags: ${{ env.TOOLS_IMAGE }}
+          build-args: BASE_IMAGE=${{ steps.base.outputs.ref }}
+          load: true
+
+      - name: Compare with base image
+        run: tools/openclaw-tools-image/fixtures/check-image.sh "${{ steps.base.outputs.ref }}" "$TOOLS_IMAGE" "$OUT/image" hermes
+
+      - name: Compare startup with base image
+        run: agents/hermes-01x/check-tools-start.sh "${{ steps.base.outputs.ref }}" "$TOOLS_IMAGE" "$OUT/startup"
+
+      - name: Run fixtures offline as sandbox
+        run: tools/openclaw-tools-image/fixtures/run-fixtures.sh "$TOOLS_IMAGE" "$OUT/fixtures" hermes
+
+      - name: Scan with Trivy
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.TOOLS_IMAGE }}
+          format: json
+          output: tools-image-evidence/trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Scan base image with Trivy
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.base.outputs.digest_ref }}
+          format: json
+          output: tools-image-evidence/trivy-base.json
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      # Release rule: the tools layer adds no fixable CRITICAL or HIGH
+      # finding. Findings inherited from the base are fixed by rebuilding
+      # the Hermes image.
+      - name: Reject findings added by the tools layer
+        run: |
+          python3 tools/openclaw-tools-image/fixtures/trivy-new-findings.py \
+            "$OUT/trivy-base.json" "$OUT/trivy.json" "$OUT/trivy-added.json"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-tools-image-evidence-${{ matrix.arch }}
+          path: tools-image-evidence
+          retention-days: 30

@@ -125,21 +125,28 @@ PY
 }
 
 # The Hermes browser tool drives Chromium through the base image's
-# agent-browser. Use the flags OpenClaw uses on OpenShell, whose seccomp
-# refuses Chromium's own sandbox (#27).
+# agent-browser with no browser settings of its own. agent-browser starts the
+# Debian /usr/bin/chromium wrapper, and /etc/chromium.d/nemoclaw-openshell adds
+# the flags that OpenShell's seccomp requires (#27, #74).
 agent_browser() {
-  local ab=/opt/hermes/node_modules/.bin/agent-browser out rc=0
+  local ab=/opt/hermes/node_modules/.bin/agent-browser flags=/etc/chromium.d/nemoclaw-openshell out procs rc=0
+  test "$(stat -c '%U:%G %a' "$flags")" = "root:root 644"
+  # The line is shell code for the wrapper, matched literally.
+  # shellcheck disable=SC2016
+  grep -Fx 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --no-zygote --disable-gpu"' "$flags"
   printf '<!doctype html><title>fixture</title><h1>agent-browser fixture</h1>\n' >agent-browser.html
-  export AGENT_BROWSER_EXECUTABLE_PATH=/usr/lib/chromium/chromium
-  export AGENT_BROWSER_ARGS=--no-sandbox,--no-zygote,--disable-gpu
+  unset AGENT_BROWSER_EXECUTABLE_PATH AGENT_BROWSER_ARGS AGENT_BROWSER_CHROME_FLAGS
   export AGENT_BROWSER_SOCKET_DIR=$WORK/agent-browser
   mkdir -p "$AGENT_BROWSER_SOCKET_DIR"
   "$ab" --version
   timeout 90 "$ab" open "file://$WORK/agent-browser.html" || rc=1
   out=$(timeout 60 "$ab" get text h1) || rc=1
+  # The browser process runs /usr/lib/chromium/chromium with the wrapper's flags.
+  procs=$(pgrep -cf '^/usr/lib/chromium/chromium .*--no-sandbox.*--no-zygote' || true)
   "$ab" close --all || true
   echo "$out"
-  [ "$rc" -eq 0 ] && grep -q 'agent-browser fixture' <<<"$out"
+  echo "chromium processes with the OpenShell flags: $procs"
+  [ "$rc" -eq 0 ] && [ "$procs" -gt 0 ] && grep -q 'agent-browser fixture' <<<"$out"
 }
 
 check chromium_cli chromium_cli

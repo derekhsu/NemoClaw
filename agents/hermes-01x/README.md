@@ -29,7 +29,11 @@ model.
   `<base tag>-tools.<n>` by `.github/workflows/hermes-01x-tools-image.yaml`.
   Its Python packages are in the system interpreter: run them with
   `/usr/bin/python3`, because `python3` on `PATH` is Hermes' own virtual
-  environment. See `docs/modification/2026-11-17-hermes-tools-image.md`.
+  environment. From `tools.2`, the Hermes browser tools run the pinned
+  agent-browser on the image's Chromium: `config.yaml` sets
+  `browser.backend: "off"` (no Browser Use CLI fetched by `uvx`) and
+  `/etc/chromium.d/nemoclaw-openshell` adds the flags OpenShell's seccomp
+  needs. See `docs/modification/2026-11-17-hermes-tools-image.md`.
 - There is no `manifest.yaml` here on purpose: the NemoClaw CLI discovers
   agents from `agents/*/manifest.yaml`, and the CLI's Hermes agent remains
   `agents/hermes/`. This image is consumed by ClawShell only.

@@ -439,6 +439,23 @@ hermes_python() {
   test "$(/usr/bin/python3 -c 'import openpyxl, sys; print(sys.prefix)')" = /usr
 }
 
+hermes_browser_backend() {
+  # The tools image keeps Hermes on its built-in browser tools (agent-browser
+  # and the image's Chromium), not the Browser Use CLI that uvx would fetch.
+  grep -A3 '^browser:$' /sandbox/.hermes/config.yaml | grep -Fx '  backend: "off"'
+  sha256sum -c /etc/nemoclaw/hermes.config-hash
+  cmp /etc/nemoclaw/hermes.config-hash /sandbox/.hermes/.config-hash
+  (cd /opt/hermes && HERMES_HOME=/sandbox/.hermes python3 -I -c '
+import sys
+sys.path.insert(0, "/opt/hermes")
+from tools.browser_use_cli import is_browser_use_cli_mode
+from tools.browser_tool_install import check_browser_requirements
+assert not is_browser_use_cli_mode(), "Browser Use CLI mode"
+assert check_browser_requirements(), "built-in browser tools unavailable"
+print("built-in browser tools")
+')
+}
+
 python_libraries() {
   "$PY" - <<'PY'
 import importlib
@@ -485,6 +502,7 @@ if [ "$AGENT" = openclaw ]; then
 else
   skip browser_config "OpenClaw browser tool config"
   check hermes_python hermes_python
+  check hermes_browser_backend hermes_browser_backend
 fi
 check python_libraries python_libraries
 check node_resolution node_resolution

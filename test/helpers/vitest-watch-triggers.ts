@@ -68,6 +68,10 @@ export const vitestWatchTriggerPatterns: VitestWatchTriggerPattern[] = [
     testsToRun: runTests("test/hermes-tools-image-release.test.ts"),
   },
   {
+    pattern: /(?:^|\/)agents\/hermes-01x\/configure-tools-browser\.py$/,
+    testsToRun: runTests("test/hermes-tools-browser-config.test.ts"),
+  },
+  {
     pattern: /(?:^|\/)agents\/hermes\/policy-additions\.yaml$/,
     testsToRun: runTests(
       "src/lib/onboard/initial-policy-real-policy.test.ts",

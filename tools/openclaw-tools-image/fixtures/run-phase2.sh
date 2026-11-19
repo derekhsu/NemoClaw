@@ -456,6 +456,24 @@ print("built-in browser tools")
 ')
 }
 
+hermes_dashboard_seed() {
+  # The dashboard profile gets the gateway model and the managed browser
+  # backend: the seeder accepts config.yaml only when every managed section
+  # equals the image's managed policy (#79).
+  local dashboard=$WORK/dashboard-config.yaml
+  /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py \
+    /usr/local/share/nemoclaw/hermes-managed-policy.json /sandbox/.hermes/config.yaml "$dashboard"
+  /opt/hermes/.venv/bin/python -I - "$dashboard" <<'PY'
+import sys
+import yaml
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = yaml.safe_load(handle)
+assert isinstance(config.get("model"), dict) and config["model"].get("default"), "no model"
+assert config["browser"]["backend"] == "off", config["browser"]
+print("dashboard model", config["model"]["default"], "browser.backend off")
+PY
+}
+
 python_libraries() {
   "$PY" - <<'PY'
 import importlib
@@ -503,6 +521,7 @@ else
   skip browser_config "OpenClaw browser tool config"
   check hermes_python hermes_python
   check hermes_browser_backend hermes_browser_backend
+  check hermes_dashboard_seed hermes_dashboard_seed
 fi
 check python_libraries python_libraries
 check node_resolution node_resolution

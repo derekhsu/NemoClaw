@@ -63,7 +63,7 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 
 | 類別 | 套件與版本 |
 |------|------------|
-| Office | `libreoffice-core`、`libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress` `4:25.2.3-2+deb13u9` |
+| Office | `libreoffice-core`、`libreoffice-writer`、`libreoffice-calc`、`libreoffice-impress` `4:25.2.3-2+deb13u12` |
 | PDF 與轉檔 | `pandoc 3.1.11.1+ds-2`、`poppler-utils 25.03.0-5+deb13u4`、`qpdf 12.2.0-1`、`ghostscript 10.05.1~dfsg-1+deb13u3` |
 | OCR | `tesseract-ocr 5.5.0-1+b1`;語言資料 `eng`、`chi-tra`、`chi-sim` `1:4.1.0-2` |
 | 圖片與影音 | `imagemagick 8:7.1.1.43+dfsg1-1+deb13u14`(提供 `magick`)、`ffmpeg 7:7.1.5-0+deb13u1`(含 `ffprobe`)、`libimage-exiftool-perl 13.25+dfsg-1` |

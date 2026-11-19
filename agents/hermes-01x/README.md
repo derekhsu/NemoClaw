@@ -33,7 +33,11 @@ model.
   agent-browser on the image's Chromium: `config.yaml` sets
   `browser.backend: "off"` (no Browser Use CLI fetched by `uvx`) and
   `/etc/chromium.d/nemoclaw-openshell` adds the flags OpenShell's seccomp
-  needs. See `docs/modification/2026-11-17-hermes-tools-image.md`.
+  needs. The dashboard config seeder copies the gateway config only when
+  every managed section matches the managed policy
+  (`/usr/local/share/nemoclaw/hermes-managed-policy.json`). `tools.2` changed
+  only `config.yaml`, so the Dashboard got no model (#79). From `tools.3`,
+  the policy also sets and manages `browser.backend`. See `docs/modification/2026-11-17-hermes-tools-image.md`.
 - There is no `manifest.yaml` here on purpose: the NemoClaw CLI discovers
   agents from `agents/*/manifest.yaml`, and the CLI's Hermes agent remains
   `agents/hermes/`. This image is consumed by ClawShell only.

@@ -5,8 +5,8 @@
 
 > **日期**: 2026-11-17
 > **Fork**: `derekhsu/NemoClaw`
-> **Issue**: [#74](https://github.com/derekhsu/NemoClaw/issues/74)
-> **狀態**: `tools.1` 已發布並在 OpenShell 0.1.7 sandbox 驗收。第二階段(`tools.2` 起)開啟 Hermes browser 工具。
+> **Issue**: [#74](https://github.com/derekhsu/NemoClaw/issues/74)、[#79](https://github.com/derekhsu/NemoClaw/issues/79)
+> **狀態**: `tools.1` 已發布並在 OpenShell 0.1.7 sandbox 驗收。第二階段(`tools.2` 起)開啟 Hermes browser 工具。`tools.2` 的 Dashboard 拿不到模型設定,`tools.3` 修正(#79)。
 
 ## 1. 摘要
 
@@ -75,10 +75,12 @@ Node.js 套件、LibreOffice、officecli、OCR、pandoc、ImageMagick、ffmpeg�
 
 | 設定 | 位置 | 原因 |
 |------|------|------|
-| `browser.backend: "off"` | `/sandbox/.hermes/config.yaml` | 沒有設定時,只要 `PATH` 上有 `uvx`,Hermes 就改用 Browser Use CLI:模型只拿到 `browser_exec`,第一次使用時以 `uvx browser-use` 從 PyPI 下載未鎖版本的套件。`off` 讓 Hermes 使用內建的 browser 工具 |
+| `browser.backend: "off"` | `/sandbox/.hermes/config.yaml`;`tools.3` 起也寫進 managed policy `/usr/local/share/nemoclaw/hermes-managed-policy.json`,並列入受管路徑 | 沒有設定時,只要 `PATH` 上有 `uvx`,Hermes 就改用 Browser Use CLI:模型只拿到 `browser_exec`,第一次使用時以 `uvx browser-use` 從 PyPI 下載未鎖版本的套件。`off` 讓 Hermes 使用內建的 browser 工具 |
 | `--no-sandbox --no-zygote --disable-gpu` | `/etc/chromium.d/nemoclaw-openshell` | agent-browser 啟動 `/usr/bin/chromium`,這個 Debian 包裝腳本會讀 `/etc/chromium.d` 的參數再執行 `/usr/lib/chromium/chromium`。OpenShell 的 seccomp 不允許 Chromium 自己的 sandbox 與 zygote 建立 user namespace,沒有這些參數時 Chromium 會立刻結束(`CDP response channel closed`)。Hermes Agent v0.21.3 只在 root 或 Docker 下才會自己加 `--no-sandbox`(`tools/browser_tool_session.py`) |
 
-修改 `config.yaml` 後,建置步驟以 base 映像相同的方式重算 `/etc/nemoclaw/hermes.config-hash`(與 `/sandbox/.hermes/.config-hash`),Hermes 啟動時的設定完整性檢查因此仍會通過。MCP 設定沒有改變,MCP digest 維持原值。
+Dashboard 使用自己的 profile `dashboard-home`。sandbox 每次啟動時,`start.sh` 會以 `seed-hermes-dashboard-config.py` 把 gateway `config.yaml` 的模型設定與受管路徑複製到這個 profile;gateway 設定中每個受管區段必須與 managed policy 完全相同,否則整份不複製。`tools.2` 只改了 `config.yaml`,`browser` 區段因此與 policy 不同,Dashboard 的 CHAT 與 Models 頁沒有模型(`No inference provider configured`)。`tools.3` 同時更新 policy,Dashboard 也拿到模型與 `browser.backend: "off"`。
+
+修改 `config.yaml` 後,建置步驟以 base 映像相同的方式重算 `/etc/nemoclaw/hermes.config-hash`(與 `/sandbox/.hermes/.config-hash`),Hermes 啟動時的設定完整性檢查因此仍會通過。MCP 設定沒有改變,MCP digest 維持原值。接著以 sandbox 使用者重跑 base 映像建置時的 dashboard policy 檢查:同步腳本必須接受 gateway 設定,產生的 Dashboard 設定要有 `model:`,每個受管路徑(包含 `browser.backend`)都要與 policy 相同。
 
 Hermes Agent v0.21.3 以本機 Chromium 執行時不做私有位址檢查(`tools/browser_tool.py` 的 `_url_policy_error`),所以 OpenShell policy DNS 回傳的 `198.18.0.0/15` 合成 IP 不會被擋;雲端 metadata 位址(例如 `169.254.169.254`)仍一律拒絕。這點與 OpenClaw 不同,不需要設定 SSRF 例外。
 
@@ -101,7 +103,7 @@ Hermes Agent v0.21.3 以本機 Chromium 執行時不做私有位址檢查(`tools
 |------|------|
 | `check-image.sh ... hermes` | 執行設定、`hermes --version` 與 base 相同;新增的 setuid、setgid 或 file capability 檔案必須列在 `tools/openclaw-tools-image/privileged-files-added.txt` |
 | `check-tools-start.sh` | base 與 tools 映像以相同限制啟動(無網路、`--cap-drop ALL`、`no-new-privileges`),容器狀態、啟動輸出、`/tmp/nemoclaw-start.log` 與 process 清單必須相同 |
-| `run-fixtures.sh ... hermes` | 以 sandbox 使用者、唯讀 root、無 capability、無網路執行共用 fixture;OpenClaw 專屬的 `himalaya_skill_override` 與 `browser_config` 記為 `SKIP`,`himalaya_journey` 略過 skill 檢查。`hermes_browser_backend` 確認 `browser.backend` 為 `off`、設定 hash 相符、Hermes 提供內建 browser 工具;`agent_browser` 不帶任何 agent-browser 設定開頁,並確認 Chromium 帶著 `/etc/chromium.d` 的參數執行 |
+| `run-fixtures.sh ... hermes` | 以 sandbox 使用者、唯讀 root、無 capability、無網路執行共用 fixture;OpenClaw 專屬的 `himalaya_skill_override` 與 `browser_config` 記為 `SKIP`,`himalaya_journey` 略過 skill 檢查。`hermes_browser_backend` 確認 `browser.backend` 為 `off`、設定 hash 相符、Hermes 提供內建 browser 工具;`hermes_dashboard_seed` 以映像內的 policy 與 `config.yaml` 執行 Dashboard 設定同步,產生的設定要有模型,`browser.backend` 為 `off`;`agent_browser` 不帶任何 agent-browser 設定開頁,並確認 Chromium 帶著 `/etc/chromium.d` 的參數執行 |
 | Trivy | tools layer 不得新增可修正的 CRITICAL 或 HIGH 弱點 |
 
 `check-tools-start.sh` 用一般 Docker 執行,只涵蓋映像自己的啟動設定。
@@ -131,6 +133,7 @@ gateway 與 API runtime 由 OpenShell 啟動,要在 OpenShell 0.1.7 sandbox 中�
 ## 6. 安全考量與尚未完成的驗收
 
 - **新增的特權檔案**:LibreOffice 的相依套件帶入 `dbus-daemon-launch-helper`(setuid)與 `gst-ptp-helper`(file capability)。process 設定 `no_new_privs` 時兩者都不會取得額外權限;fixture 與啟動比對都在這個條件下執行,OpenShell sandbox 內的 process 也實測為 `NoNewPrivs: 1`(見下方實機驗收)。其他新增的特權檔案會讓 `check-image.sh` 失敗。
-- **API profile 不受影響**:API profile 的政策拒絕 terminal 與 browser 工具,Landlock 也只開放部分路徑,新工具只在預設 profile 使用。
+- **API profile 不受影響**:API profile 的政策拒絕 terminal 與 browser 工具,Landlock 也只開放部分路徑,新工具只在預設 profile 使用。API profile 的 `config.yaml` 由 managed policy 的受管區段產生,`tools.3` 起 `browser` 區段也帶有 `backend: "off"`,但 browser 工具仍被拒絕。
+- **沒有 `config.yaml` 的具名 profile**:base 映像建置時依 managed policy 修改 Hermes 對沒有 `config.yaml` 的具名 profile 所用的預設值(`patch-profile-policy-defaults.py`),但沒有修改 `browser.backend`。Hermes 直接讀 profile 的 `config.yaml` 取得這個值,所以這類 profile 的 `browser.backend` 仍是未設定,與 `tools.2` 相同;base 映像建置時的 `profile-policy` 檢查若在 tools 映像重跑,會因此不通過。預設 profile、`dashboard-home` 與 API profile 都有 `config.yaml`,不受影響。
 - **base 的安全檢查**:Hermes base 沒有 tmux,受控的 expat 版本(`libexpat1=2.8.3-1`)也與 OpenClaw base(2.9.0)不同,所以 `base_security_checks` 只對 OpenClaw 檢查這兩項;Hermes 的 expat 版本由 `controlled_packages` 依 base 的 `security-packages.txt` 檢查。
 - **實機驗收**(`tools.1`,OpenShell 0.1.7、Podman、arm64,經 ClawShell 建立):sandbox 到 `running`,API 對話與 `upload_file` 上傳下載正常;`nemoclaw-start`、Hermes gateway、API runtime 與 MCP supervisor 的 `NoNewPrivs` 皆為 1;4 個 LibreOffice 同時轉檔時 sandbox 內 process 峰值 31(#32 的上限 512)。

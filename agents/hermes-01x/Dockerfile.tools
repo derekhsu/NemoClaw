@@ -13,9 +13,9 @@
 #   The image PATH puts the Hermes virtual environment first, so a plain
 #   python3 is Hermes' own interpreter, which these packages must not change.
 # - No OpenClaw skill or openclaw.json change. The Hermes browser tools use
-#   the base image's agent-browser: config.yaml sets browser.backend "off",
-#   and /etc/chromium.d/nemoclaw-openshell adds the Chromium flags that an
-#   OpenShell sandbox requires.
+#   the base image's agent-browser: config.yaml and the managed policy set
+#   browser.backend "off", and /etc/chromium.d/nemoclaw-openshell adds the
+#   Chromium flags that an OpenShell sandbox requires.
 #
 # The final image keeps the base image's user, entrypoint, command, working
 # directory, environment, healthcheck, and controlled package versions. It
@@ -107,7 +107,7 @@ USER root
 COPY --from=perl-modules /out/libtext-charwidth-perl.deb /tmp/nemoclaw-tools/
 COPY tools/openclaw-tools-image/apt-packages.txt tools/openclaw-tools-image/apt-packages-browser.txt \
     tools/openclaw-tools-image/python/requirements.lock \
-    agents/hermes-01x/configure-tools-browser.py \
+    agents/hermes-01x/configure-tools-browser.py agents/hermes-01x/image-build-probes.py \
     /tmp/nemoclaw-tools/
 COPY --from=yq-build --chmod=0755 /out/yq /usr/local/bin/yq
 COPY tools/openclaw-tools-image/node/package.json tools/openclaw-tools-image/node/package-lock.json \
@@ -229,15 +229,20 @@ RUN set -eu; \
     chmod 0644 /etc/chromium.d/nemoclaw-openshell; \
     # Keep Hermes on its built-in browser tools instead of the Browser Use CLI
     # that `uvx browser-use` fetches from PyPI (configure-tools-browser.py
-    # explains why). Then seal config.yaml again exactly as the base image
-    # does; only the config.yaml hash line changes.
+    # explains why). The managed policy gets the same value, or the dashboard
+    # config seeder refuses the gateway config (#79). Then seal config.yaml
+    # again exactly as the base image does; only the config.yaml hash line
+    # changes.
     config=/sandbox/.hermes/config.yaml; \
+    policy=/usr/local/share/nemoclaw/hermes-managed-policy.json; \
     seal=/etc/nemoclaw/hermes.config-hash; \
     test "$(stat -c '%U:%G %a' "$config")" = "sandbox:sandbox 640"; \
+    test "$(stat -c '%U:%G %a' "$policy")" = "root:root 444"; \
     test "$(stat -c '%U:%G %a' "$seal")" = "root:root 444"; \
     sha256sum -c --quiet "$seal"; \
     mcp_line=$(grep '^# nemoclaw-hermes-mcp-state-v1 ' "$seal"); \
-    /usr/bin/python3 -I /tmp/nemoclaw-tools/configure-tools-browser.py "$config"; \
+    /usr/bin/python3 -I /tmp/nemoclaw-tools/configure-tools-browser.py "$config" "$policy"; \
+    test "$(stat -c '%U:%G %a' "$policy")" = "root:root 444"; \
     ( cd /opt/hermes && HERMES_HOME=/sandbox/.hermes /opt/hermes/.venv/bin/python -I -c \
         'import sys; sys.path.insert(0, "/opt/hermes"); from tools.browser_use_cli import get_browser_backend, is_browser_use_cli_mode; assert get_browser_backend() == "off" and not is_browser_use_cli_mode()' ); \
     mcp_digest="$(/opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py --guard /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py --config "$config")"; \
@@ -250,6 +255,17 @@ RUN set -eu; \
     chown sandbox:sandbox /sandbox/.hermes/.config-hash; \
     chmod 0640 /sandbox/.hermes/.config-hash; \
     sha256sum -c --quiet "$seal"; \
+    # Repeat the base image's dashboard policy probe on the changed files, as
+    # the sandbox user: the seeder must accept the gateway config and copy the
+    # model and every managed path, browser.backend included.
+    probe=/tmp/nemoclaw-dashboard-policy-probe.yaml; \
+    setpriv --reuid=sandbox --regid=sandbox --init-groups \
+        /opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/seed-hermes-dashboard-config.py \
+        "$policy" "$config" "$probe"; \
+    grep -q '^model:' "$probe"; \
+    setpriv --reuid=sandbox --regid=sandbox --init-groups \
+        /opt/hermes/.venv/bin/python -I /tmp/nemoclaw-tools/image-build-probes.py dashboard-policy "$probe"; \
+    test ! -e "$probe"; \
     rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 
 # Same user name as the base image configuration.

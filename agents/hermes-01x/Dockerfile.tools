@@ -52,7 +52,7 @@ ADD --checksum=sha256:1dc21c3dd6d948929e22e5cae49b9d0b3b30ff88fafd4493fd4460c625
 # The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
 # which have HIGH vulnerabilities with available fixes. Build the same yq version with a
 # patched Go toolchain and x/net. Go verifies module hashes with sumdb.
-FROM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS yq-build
+FROM golang:1.27.4-trixie@sha256:f18c3d73a184fb0582828510722e723b63a93f7188d11dd223d9be6f6880e65d AS yq-build
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
 WORKDIR /src
 RUN set -eu; \

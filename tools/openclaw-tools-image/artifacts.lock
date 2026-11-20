@@ -12,5 +12,5 @@ chrome-headless-shell	156.0.8078.4 (Playwright 1248)	arm64	https://cdn.playwrigh
 shadcn-components	skills@ca45fc49	all	https://raw.githubusercontent.com/anthropics/skills/ca45fc496a3436251f191354091d557da31c15b5/skills/web-artifacts-builder/scripts/shadcn-components.tar.gz	1296f069e825de7933de7e8ac63672495cacce3f88f2dc45554dbcddbcbca60f
 # shadcn-components is unpacked into frontend-template/src (Apache-2.0, see
 # frontend-template/LICENSE.web-artifacts-builder.txt).
-# yq 4.54.1 is built from source in Dockerfile.tools with Go 1.27.3 and
+# yq 4.54.1 is built from source in Dockerfile.tools with Go 1.27.4 and
 # golang.org/x/net 0.62.0; Go verifies module hashes with sumdb.

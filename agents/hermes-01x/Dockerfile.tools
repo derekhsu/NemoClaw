@@ -13,9 +13,10 @@
 #   The image PATH puts the Hermes virtual environment first, so a plain
 #   python3 is Hermes' own interpreter, which these packages must not change.
 # - No OpenClaw skill or openclaw.json change. The Hermes browser tools use
-#   the base image's agent-browser: config.yaml and the managed policy set
-#   browser.backend "off", and /etc/chromium.d/nemoclaw-openshell adds the
-#   Chromium flags that an OpenShell sandbox requires.
+#   the base image's agent-browser: config.yaml, the managed policy, and the
+#   Hermes default for named profiles set browser.backend "off", and
+#   /etc/chromium.d/nemoclaw-openshell adds the Chromium flags that an
+#   OpenShell sandbox requires.
 #
 # The final image keeps the base image's user, entrypoint, command, working
 # directory, environment, healthcheck, and controlled package versions. It
@@ -203,7 +204,8 @@ RUN --mount=type=bind,from=downloads,target=/downloads \
     NPM_CONFIG_OFFLINE=false npm install -g --no-audit --no-fund /downloads/pnpm-12.16.1.tgz
 
 # The printf and python -c arguments are literal text, not shell expansions.
-# hadolint ignore=DL3003,SC2016
+# The only pipe ends in sha256sum -c, whose status is the pipe status.
+# hadolint ignore=DL3003,DL4006,SC2016
 RUN set -eu; \
     # Offline frontend projects start from a copy of this template. pnpm's
     # store keeps a SQLite index that cannot be opened from a read-only path,
@@ -230,9 +232,12 @@ RUN set -eu; \
     # Keep Hermes on its built-in browser tools instead of the Browser Use CLI
     # that `uvx browser-use` fetches from PyPI (configure-tools-browser.py
     # explains why). The managed policy gets the same value, or the dashboard
-    # config seeder refuses the gateway config (#79). Then seal config.yaml
-    # again exactly as the base image does; only the config.yaml hash line
-    # changes.
+    # config seeder refuses the gateway config (#79). Named profiles have no
+    # config.yaml, so the script also changes the browser.backend default in
+    # two Hermes source files (#83). The hashes below are those files in
+    # BASE_IMAGE: check the script's edits against a new base image before
+    # changing them. Then seal config.yaml again exactly as the base image
+    # does; only the config.yaml hash line changes.
     config=/sandbox/.hermes/config.yaml; \
     policy=/usr/local/share/nemoclaw/hermes-managed-policy.json; \
     seal=/etc/nemoclaw/hermes.config-hash; \
@@ -241,8 +246,16 @@ RUN set -eu; \
     test "$(stat -c '%U:%G %a' "$seal")" = "root:root 444"; \
     sha256sum -c --quiet "$seal"; \
     mcp_line=$(grep '^# nemoclaw-hermes-mcp-state-v1 ' "$seal"); \
-    /usr/bin/python3 -I /tmp/nemoclaw-tools/configure-tools-browser.py "$config" "$policy"; \
+    printf '%s  %s\n' \
+        d990eecd35d5b3447ca6f81ba1c6618d0702e2d4281b932974a5e64b29d8436b /opt/hermes/tools/browser_use_cli.py \
+        13e4261f6b47269b92c9cf0f13eac385c8c070a96190d4177639eea239d21def /opt/hermes/hermes_cli/config_defaults.py \
+        | sha256sum -c --quiet -; \
+    /usr/bin/python3 -I /tmp/nemoclaw-tools/configure-tools-browser.py "$config" "$policy" /opt/hermes; \
     test "$(stat -c '%U:%G %a' "$policy")" = "root:root 444"; \
+    # Replace the base image's bytecode of the two changed modules, so Hermes
+    # does not compile them on every start.
+    /opt/hermes/.venv/bin/python -I -m py_compile \
+        /opt/hermes/tools/browser_use_cli.py /opt/hermes/hermes_cli/config_defaults.py; \
     ( cd /opt/hermes && HERMES_HOME=/sandbox/.hermes /opt/hermes/.venv/bin/python -I -c \
         'import sys; sys.path.insert(0, "/opt/hermes"); from tools.browser_use_cli import get_browser_backend, is_browser_use_cli_mode; assert get_browser_backend() == "off" and not is_browser_use_cli_mode()' ); \
     mcp_digest="$(/opt/hermes/.venv/bin/python -I /usr/local/lib/nemoclaw/build-hermes-mcp-digest.py --guard /usr/local/lib/nemoclaw/hermes-runtime-config-guard.py --config "$config")"; \
@@ -266,6 +279,20 @@ RUN set -eu; \
     setpriv --reuid=sandbox --regid=sandbox --init-groups \
         /opt/hermes/.venv/bin/python -I /tmp/nemoclaw-tools/image-build-probes.py dashboard-policy "$probe"; \
     test ! -e "$probe"; \
+    # Repeat the base image's profile-policy probe on a new named profile,
+    # which has no config.yaml. It compares every managed path, browser.backend
+    # included. get_browser_backend() must also return "off" for the named
+    # profile, so Hermes does not use the Browser Use CLI.
+    profile_root=$(mktemp -d); \
+    HOME="$profile_root" HERMES_HOME="$profile_root/.hermes" \
+        /usr/local/bin/hermes profile create nemoclaw-policy-probe --no-alias --no-skills; \
+    profile_home="$profile_root/.hermes/profiles/nemoclaw-policy-probe"; \
+    test ! -e "$profile_home/config.yaml"; \
+    HOME="$profile_root" HERMES_HOME="$profile_home" \
+        /opt/hermes/.venv/bin/python -I /tmp/nemoclaw-tools/image-build-probes.py profile-policy; \
+    ( cd /opt/hermes && HOME="$profile_root" HERMES_HOME="$profile_home" /opt/hermes/.venv/bin/python -I -c \
+        'import sys; sys.path.insert(0, "/opt/hermes"); from tools.browser_use_cli import get_browser_backend, is_browser_use_cli_mode; assert get_browser_backend() == "off" and not is_browser_use_cli_mode()' ); \
+    rm -rf "$profile_root"; \
     rm -rf /tmp/nemoclaw-tools /root/.npm /root/.cache /root/.local/share/pnpm
 
 # Same user name as the base image configuration.

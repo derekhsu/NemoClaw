@@ -47,14 +47,50 @@ const BASE_POLICY_OBJECT = {
 };
 const BASE_POLICY = `${JSON.stringify(BASE_POLICY_OBJECT, null, 2)}\n`;
 
-function configure(text: string, policyText = BASE_POLICY) {
+// The Hermes Agent v0.21.3 source lines that read and default browser.backend.
+const BASE_BROWSER_USE_CLI = [
+  "def get_browser_backend() -> str:",
+  '    """Configured browser backend key."""',
+  '    raw = _read_browser_cfg().get("backend")',
+  '    return (BACKEND_DISABLED if raw is False else "") if isinstance(raw, bool) else str(raw or "").strip().lower()',
+  "",
+  "def is_legacy_browser_use_cloud_config(browser_cfg: dict) -> bool:",
+  '    if not isinstance(browser_cfg, dict) or browser_cfg.get("backend"):',
+  "        return False",
+  "",
+].join("\n");
+const BASE_CONFIG_DEFAULTS = [
+  '    "web": {',
+  '        "backend": "",           # shared fallback',
+  "    },",
+  '    "browser": {',
+  '        "backend": "",',
+  '        "inactivity_timeout": 120,',
+  "    },",
+  "",
+].join("\n");
+const SOURCES = {
+  "tools/browser_use_cli.py": BASE_BROWSER_USE_CLI,
+  "hermes_cli/config_defaults.py": BASE_CONFIG_DEFAULTS,
+};
+
+function configure(
+  text: string,
+  policyText = BASE_POLICY,
+  sources: Record<string, string> = SOURCES,
+) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-hermes-tools-browser-"));
   try {
     const file = path.join(dir, "config.yaml");
     const policyFile = path.join(dir, "managed-policy.json");
+    const hermes = path.join(dir, "hermes");
     fs.writeFileSync(file, text);
     fs.writeFileSync(policyFile, policyText);
-    const result = spawnSync("python3", [SCRIPT, file, policyFile], {
+    for (const [relative, source] of Object.entries(sources)) {
+      fs.mkdirSync(path.dirname(path.join(hermes, relative)), { recursive: true });
+      fs.writeFileSync(path.join(hermes, relative), source);
+    }
+    const result = spawnSync("python3", [SCRIPT, file, policyFile, hermes], {
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -62,13 +98,19 @@ function configure(text: string, policyText = BASE_POLICY) {
       result,
       written: fs.readFileSync(file, "utf8"),
       policy: fs.readFileSync(policyFile, "utf8"),
+      sources: Object.fromEntries(
+        Object.keys(sources).map((relative) => [
+          relative,
+          fs.readFileSync(path.join(hermes, relative), "utf8"),
+        ]),
+      ),
     };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-describe("Hermes tools image browser backend (#74, #79)", () => {
+describe("Hermes tools image browser backend (#74, #79, #83)", () => {
   it("sets browser.backend to off and changes no other line", () => {
     const { result, written } = configure(BASE_CONFIG);
 
@@ -133,13 +175,88 @@ describe("Hermes tools image browser backend (#74, #79)", () => {
     expect(policy).toBe(policyText);
   });
 
-  it("requires both the config and the policy path", () => {
-    const result = spawnSync("python3", [SCRIPT, "config.yaml"], {
+  it("defaults browser.backend to off for a profile without config.yaml (#83)", () => {
+    const { result, sources } = configure(BASE_CONFIG);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(sources["tools/browser_use_cli.py"]).toBe(
+      BASE_BROWSER_USE_CLI.replace(
+        '    raw = _read_browser_cfg().get("backend")\n',
+        "    # NemoClaw tools image: a missing browser.backend keeps the built-in browser tools.\n" +
+          '    raw = _read_browser_cfg().get("backend", BACKEND_DISABLED)\n',
+      ),
+    );
+    expect(sources["hermes_cli/config_defaults.py"]).toBe(
+      BASE_CONFIG_DEFAULTS.replace(
+        '        "backend": "",\n        "inactivity_timeout"',
+        "        # NemoClaw tools image: the built-in browser tools, not the Browser Use CLI.\n" +
+          '        "backend": "off",\n        "inactivity_timeout"',
+      ),
+    );
+    // The web backend default keeps its value.
+    expect(sources["hermes_cli/config_defaults.py"]).toContain(
+      '"web": {\n        "backend": "",           # shared fallback',
+    );
+  });
+
+  const patchedCli = BASE_BROWSER_USE_CLI.replace(
+    '.get("backend")\n',
+    '.get("backend", BACKEND_DISABLED)\n',
+  );
+
+  it.each([
+    [
+      "a changed browser_use_cli.py",
+      {
+        ...SOURCES,
+        "tools/browser_use_cli.py": BASE_BROWSER_USE_CLI.replace("raw = ", "value = "),
+      },
+      "found 0",
+    ],
+    [
+      "an already edited browser_use_cli.py",
+      {
+        ...SOURCES,
+        "tools/browser_use_cli.py": patchedCli.replace(
+          "    raw =",
+          "    # NemoClaw tools image: a missing browser.backend keeps the built-in browser tools.\n    raw =",
+        ),
+      },
+      "already changed",
+    ],
+    [
+      "a browser default other than an empty string",
+      {
+        ...SOURCES,
+        "hermes_cli/config_defaults.py": BASE_CONFIG_DEFAULTS.replace(
+          '"backend": "",\n        "inactivity',
+          '"backend": "browser-use",\n        "inactivity',
+        ),
+      },
+      "found 0",
+    ],
+  ])("refuses %s and leaves every file unchanged", (_name, sources, message) => {
+    const {
+      result,
+      written,
+      policy,
+      sources: after,
+    } = configure(BASE_CONFIG, BASE_POLICY, sources);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(written).toBe(BASE_CONFIG);
+    expect(policy).toBe(BASE_POLICY);
+    expect(after).toEqual(sources);
+  });
+
+  it("requires the config, policy, and Hermes source paths", () => {
+    const result = spawnSync("python3", [SCRIPT, "config.yaml", "policy.json"], {
       encoding: "utf8",
       timeout: 10_000,
     });
 
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("<managed-policy.json>");
+    expect(result.stderr).toContain("<hermes-source-dir>");
   });
 });

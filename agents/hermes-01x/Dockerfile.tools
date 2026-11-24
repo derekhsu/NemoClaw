@@ -49,6 +49,18 @@ ADD --checksum=sha256:5c5ba2724c162f82d0a0c71b6c03224ed44f8bef7b14ace5da0635d3af
 ADD --checksum=sha256:1dc21c3dd6d948929e22e5cae49b9d0b3b30ff88fafd4493fd4460c6252e9d90 \
     https://github.com/pimalaya/himalaya/releases/download/v2.2.1/himalaya.aarch64-linux.tgz /himalaya-arm64.tgz
 
+# libc6-dev must match the base image's libc6 exactly. Debian has replaced
+# 2.41-12+deb13u4 in the archive, so fetch it from the snapshot archive for the
+# perl-modules stage. Update these with the base image's libc6 version.
+ADD --checksum=sha256:1fda734dabcd80b77266a09ab62b0f1e3e16d8091db62899890b2200745632a2 \
+    https://snapshot.debian.org/archive/debian/20260711T202405Z/pool/main/g/glibc/libc6-dev_2.41-12%2Bdeb13u4_amd64.deb /libc6-dev-amd64.deb
+ADD --checksum=sha256:71e373cb5e9da975b02fb4af555929cb1977560e2dd8245de4eb8a7b03677a08 \
+    https://snapshot.debian.org/archive/debian/20260711T202405Z/pool/main/g/glibc/libc6-dev_2.41-12%2Bdeb13u4_arm64.deb /libc6-dev-arm64.deb
+ADD --checksum=sha256:2c21175d6a8283ed566d154c0c0bc06f60836e53b0b9e1f74c14eac586b68c24 \
+    https://snapshot.debian.org/archive/debian/20260711T202405Z/pool/main/g/glibc/libc-dev-bin_2.41-12%2Bdeb13u4_amd64.deb /libc-dev-bin-amd64.deb
+ADD --checksum=sha256:cd4b3bdf404a01792003f4ca400bc602252ab24e0a8c53e45d474d1818dc02e3 \
+    https://snapshot.debian.org/archive/debian/20260711T202405Z/pool/main/g/glibc/libc-dev-bin_2.41-12%2Bdeb13u4_arm64.deb /libc-dev-bin-arm64.deb
+
 # The yq 4.54.1 release binaries use Go 1.27.1 and golang.org/x/net 0.59.0,
 # which have HIGH vulnerabilities with available fixes. Build the same yq version with a
 # patched Go toolchain and x/net. Go verifies module hashes with sumdb.
@@ -71,12 +83,15 @@ USER root
 ADD --checksum=sha256:abded5f4fdd9338e89fd2f1d8271c44989dae5bf50aece41b6179d8e230704f8 \
     https://cpan.metacpan.org/authors/id/K/KU/KUBOTA/Text-CharWidth-0.04.tar.gz /tmp/Text-CharWidth-0.04.tar.gz
 # hadolint ignore=DL3003,DL3008
-RUN set -eu; \
+RUN --mount=type=bind,from=downloads,target=/downloads \
+    set -eu; \
     while IFS='=' read -r pkg _; do \
         [ "$pkg" = architecture ] || apt-mark hold "$pkg" >/dev/null; \
     done </usr/local/share/nemoclaw/security-packages.txt; \
     apt-get update; \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc make libc6-dev dpkg-dev; \
+    arch="$(dpkg --print-architecture)"; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc make dpkg-dev \
+        "/downloads/libc6-dev-$arch.deb" "/downloads/libc-dev-bin-$arch.deb"; \
     mkdir -p /tmp/charwidth /tmp/stage/DEBIAN /out; \
     tar -xzf /tmp/Text-CharWidth-0.04.tar.gz --strip-components=1 -C /tmp/charwidth; \
     cd /tmp/charwidth; \

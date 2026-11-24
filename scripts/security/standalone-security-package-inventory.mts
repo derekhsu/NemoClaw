@@ -5,6 +5,12 @@ const CURRENT_PYTHON_HTMLPARSER_FIX_PACKAGE =
   "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u5+nemoclaw1";
 const PINNED_HERMES_BASE_PYTHON_HTMLPARSER_FIX_PACKAGE =
   "nemoclaw-python3.13-htmlparser-fix=3.13.5-2+deb13u4+nemoclaw1";
+// The digest-pinned Hermes sandbox base predates these Debian updates.
+const PINNED_HERMES_BASE_SECURITY_PACKAGE_OVERRIDES: ReadonlyMap<string, string> = new Map([
+  [CURRENT_PYTHON_HTMLPARSER_FIX_PACKAGE, PINNED_HERMES_BASE_PYTHON_HTMLPARSER_FIX_PACKAGE],
+  ["libc6=2.41-12+deb13u5", "libc6=2.41-12+deb13u4"],
+  ["libc-bin=2.41-12+deb13u5", "libc-bin=2.41-12+deb13u4"],
+]);
 const SHARED_LIBEXPAT_PACKAGE = "libexpat1=2.8.3-1";
 // Only the OpenClaw base installs the Debian security update (#19).
 const OPENCLAW_LIBEXPAT_PACKAGE = "libexpat1=2.9.0-1~deb13u1";
@@ -20,8 +26,8 @@ const OPENCLAW_SECURITY_PACKAGE_OVERRIDES: ReadonlyMap<string, string> = new Map
 
 const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
   SHARED_ZLIB_PACKAGE,
-  "libc6=2.41-12+deb13u4",
-  "libc-bin=2.41-12+deb13u4",
+  "libc6=2.41-12+deb13u5",
+  "libc-bin=2.41-12+deb13u5",
   "bsdutils=1:2.41.5-0+deb13u1",
   "login=1:4.16.0-2+really2.41.5-0+deb13u1",
   "mount=2.41.5-0+deb13u1",
@@ -48,10 +54,7 @@ const SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [
 ] as const;
 
 const PINNED_HERMES_BASE_SECURITY_PACKAGE_INVENTORY = SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY.map(
-  (packageSpec) =>
-    packageSpec === CURRENT_PYTHON_HTMLPARSER_FIX_PACKAGE
-      ? PINNED_HERMES_BASE_PYTHON_HTMLPARSER_FIX_PACKAGE
-      : packageSpec,
+  (packageSpec) => PINNED_HERMES_BASE_SECURITY_PACKAGE_OVERRIDES.get(packageSpec) ?? packageSpec,
 );
 
 const OPENCLAW_SANDBOX_BASE_SECURITY_PACKAGE_INVENTORY = [

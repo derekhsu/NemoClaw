@@ -335,11 +335,11 @@ The OpenClaw Standard Verify scan of the r4 candidate reports one new fixable fi
 | --- | --- | --- | --- |
 | `CVE-2026-33210` (CRITICAL, GHSA-3m6g-2423-7cp3) | `json` `2.18.0` default gem | `/home/linuxbrew/.linuxbrew/Homebrew/Library/Homebrew/vendor/portable-ruby/4.0.9/` | `2.19.2` |
 
-Homebrew `7.0.12` and Homebrew `main` both ship portable Ruby `4.0.9`, so no Homebrew release contains the fix.
+At r4, Homebrew `7.0.12` and Homebrew `main` both shipped portable Ruby `4.0.9`, so no Homebrew release contained the fix.
 The advisory applies only when a caller parses JSON with `allow_duplicate_key: false`.
 Homebrew `7.0.12` passes only `allow_duplicate_key: true`, in `Library/Homebrew/livecheck/strategy/json.rb`.
 
-`ci/trivy-standard-image-exceptions.json` records a `not-affected` exception for this finding.
+`ci/trivy-standard-image-exceptions.json` recorded a `not-affected` exception for this finding until Homebrew `7.0.16` (#85).
 `scripts/security/reject-fixable-trivy-findings.sh` applies it with these rules:
 
 - An entry matches one finding exactly: vulnerability ID, package, installed version, severity, and package path.
@@ -347,7 +347,13 @@ Homebrew `7.0.12` passes only `allow_duplicate_key: true`, in `Library/Homebrew/
 - A malformed, duplicate, expired, or unused entry fails the gate.
 - Every other fixable CRITICAL or HIGH finding still fails the gate.
 
-Remove the entry when Homebrew ships a portable Ruby with `json` `2.19.2` or later, and bump `HOMEBREW_VERSION` to that release.
+### Homebrew 7.0.16 (#85)
+
+Homebrew `7.0.16` ships portable Ruby `4.0.10`, which carries `json` `3.1.0` and `msgpack` `1.8.7`.
+`Dockerfile.base` now pins `HOMEBREW_VERSION=7.0.16`, and `ci/trivy-standard-image-exceptions.json` no longer holds the `CVE-2026-33210` entry.
+
+The bump also fixes `CVE-2026-126366` (HIGH) in `msgpack` `1.8.5`, which portable Ruby `4.0.9` carries.
+The OpenClaw Standard Verify scan reported it on November 24, 2026.
 
 ## Debian zlib and apt Updates
 

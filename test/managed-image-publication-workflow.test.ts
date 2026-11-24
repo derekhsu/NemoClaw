@@ -464,10 +464,14 @@ describe("complete managed-image publication workflow", () => {
       "Dockerfile.base",
     );
     expect(matrix.find(({ agent }) => agent === "openclaw")?.base_alias).toBeUndefined();
-    // Pinned to the last upstream base index that passes pip check with the fork's Deep Agents Code version (#22).
-    expect(matrix.find(({ agent }) => agent === "langchain-deepagents-code")?.base_alias).toBe(
-      "ghcr.io/nvidia/nemoclaw/langchain-deepagents-code-sandbox-base@sha256:35ec718bc6a86c3b38b599a77239c5e917b20dbbbe20cc36e1f05262509d89b5",
+    // The fork pins Deep Agents Code 0.1.71 (#22), and the last compatible
+    // upstream base predates the fork's glibc security inventory (#85).
+    expect(matrix.find(({ agent }) => agent === "langchain-deepagents-code")?.base_dockerfile).toBe(
+      "agents/langchain-deepagents-code/Dockerfile.base",
     );
+    expect(
+      matrix.find(({ agent }) => agent === "langchain-deepagents-code")?.base_alias,
+    ).toBeUndefined();
     expect(step(prBuilder, "Build PR source base").if).toBe("matrix.base_dockerfile");
     expect(step(prBuilder, "Build PR source base").with).toMatchObject({
       file: "${{ matrix.base_dockerfile }}",

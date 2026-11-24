@@ -706,7 +706,7 @@ RUN if [ "$OPENCLAW_VERSION" = "2026.7.1" ]; then \
 #   OpenClaw Standard Verify pull-request check when a Homebrew bump stops
 #   honouring it.
 # - HOMEBREW_NO_ENV_HINTS: keeps install output short.
-ARG HOMEBREW_VERSION=7.0.12
+ARG HOMEBREW_VERSION=7.0.16
 RUN mkdir -p /home/linuxbrew/.linuxbrew/bin \
     && chown -R sandbox:sandbox /home/linuxbrew \
     && /usr/bin/setpriv --reuid=sandbox --regid=sandbox --init-groups -- \

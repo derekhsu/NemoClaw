@@ -22,8 +22,8 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | 額外工具 | 無 | 與 OpenClaw tools 映像相同,清單見 [OpenClaw tools 映像說明](2026-10-31-openclaw-tools-image.md) 第 3 節 |
 | layer 數 | base 的 layer 數 | base 加 8;發布前上限 115 |
 
-目前的 base 是 `docker.io/derekhsu/openshell-hermes:openshell01x-hermes-0.21.3-2026.11.13`,
-index digest 為 `sha256:1b0f2030fec36118c9124c0f28a5e435f61bfb4f502f39e942e365873e8c8265`。
+目前的 base 是 `docker.io/derekhsu/openshell-hermes:openshell01x-hermes-0.21.3-2026.11.25`,
+index digest 為 `sha256:89aad1dc08c0c8d7fafc49089f7351b44ed4dec6b5027df6b8d8b193af04a577`。
 `agents/hermes-01x/Dockerfile.tools` 的 `BASE_IMAGE` 同時寫出 tag 與 digest;建置以 digest 為準,tag 用來產生發布 tag。
 
 只提供 OpenShell 0.1.x 版本。OpenShell 0.0.x 的 Hermes 映像(`agents/hermes/`)預定淘汰,不提供 tools 映像。

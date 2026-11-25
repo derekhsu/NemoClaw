@@ -24,9 +24,9 @@ agent 在 sandbox 內處理這些工作時,不需要在執行期間下載套件�
 | 額外工具 | 無 | 第 3 節列出的套件 |
 | 映像大小 | 約 2.3 GB | 約 5.6–5.7 GB(`2026.9.2-tools.3`:amd64 增加 3.37 GB,arm64 增加 3.27 GB) |
 
-目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r4`,
+目前的 base 是 `docker.io/derekhsu/openshell-openclaw:2026.9.2-r5`,
 index digest 為
-`sha256:e654a0695522944ec43c7eeabb6aca9472f385c117a206e5000f8a61b1b96056`。
+`sha256:e09ef7b05b3663affab649b0403c09d01ad1cf9858ffc3ede01399ec89b5e9df`。
 `Dockerfile.tools` 以這個 digest 作為預設 `BASE_IMAGE`。
 不使用 `2026.9.2` tag,因為它指向較舊的發布產物。
 
@@ -83,7 +83,6 @@ Debian 套件在 amd64 與 arm64 上的版本相同。
 | yq(Mike Farah) | 4.54.1 | amd64、arm64;以 Go 1.27.4 與 `golang.org/x/net` 0.62.0 從原始碼建置 |
 | p5.js(`p5.min.js`) | 1.7.0 | 不分架構 |
 | Text-CharWidth 原始碼 | 0.04 | 建置階段重新編譯,見 6.3 節 |
-| `libc6-dev`、`libc-dev-bin` | `2.41-12+deb13u4` | amd64、arm64;只用於編譯 Text::CharWidth,見 6.3 節 |
 | pnpm | 12.16.1 | 不分架構 |
 | Chrome Headless Shell | 156.0.8078.4(Playwright revision 1248) | amd64、arm64 |
 | shadcn 元件 | `anthropics/skills` 固定 revision 的 `web-artifacts-builder` | 不分架構;Apache-2.0,授權檔在模板內 |
@@ -284,8 +283,8 @@ Debian `0.04-11` 沒有原始碼修補,只多了 hardening 旗標、`dh_perl -d`
 最終映像只複製編譯好的套件,不含編譯器。
 
 編譯需要 `libc6-dev`,版本必須與 base 映像的 `libc6` 完全相同。
-Debian 套件庫現在只提供 `2.41-12+deb13u5`,而 tools 映像使用的已發布 base 映像,`libc6` 仍是 `2.41-12+deb13u4`。
-因此這個 stage 從 `snapshot.debian.org` 下載 `2.41-12+deb13u4` 的 `libc6-dev` 與 `libc-dev-bin`,並以 SHA-256 校驗(#85)。
+`2026.9.2-r5`、`2026.9.2-openshell01x-r3` 與 `openshell01x-hermes-0.21.3-2026.11.25` 的 `libc6` 都是 `2.41-12+deb13u5`,與 Debian 套件庫目前的 `libc6-dev` 版本相同,所以這個 stage 直接用 apt 安裝 `libc6-dev`。
+之前的 base 映像 `libc6` 是 `2.41-12+deb13u4`,當時改從 `snapshot.debian.org` 下載相同版本的 `libc6-dev`(#85)。
 
 更新 tools 映像使用的 base 映像(Perl 或 `libc6` 版本)時,必須重新檢查這個步驟。
 

@@ -149,6 +149,49 @@ agent_browser() {
   [ "$rc" -eq 0 ] && [ "$procs" -gt 0 ] && grep -q 'agent-browser fixture' <<<"$out"
 }
 
+# A named profile has no config.yaml. It must still get the built-in browser
+# tools, not the Browser Use CLI, and opening a page must not run uvx (#83). A
+# uvx that records its calls comes first on PATH.
+hermes_profile_browser() {
+  local home=$WORK/profile-root profile
+  profile=$home/.hermes/profiles/fixture
+  mkdir -p "$home/bin"
+  printf '#!/bin/sh\necho "$*" >>%s/uvx-calls\nexit 1\n' "$home" >"$home/bin/uvx"
+  chmod 0755 "$home/bin/uvx"
+  HOME=$home HERMES_HOME=$home/.hermes hermes profile create fixture --no-alias --no-skills >/dev/null
+  test ! -e "$profile/config.yaml"
+  printf '<!doctype html><title>profile</title><h1>named profile fixture</h1>\n' >profile-browser.html
+  (
+    cd /opt/hermes && HOME=$home HERMES_HOME=$profile PATH=$home/bin:$PATH \
+      AGENT_BROWSER_SOCKET_DIR=$WORK/profile-agent-browser \
+      python3 -I -W ignore - "file://$WORK/profile-browser.html" <<'PY'
+import json
+import sys
+
+sys.path.insert(0, "/opt/hermes")
+import model_tools
+from tools import browser_tool
+from tools.browser_tool_lifecycle import cleanup_browser
+from tools.browser_use_cli import get_browser_backend, is_browser_use_cli_mode
+
+assert get_browser_backend() == "off", repr(get_browser_backend())
+assert not is_browser_use_cli_mode(), "Browser Use CLI mode"
+names = {d["function"]["name"] for d in model_tools.get_tool_definitions(enabled_toolsets=["browser"], quiet_mode=True)}
+assert {"browser_navigate", "browser_snapshot"} <= names and "browser_exec" not in names, sorted(names)
+try:
+    result = json.loads(browser_tool.browser_navigate(sys.argv[1], task_id="profile-fixture"))
+finally:
+    cleanup_browser("profile-fixture")
+assert result.get("success") and "named profile fixture" in result.get("snapshot", ""), result
+print("named profile: built-in browser tools")
+PY
+  ) || return 1
+  if [ -e "$home/uvx-calls" ]; then
+    cat "$home/uvx-calls"
+    return 1
+  fi
+}
+
 check chromium_cli chromium_cli
 check playwright_default playwright_default
 check playwright_shared playwright_shared
@@ -156,6 +199,7 @@ check frontend_offline frontend_offline
 check p5js p5js
 if [ "$AGENT" = hermes ]; then
   check agent_browser agent_browser
+  check hermes_profile_browser hermes_profile_browser
 fi
 
 finish

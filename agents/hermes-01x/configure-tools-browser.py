@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Keep the Hermes tools image on Hermes' built-in browser tools (derekhsu/NemoClaw#74, #79).
+"""Keep the Hermes tools image on Hermes' built-in browser tools (derekhsu/NemoClaw#74, #79, #83).
 
-Usage: configure-tools-browser.py <config.yaml> <managed-policy.json>
+Usage: configure-tools-browser.py <config.yaml> <managed-policy.json> <hermes-source-dir>
 
 With browser.backend unset, Hermes replaces its browser tools with the Browser
 Use CLI whenever uvx is on PATH, and that CLI is fetched from PyPI with
@@ -19,9 +19,19 @@ The same value goes into the managed policy, and browser.backend becomes a
 managed path. The dashboard config seeder copies the gateway config only when
 each managed section equals the policy, and it copies the managed paths into
 the dashboard profile, so the dashboard also gets browser.backend "off" (#79).
+
+A named profile created with `hermes profile create` has no config.yaml, and
+Hermes reads browser.backend from the profile's own YAML without the defaults,
+so the two edits above do not reach it (#83). The script therefore changes two
+Hermes source files under <hermes-source-dir>: a missing browser.backend reads
+as "off" in tools/browser_use_cli.py, and the browser.backend default in
+hermes_cli/config_defaults.py becomes "off". A profile that sets
+browser.backend itself keeps its value. Each edit replaces one exact line and
+fails if the line is missing or already changed.
 """
 
 import json
+import os
 import sys
 
 BROWSER_BLOCK = "browser:"
@@ -29,6 +39,23 @@ BACKEND_LINE = '  backend: "off"'
 BACKEND_PATH = "browser.backend"
 # Keep the browser paths together in the policy's managed_paths list.
 BACKEND_PATH_AFTER = "browser.restrict_evaluate"
+
+# Hermes source edits for profiles without browser.backend (#83): path under
+# the Hermes source directory, the exact upstream text, and its replacement.
+SOURCE_EDITS = (
+    (
+        "tools/browser_use_cli.py",
+        '    raw = _read_browser_cfg().get("backend")\n',
+        "    # NemoClaw tools image: a missing browser.backend keeps the built-in browser tools.\n"
+        '    raw = _read_browser_cfg().get("backend", BACKEND_DISABLED)\n',
+    ),
+    (
+        "hermes_cli/config_defaults.py",
+        '        "backend": "",\n        "inactivity_timeout": 120,\n',
+        "        # NemoClaw tools image: the built-in browser tools, not the Browser Use CLI.\n"
+        '        "backend": "off",\n        "inactivity_timeout": 120,\n',
+    ),
+)
 
 
 def configure(text: str) -> str:
@@ -66,12 +93,28 @@ def configure_policy(text: str) -> str:
     return json.dumps(policy, indent=2, ensure_ascii=False) + "\n"
 
 
+def source_edit(old: str, new: str):
+    """Return a change that replaces the one ``old`` text with ``new``."""
+
+    def change(text: str) -> str:
+        if text.count(new):
+            raise ValueError("the browser.backend default is already changed")
+        if text.count(old) != 1:
+            raise ValueError(f"expected one {old.strip()!r}, found {text.count(old)}")
+        return text.replace(old, new)
+
+    return change
+
+
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
+    changes = [(sys.argv[1], configure), (sys.argv[2], configure_policy)]
+    for relative, old, new in SOURCE_EDITS:
+        changes.append((os.path.join(sys.argv[3], relative), source_edit(old, new)))
     updates = []
-    for path, change in ((sys.argv[1], configure), (sys.argv[2], configure_policy)):
+    for path, change in changes:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         try:
@@ -79,8 +122,8 @@ def main() -> int:
         except ValueError as error:
             print(f"{path}: {error}", file=sys.stderr)
             return 1
-    # Check both files before writing either. Write in place so the base
-    # image's owner and mode stay unchanged.
+    # Check every file before writing any. Write in place so the base image's
+    # owner and mode stay unchanged.
     for path, updated in updates:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(updated)
